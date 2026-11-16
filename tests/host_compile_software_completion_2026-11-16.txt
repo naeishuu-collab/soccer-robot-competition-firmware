@@ -1,0 +1,197 @@
+Compile-only run: 2026-11-16 19:06:37 +09:00
+MSVC: C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\VC\Tools\MSVC\14.50.35717\bin\Hostx64\x64\cl.exe
+SDK: 10.0.26100.0
+Objects: [LOCAL_PATH]
+=== COMPILE test_core.cpp ===
+test_core.cpp
+[LOCAL_PATH] warning C4819: ファイルは、現在のコード ページ (932) で表示できない文字を含んでいます。データの損失を防ぐために、ファイルを Unicode 形式で保存してください。
+[LOCAL_PATH] error C2059: 構文エラー: '定数'
+[LOCAL_PATH] error C2143: 構文エラー: ';' が '}' の前にありません。
+[LOCAL_PATH] error C2065: 'kLineBoardAngleCdeg': 定義されていない識別子です。
+[LOCAL_PATH] error C2131: 式は定数に評価されませんでした
+[LOCAL_PATH] note: 初期化されていないシンボルの読み取りによってエラーが発生しました
+[LOCAL_PATH] note: 'a' の使用量を参照してください
+[LOCAL_PATH] note: 評価の呼び出し履歴 (最初に最も古い呼び出し) は
+[LOCAL_PATH] note: 関数 'soccer::LineAngleTable soccer::makeLineAngleTable(int16_t)' の評価中
+[LOCAL_PATH] error C2065: 'kLineFrontOffsetConfigured': 定義されていない識別子です。
+[LOCAL_PATH] error C2059: 構文エラー: '}'
+[LOCAL_PATH] error C2143: 構文エラー: ';' が '}' の前にありません。
+[LOCAL_PATH] error C2143: 構文エラー: ';' が '{' の前にありません。
+[LOCAL_PATH] error C2447: '{': 対応する関数ヘッダーがありません (旧形式の仮引数リスト?)
+[LOCAL_PATH] error C2039: 'kLineSensorAngleCdeg': 'soccer::board' のメンバーではありません
+[LOCAL_PATH] note: 'soccer::board' の宣言を確認してください
+[LOCAL_PATH] error C2039: 'kLineSensorAngleValidMask': 'soccer::board' のメンバーではありません
+[LOCAL_PATH] note: 'soccer::board' の宣言を確認してください
+[LOCAL_PATH] error C2065: 'kLineSensorAngleValidMask': 定義されていない識別子です。
+[LOCAL_PATH] error C2039: 'kLineSensorAngleCdeg': 'soccer::board' のメンバーではありません
+[LOCAL_PATH] note: 'soccer::board' の宣言を確認してください
+[LOCAL_PATH] error C2039: 'LineAngleTable': 'soccer::board' のメンバーではありません
+[LOCAL_PATH] note: 'soccer::board' の宣言を確認してください
+[LOCAL_PATH] error C2039: 'makeLineAngleTable': 'soccer::board' のメンバーではありません
+[LOCAL_PATH] note: 'soccer::board' の宣言を確認してください
+[LOCAL_PATH] error C2039: 'kLineFrontOffsetConfigured': 'soccer::board' のメンバーではありません
+[LOCAL_PATH] note: 'soccer::board' の宣言を確認してください
+[LOCAL_PATH] error C2065: 'kLineFrontOffsetConfigured': 定義されていない識別子です。
+[LOCAL_PATH] error C2039: 'kLineAnglesConfigured': 'soccer::board' のメンバーではありません
+[LOCAL_PATH] note: 'soccer::board' の宣言を確認してください
+[LOCAL_PATH] error C2039: 'kCompetitionArmed': 'soccer::board' のメンバーではありません
+[LOCAL_PATH] note: 'soccer::board' の宣言を確認してください
+[LOCAL_PATH] error C2039: 'kMotorHardwareConfigured': 'soccer::board' のメンバーではありません
+[LOCAL_PATH] note: 'soccer::board' の宣言を確認してください
+[LOCAL_PATH] error C2039: 'kKickerHardwareConfigured': 'soccer::board' のメンバーではありません
+[LOCAL_PATH] note: 'soccer::board' の宣言を確認してください
+[LOCAL_PATH] error C2065: 'Bno055Io': 定義されていない識別子です。
+[LOCAL_PATH] error C2146: 構文エラー: ';' が、識別子 'io' の前に必要です。
+[LOCAL_PATH] error C2065: 'io': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'Bno055Monitor': 定義されていない識別子です。
+[LOCAL_PATH] error C2146: 構文エラー: ';' が、識別子 'monitor' の前に必要です。
+[LOCAL_PATH] error C2065: 'monitor': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'Bno055Sample': 定義されていない識別子です。
+[LOCAL_PATH] error C2146: 構文エラー: ';' が、識別子 'sample' の前に必要です。
+[LOCAL_PATH] error C2065: 'sample': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'monitor': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'io': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'kBnoAddressAuto': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'sample': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'monitor': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'monitor': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'io': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'kBnoAddressAuto': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'sample': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'monitor': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'io': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'kBnoAddressAuto': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'sample': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'sample': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'sample': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'monitor': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'io': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'kBnoAddressAuto': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'sample': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'sample': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'monitor': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'monitor': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'io': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'kBnoAddressAuto': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'sample': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'monitor': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'io': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'kBnoAddressAuto': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'sample': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'monitor': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'io': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'kBnoAddressAuto': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'sample': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'sample': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'monitor': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'io': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'kBnoAddressAuto': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'sample': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'sample': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'monitor': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'io': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'sample': 定義されていない識別子です。
+[LOCAL_PATH] error C4430: 型指定子がありません - int と仮定しました。メモ: C++ は int を既定値としてサポートしていません
+[LOCAL_PATH] error C2146: 構文エラー: ';' が、識別子 'readyKickerInput' の前に必要です。
+[LOCAL_PATH] error C2059: 構文エラー: ')'
+[LOCAL_PATH] error C2143: 構文エラー: ';' が '{' の前にありません。
+[LOCAL_PATH] error C2447: '{': 対応する関数ヘッダーがありません (旧形式の仮引数リスト?)
+[LOCAL_PATH] error C2039: 'kKickerRequestPolicyConfigured': 'soccer::board' のメンバーではありません
+[LOCAL_PATH] note: 'soccer::board' の宣言を確認してください
+[LOCAL_PATH] error C2039: 'kKickerHeadingWindowConfigured': 'soccer::board' のメンバーではありません
+[LOCAL_PATH] note: 'soccer::board' の宣言を確認してください
+[LOCAL_PATH] error C2146: 構文エラー: ';' が、識別子 'input' の前に必要です。
+[LOCAL_PATH] error C2065: 'input': 定義されていない識別子です。
+[LOCAL_PATH] error C3861: 'readyKickerInput': 識別子が見つかりませんでした
+[LOCAL_PATH] error C2065: 'input': 定義されていない識別子です。
+[LOCAL_PATH] error C3861: 'kickerRequestAllowed': 識別子が見つかりませんでした
+[LOCAL_PATH] error C2065: 'input': 定義されていない識別子です。
+[LOCAL_PATH] error C3861: 'kickerRequestAllowed': 識別子が見つかりませんでした
+[LOCAL_PATH] error C2065: 'input': 定義されていない識別子です。
+[LOCAL_PATH] error C3861: 'kickerRequestAllowed': 識別子が見つかりませんでした
+[LOCAL_PATH] error C2065: 'input': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'input': 定義されていない識別子です。
+[LOCAL_PATH] error C3861: 'kickerRequestAllowed': 識別子が見つかりませんでした
+[LOCAL_PATH] error C2065: 'input': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'input': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'input': 定義されていない識別子です。
+[LOCAL_PATH] error C3861: 'kickerRequestAllowed': 識別子が見つかりませんでした
+[LOCAL_PATH] error C2065: 'KickerController': 定義されていない識別子です。
+[LOCAL_PATH] error C2146: 構文エラー: ';' が、識別子 'kicker' の前に必要です。
+[LOCAL_PATH] fatal error C1003: プログラム内のエラーが 100 個を超えました。コンパイルは中断されます。
+EXIT: 2
+=== COMPILE test_integration.cpp ===
+test_integration.cpp
+[LOCAL_PATH] warning C4819: ファイルは、現在のコード ページ (932) で表示できない文字を含んでいます。データの損失を防ぐために、ファイルを Unicode 形式で保存してください。
+[LOCAL_PATH] error C2059: 構文エラー: '定数'
+[LOCAL_PATH] error C2143: 構文エラー: ';' が '}' の前にありません。
+[LOCAL_PATH] error C2065: 'kLineBoardAngleCdeg': 定義されていない識別子です。
+[LOCAL_PATH] error C2131: 式は定数に評価されませんでした
+[LOCAL_PATH] note: 初期化されていないシンボルの読み取りによってエラーが発生しました
+[LOCAL_PATH] note: 'a' の使用量を参照してください
+[LOCAL_PATH] note: 評価の呼び出し履歴 (最初に最も古い呼び出し) は
+[LOCAL_PATH] note: 関数 'soccer::LineAngleTable soccer::makeLineAngleTable(int16_t)' の評価中
+[LOCAL_PATH] error C2065: 'kLineFrontOffsetConfigured': 定義されていない識別子です。
+[LOCAL_PATH] error C2059: 構文エラー: '}'
+[LOCAL_PATH] error C2143: 構文エラー: ';' が '}' の前にありません。
+[LOCAL_PATH] error C2143: 構文エラー: ';' が '{' の前にありません。
+[LOCAL_PATH] error C2447: '{': 対応する関数ヘッダーがありません (旧形式の仮引数リスト?)
+[LOCAL_PATH] error C2039: 'kLineSensorAngleCdeg': 'soccer::board' のメンバーではありません
+[LOCAL_PATH] note: 'soccer::board' の宣言を確認してください
+[LOCAL_PATH] error C2039: 'kLineSensorAngleValidMask': 'soccer::board' のメンバーではありません
+[LOCAL_PATH] note: 'soccer::board' の宣言を確認してください
+[LOCAL_PATH] error C2065: 'kLineSensorAngleValidMask': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'KickerController': 定義されていない識別子です。
+[LOCAL_PATH] error C2146: 構文エラー: ';' が、識別子 'kicker' の前に必要です。
+[LOCAL_PATH] error C2065: 'kicker': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'DribblerController': 定義されていない識別子です。
+[LOCAL_PATH] error C2146: 構文エラー: ';' が、識別子 'dribbler' の前に必要です。
+[LOCAL_PATH] error C2065: 'dribbler': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'KickerInput': 定義されていない識別子です。
+[LOCAL_PATH] error C2146: 構文エラー: ';' が、識別子 'input' の前に必要です。
+[LOCAL_PATH] error C2065: 'input': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'input': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'input': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'input': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'input': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'input': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'input': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'input': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'input': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'input': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'input': 定義されていない識別子です。
+[LOCAL_PATH] error C2039: 'kKickerHardwareConfigured': 'soccer::board' のメンバーではありません
+[LOCAL_PATH] note: 'soccer::board' の宣言を確認してください
+[LOCAL_PATH] error C2065: 'KickerOutput': 定義されていない識別子です。
+[LOCAL_PATH] error C2146: 構文エラー: ';' が、識別子 'output' の前に必要です。
+[LOCAL_PATH] error C2065: 'output': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'kicker': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'input': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'output': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'kKickerDisarmed': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'dribbler': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'input': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'output': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'kicker': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'input': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'output': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'kKickerReady': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'input': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'output': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'kicker': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'input': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'output': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'kKickerFault': 定義されていない識別子です。
+[LOCAL_PATH] error C2065: 'dribbler': 定義されていない識別子です。
+EXIT: 2
+No test executable was linked or run.
+
+Follow-up compile-only run with UTF-8 source decoding: 2026-11-16 19:07:23 +09:00
+Objects: [LOCAL_PATH]
+=== COMPILE test_core.cpp (/utf-8) ===
+test_core.cpp
+EXIT: 0
+=== COMPILE test_integration.cpp (/utf-8) ===
+test_integration.cpp
+EXIT: 0
+No test executable was linked or run.

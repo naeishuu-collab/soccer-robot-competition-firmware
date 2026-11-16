@@ -1,0 +1,12 @@
+*.bin
+*.elf
+*.uf2
+*.hex
+*.obj
+*.o
+*.exe
+*.pyc
+__pycache__/
+build/
+out/
+.audit/

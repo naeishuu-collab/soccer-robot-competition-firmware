@@ -1,0 +1,11 @@
+=== python tests/check_gpio.py --self-test ===
+...........
+----------------------------------------------------------------------
+Ran 11 tests in 0.011s
+
+OK
+=== python tests/check_gpio.py ===
+PASS IR coherence/prediction; 18 LINE sensors enabled and 6 failed sensors excluded
+PASS project IR/LINE pin maps; physical continuity and LINE angles still need measurement
+PASS user-reported MOTOR PWM map matches firmware; RS485/safety routes are unknown and output stays disabled
+LEGACY_REFERENCE: old MOTOR design remains separate from the user-reported current-revision map

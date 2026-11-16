@@ -1,0 +1,25 @@
+Build timestamp: 2026-11-16 19:09:44 +09:00
+Arduino CLI: arduino-cli  Version: 1.6.0 Commit: 50a0e80da Date: 2026-11-10T15:30:44Z
+Core packages:
+ID            Installed Latest Name
+arduino:avr   1.8.8     1.8.8  Arduino AVR Boards
+rp2040:rp2040 6.3.2     6.3.2  Raspberry Pi Pico/RP2040/RP2350
+
+
+No upload performed.
+=== MAIN RP2350A [rp2040:rp2040:generic_rp2350:variantchip=RP2350A,flash=2097152_0] ===
+Sketch uses 70144 bytes (3%) of program storage space. Maximum is 2088960 bytes.
+Global variables use 10860 bytes (2%) of dynamic memory, leaving 513428 bytes for local variables. Maximum is 524288 bytes.
+RESULT: 0
+=== IR RP2350A [rp2040:rp2040:generic_rp2350:variantchip=RP2350A,flash=2097152_0] ===
+Sketch uses 59988 bytes (2%) of program storage space. Maximum is 2088960 bytes.
+Global variables use 14836 bytes (2%) of dynamic memory, leaving 509452 bytes for local variables. Maximum is 524288 bytes.
+RESULT: 0
+=== LINE RP2350B [rp2040:rp2040:generic_rp2350:variantchip=RP2350B,flash=2097152_0] ===
+Sketch uses 56508 bytes (2%) of program storage space. Maximum is 2088960 bytes.
+Global variables use 10164 bytes (1%) of dynamic memory, leaving 514124 bytes for local variables. Maximum is 524288 bytes.
+RESULT: 0
+=== MOTOR RP2350B [rp2040:rp2040:generic_rp2350:variantchip=RP2350B,flash=2097152_0] ===
+Sketch uses 54316 bytes (2%) of program storage space. Maximum is 2088960 bytes.
+Global variables use 10184 bytes (1%) of dynamic memory, leaving 514104 bytes for local variables. Maximum is 524288 bytes.
+RESULT: 0
