@@ -231,7 +231,7 @@ struct Motion {
     float turn = 0.0f; // Counter-clockwise, normalized -1..1.
 };
 
-constexpr uint8_t kIrTestPwmCap = 255;
+constexpr uint8_t kIrTestPwmCap = 16;
 
 // shortcut: wheel geometry is provisional; replace after a four-wheel direction check.
 inline bool irTestMotionForBearing(uint16_t directionDeg, Motion& motion) {

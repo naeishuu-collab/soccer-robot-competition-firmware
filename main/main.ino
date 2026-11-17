@@ -788,7 +788,7 @@ struct Motion {
     float turn = 0.0f; // Counter-clockwise, normalized -1..1.
 };
 
-constexpr uint8_t kIrTestPwmCap = 255;
+constexpr uint8_t kIrTestPwmCap = 16;
 
 // shortcut: wheel geometry is provisional; replace after a four-wheel direction check.
 inline bool irTestMotionForBearing(uint16_t directionDeg, Motion& motion) {
@@ -2574,7 +2574,7 @@ void setup() {
     if (Serial && Serial.availableForWrite() >= 64)
         Serial.println("MOTOR M range -255..255, 256=brake; M command timeout 300ms");
     if (Serial && Serial.availableForWrite() >= 72)
-        Serial.println("IR TEST: no LINE; auto-arm; PWM 255; stop on IR loss/S; wheels up");
+        Serial.println("IR TEST: no LINE; auto-arm; PWM 16; stop on IR loss/S; wheels up");
 
     pinMode(board::kMainRs485DePin, OUTPUT);
     digitalWrite(board::kMainRs485DePin, LOW);

@@ -370,7 +370,7 @@ static void testIrTestContinuousTrackingAndCoarseSteering() {
 static void testAutoMotorPwmCaps() {
     int16_t values[4] = {255, -255, 24, -24};
     capMotorCommandValues(values, kIrTestPwmCap);
-    CHECK(values[0] == 255 && values[1] == -255 && values[2] == 24 && values[3] == -24);
+    CHECK(values[0] == 16 && values[1] == -16 && values[2] == 16 && values[3] == -16);
     values[0] = 255; values[1] = -255; values[2] = 24; values[3] = -24;
     capMotorCommandValues(values, 48);
     CHECK(values[0] == 48 && values[1] == -48 && values[2] == 24 && values[3] == -24);

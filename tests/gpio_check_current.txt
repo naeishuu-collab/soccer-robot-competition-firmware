@@ -1,11 +1,7 @@
-Final GPIO/source checks: 2026-11-17 22:23:30 +09:00
-=== python tests/check_gpio.py ===
-PASS IR coherence/prediction; 18 LINE sensors enabled and 6 failed sensors excluded
-PASS project IR/LINE pin maps; physical continuity and LINE angles still need measurement
-PASS MOTOR pin map and TB67H450 direction logic match the user-tested four-wheel code
-PASS MAIN direct/AUTO commands; AUTO readiness gates; manual 300 ms timeout
-RESULT: 0
-=== python tests/check_gpio.py --self-test ===
-Ran 12 tests
+GPIO/source self-test: 2026-11-17 22:57:37 +09:00
+............
+----------------------------------------------------------------------
+Ran 12 tests in 0.060s
+
 OK
 RESULT: 0

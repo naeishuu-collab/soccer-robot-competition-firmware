@@ -1,12 +1,87 @@
-Host test record updated: 2026-11-17 22:23:30 +09:00
-Repository PowerShell runner: BLOCKED by unsigned-script policy; MSVC was invoked directly without changing policy.
-MSVC C++17 (/EHsc /utf-8 /std:c++17 /W4).
+Host test record updated: 2026-11-17 22:56:25 +09:00
+MSVC C++17 (/EHsc /utf-8 /std:c++17 /W4); direct compile/run; repository script policy unchanged.
 === test_core.cpp ===
+test_core.cpp
 COMPILE: PASS
-RUN: PASS
+PASS CRC vector and packet round trip
+PASS CRC corruption
+PASS Dropped packet sequence gap
+PASS Partial frame
+PASS Partial frame timeout
+PASS MOTOR frame round trip, range, checksum and timeout
+PASS MOTOR ignores valid shared-bus IR and LINE frames
+PASS MOTOR direct console command parsing
+PASS AUTO command modes and fail-closed gates
+PASS IR test mode continuous tracking and coarse steering
+PASS AUTO PWM caps
+PASS RS485 half-duplex order and failure recovery
+PASS RS485 receive timeout and collision guard
+PASS Shared bus IR request demultiplexing
+PASS IR request and legacy six-byte response
+PASS Sequence wrap and duplicate
+PASS Invalid message type
+PASS Invalid payload length
+PASS IR 0 and 359 degree boundaries
+PASS IR no-ball and invalid angle
+PASS IR direction coherence metric
+PASS IR prediction wrap, time wrap and speed limit
+PASS LINE debounce rejects short transitions
+PASS Line single sensor
+PASS LINE poll response CRC and sequence
+PASS Line adjacent sensors
+PASS Line opposing ambiguity
+PASS Line angle wrap and consistency
+PASS Line unknown polarity and angles
+PASS LINE failed-sensor mask and 18 live inputs
+PASS LINE candidate PCB angles and fail-closed gates
+PASS Line without direction stops
+PASS Line priority, hold and ambiguous stop
+PASS Omni forward and backward
+PASS Omni left and right
+PASS Omni clockwise and counter-clockwise
+PASS Omni blend and normalization
+PASS Motor acceleration limit
+PASS TB67H450 truth table and PWM limits
+PASS MOTOR STOP command priority
+PASS Heading boundaries and jump
+PASS BNO init, disconnect, validation and recovery
+PASS Kicker and dribbler gates
+PASS MAIN kicker request policy gates
+PASS Disarm, approach and search
+PASS Sensor communication loss
+PASS IR sensor communication loss
+PASS Unknown line polarity fails safe
+PASS Motor communication loss
+PASS Invalid motor commands
+PASS Motor startup output gate
+PASS MOTOR timeout latch and recovery boundary
+PASS MOTOR route and package validation
+PASS Safety input pin validation
+PASS Manual ARM requires fresh press
+PASS Manual clear requires fresh press
+PASS MOTOR safety fault latch and re-arm
+PASS Heading fault recovery and re-arm
+PASS Emergency stop latch
+PASS Unspecified safety inputs fail closed
 UNIT SUMMARY: 60 cases, 1791 checks, 0 failed
-=== test_integration.cpp ===
-COMPILE: PASS
 RUN: PASS
+=== test_integration.cpp ===
+test_integration.cpp
+COMPILE: PASS
+PASS IR packet to MAIN to MOTOR: front and sides
+PASS Ball loss enters heading-held search
+PASS LINE priority, hold and safe recovery
+PASS Failed LINE sensors do not create a false boundary
+PASS IR loss faults and stops tracking
+PASS LINE loss faults and disables MOTOR
+PASS MAIN command loss uses MOTOR watchdog
+PASS BNO heading and ball motion reach MOTOR
+PASS Unknown LINE polarity stops integration
+PASS BNO invalidity, multiple faults and E-stop
+PASS E-stop clear requires explicit re-arm
+PASS Kicker/dribbler remain gated
+PASS Shared bus arbitration prevents overlapping replies
+PASS Thirty-minute four-wheel drive simulation
 INTEGRATION SUMMARY: 14 scenarios, 107 checks, 0 failed
+RUN: PASS
 No board power, firmware upload, motor startup, or RS485 hardware test.
