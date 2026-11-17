@@ -1,6 +1,6 @@
 {
   "custom_rp2354": {
-    "status": "MAIN/IR/LINE project routes; physical continuity is unverified. Current MOTOR PWM routes are recorded separately from user-reported as-built information.",
+    "status": "MOTOR parent-board routing and RP2354A come from the supplied final ZIP; user-reported TB67H450 drivers differ from its child-board circuit. Physical continuity and RS485 operation remain unverified.",
     "chip_gpio_count": {
       "RP2354A": 30,
       "RP2354B": 48
@@ -65,6 +65,14 @@
         "UART_TX": 0,
         "UART_RX": 1,
         "RS485_DE": 27
+      },
+      "MOTOR": {
+        "chip": "RP2354A",
+        "UART_TX": 0,
+        "UART_RX": 1,
+        "RS485_DE": 2,
+        "PWM_A": [6, 12, 11, 8],
+        "PWM_B": [7, 13, 10, 9]
       }
     }
   },
@@ -77,12 +85,12 @@
   "motor_user_reported": {
     "status": "USER_REPORTED_CURRENT_REVISION",
     "controller": "TB67H450FNG x4",
-    "channel_order": ["LEFT_FRONT", "RIGHT_FRONT", "LEFT_REAR", "RIGHT_REAR"],
+    "channel_order": ["RIGHT_REAR", "LEFT_FRONT", "RIGHT_FRONT", "LEFT_REAR"],
     "channels": {
-      "LEFT_FRONT": {"connector": "J2", "IN1": 13, "IN2": 12},
+      "LEFT_FRONT": {"connector": "J2", "IN1": 12, "IN2": 13},
       "RIGHT_FRONT": {"connector": "J6", "IN1": 11, "IN2": 10},
-      "LEFT_REAR": {"connector": "J7", "IN1": 9, "IN2": 8},
-      "RIGHT_REAR": {"connector": "J1", "IN1": 7, "IN2": 6}
+      "LEFT_REAR": {"connector": "J7", "IN1": 8, "IN2": 9},
+      "RIGHT_REAR": {"connector": "J1", "IN1": 6, "IN2": 7}
     },
     "wheel_diameter_mm": 60,
     "wheel_radius_mm": 30,
@@ -91,8 +99,8 @@
     "pwm_range": 255,
     "test_duty": 128,
     "every_motor_tested_individually": true,
-    "main_motor_rs485_tested": true,
-    "open_questions": ["motor polarity", "roller direction", "four-wheel composition", "MOTOR RS485 pins", "ARM/E-stop input routes", "independent power cut performance"]
+    "main_motor_rs485_tested": false,
+    "open_questions": ["MOTOR RS485 wiring and termination", "motor polarity", "roller direction", "four-wheel composition", "ARM/E-stop input routes", "independent power cut performance"]
   },
   "standard_pico2_reference": {
     "status": "reference only; not the robot boards",

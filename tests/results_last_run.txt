@@ -1,0 +1,10 @@
+Host test record updated: 2026-11-17 19:25:10 +09:00
+MSVC C++17 direct compile (/EHsc /utf-8 /std:c++17 /W4); repository PowerShell runner remains blocked by unsigned-script policy.
+Build location: %TEMP%\soccer-competition-tests-ir-shared-bus
+=== test_core.cpp ===
+COMPILE: PASS
+RUN: BLOCKED by Windows Application Control policy; no workaround used.
+=== test_integration.cpp ===
+COMPILE: PASS
+RUN: NOT ATTEMPTED after the same execution policy blocked test_core.exe.
+No board power, firmware upload, or motor startup.

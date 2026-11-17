@@ -1,6 +1,6 @@
 #pragma once
 
-#include "RobotProtocol.h"
+#include "RobotProtocol.ino"
 #include <math.h>
 
 namespace soccer {
@@ -11,7 +11,6 @@ constexpr uint8_t kLineFlagAmbiguous = 0x02;
 constexpr uint8_t kLineFlagDirectionValid = 0x04;
 constexpr uint8_t kLineFlagPolarityValid = 0x08;
 constexpr uint8_t kLineFlagActiveHigh = 0x10;
-constexpr uint8_t kMotorFlagEnable = 0x01;
 
 struct LineObservation {
     uint32_t rawLevels = 0; // Reportable 24-bit input levels after configured filtering and disabled-sensor masking.
@@ -232,33 +231,72 @@ struct Motion {
     float turn = 0.0f; // Counter-clockwise, normalized -1..1.
 };
 
+constexpr uint8_t kIrTestPwmCap = 16;
+constexpr uint32_t kIrTestArmTimeoutMs = 5000;
+
+// shortcut: uses provisional wheel geometry at <=16 PWM; replace after a four-wheel direction check.
+inline bool irTestMotionForBearing(uint16_t directionDeg, Motion& motion) {
+    motion = {};
+    if (directionDeg >= 360) return false;
+    const uint16_t sector = static_cast<uint16_t>(((directionDeg + 15u) / 30u * 30u) % 360u);
+    if (sector == 0) motion.y = 0.1f;
+    else motion.turn = sector <= 180 ? -0.1f : 0.1f;
+    return true;
+}
+
+class IrTestController {
+public:
+    bool arm(bool irFresh, bool ballFound, uint16_t directionDeg, uint32_t nowMs) {
+        if (!irFresh || !ballFound || directionDeg >= 360) {
+            disarm();
+            return false;
+        }
+        armed_ = true;
+        startedMs_ = nowMs;
+        return true;
+    }
+
+    bool update(bool irFresh, bool ballFound, uint16_t directionDeg, uint32_t nowMs,
+                Motion& motion) {
+        motion = {};
+        if (!armed_) return false;
+        if (static_cast<uint32_t>(nowMs - startedMs_) >= kIrTestArmTimeoutMs ||
+            !irFresh || !ballFound || !irTestMotionForBearing(directionDeg, motion)) {
+            disarm();
+            motion = {};
+            return false;
+        }
+        return true;
+    }
+
+    void disarm() { armed_ = false; startedMs_ = 0; }
+    bool armed() const { return armed_; }
+
+private:
+    bool armed_ = false;
+    uint32_t startedMs_ = 0;
+};
+
+enum AutoMode : uint8_t { kAutoStopped, kAutoWheelLift, kAutoFloor, kAutoIrTest };
+
+inline AutoMode autoModeForCommand(MainConsoleCommand command, bool wheelLiftReady, bool floorReady) {
+    if (command == kConsoleAutoIrTest) return kAutoIrTest;
+    if (command == kConsoleAutoWheelLift) return wheelLiftReady ? kAutoWheelLift : kAutoStopped;
+    if (command == kConsoleAutoFloor) return floorReady ? kAutoFloor : kAutoStopped;
+    return kAutoStopped;
+}
+
+inline void capMotorCommandValues(int16_t values[4], uint8_t maxPwm) {
+    if (!values) return;
+    for (uint8_t i = 0; i < 4; ++i) {
+        if (values[i] > maxPwm) values[i] = maxPwm;
+        else if (values[i] < -static_cast<int16_t>(maxPwm)) values[i] = -static_cast<int16_t>(maxPwm);
+    }
+}
+
 inline bool validMotion(const Motion& m) {
     return isfinite(m.x) && isfinite(m.y) && isfinite(m.turn) &&
            fabsf(m.x) <= 1.0f && fabsf(m.y) <= 1.0f && fabsf(m.turn) <= 1.0f;
-}
-
-inline Packet makeMotorPacket(const Motion& motion, bool enabled, uint8_t sequence) {
-    Packet p{};
-    if (!validMotion(motion)) return p;
-    p.type = kMotorCommand;
-    p.sequence = sequence;
-    p.length = 7;
-    const float values[3] = {motion.x, motion.y, motion.turn};
-    for (uint8_t i = 0; i < 3; ++i) {
-        const int16_t scaled = static_cast<int16_t>(values[i] * 1000.0f);
-        writeI16LE(p.payload + 2 * i, scaled);
-    }
-    p.payload[6] = enabled ? kMotorFlagEnable : 0;
-    return p;
-}
-
-inline bool decodeMotorPacket(const Packet& p, Motion& motion, bool& enabled) {
-    if (p.type != kMotorCommand || p.length != 7 || (p.payload[6] & ~kMotorFlagEnable)) return false;
-    motion.x = readI16LE(p.payload) / 1000.0f;
-    motion.y = readI16LE(p.payload + 2) / 1000.0f;
-    motion.turn = readI16LE(p.payload + 4) / 1000.0f;
-    enabled = (p.payload[6] & kMotorFlagEnable) != 0;
-    return validMotion(motion);
 }
 
 struct WheelConfig {
@@ -283,7 +321,7 @@ struct Tb67h450ChannelConfig {
 };
 
 constexpr uint16_t kMotorPwmRange = 255;
-constexpr uint16_t kTb67h450MaxDuty = 128;
+constexpr uint16_t kTb67h450MaxDuty = 255;
 constexpr uint32_t kTb67h450PwmFrequencyHz = 20000;
 constexpr uint32_t kTb67h450ReversalDwellMs = 200;
 
@@ -319,14 +357,23 @@ inline bool tb67h450OutputForWheel(float wheel, uint16_t dutyLimit, Tb67h450Outp
                           duty, dutyLimit, output);
 }
 
+inline bool tb67h450RequiresNeutralDwell(Tb67h450Mode appliedMode, Tb67h450Mode requestedMode,
+                                         bool neutralSinceValid, uint32_t nowMs,
+                                         uint32_t neutralSinceMs, uint32_t dwellMs) {
+    if ((requestedMode != kTb67h450Forward && requestedMode != kTb67h450Reverse) ||
+        appliedMode == requestedMode) return false;
+    return appliedMode != kTb67h450Stop || !neutralSinceValid ||
+           static_cast<uint32_t>(nowMs - neutralSinceMs) < dwellMs;
+}
+
 inline bool validMotorPwmSettings(uint32_t frequencyHz, uint16_t range, uint32_t clockHz) {
     // The Arduino-Pico core reduces timer range when one PWM period has fewer source-clock ticks.
     return frequencyHz >= 100 && frequencyHz <= 1000000 && range == kMotorPwmRange &&
            static_cast<uint64_t>(frequencyHz) * range <= clockHz;
 }
 
-inline bool validRs485PinConfig(bool verified, uint8_t gpioCount, int8_t tx, int8_t rx, int8_t de) {
-    if (!verified || gpioCount == 0 || gpioCount > 48 || tx < 0 || rx < 0 || de < 0 ||
+inline bool validRs485PinConfig(bool configured, uint8_t gpioCount, int8_t tx, int8_t rx, int8_t de) {
+    if (!configured || gpioCount == 0 || gpioCount > 48 || tx < 0 || rx < 0 || de < 0 ||
         tx >= gpioCount || rx >= gpioCount || de >= gpioCount) return false;
     return tx != rx && tx != de && rx != de;
 }
@@ -432,8 +479,8 @@ private:
 
 class MotorCommandPriority {
 public:
-    bool accept(const Motion& motion, bool enabled) {
-        if (!enabled || (motion.x == 0.0f && motion.y == 0.0f && motion.turn == 0.0f)) {
+    bool accept(bool enabled) {
+        if (!enabled) {
             stopPending_ = true;
             return true;
         }
@@ -607,6 +654,17 @@ inline bool omniKinematics(const Motion& motion, const WheelConfig wheels[4], fl
         if (fabsf(output[i]) > largest) largest = fabsf(output[i]);
     }
     if (largest > 1.0f) for (uint8_t i = 0; i < 4; ++i) output[i] /= largest;
+    return true;
+}
+
+inline bool motorCommandValuesForMotion(const Motion& motion, bool enabled,
+                                        const WheelConfig wheels[4], int16_t values[4]) {
+    if (!values) return false;
+    for (uint8_t i = 0; i < 4; ++i) values[i] = 0;
+    if (!enabled) return true;
+    float wheel[4]{};
+    if (!wheels || !omniKinematics(motion, wheels, wheel)) return false;
+    for (uint8_t i = 0; i < 4; ++i) values[i] = static_cast<int16_t>(roundf(wheel[i] * 255.0f));
     return true;
 }
 

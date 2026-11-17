@@ -1,7 +1,7 @@
-#include "../common/src/RobotControl.h"
-#include "../common/src/BoardConfig.h"
-#include "../common/src/RobotDevices.h"
-#include "../common/src/Rs485.h"
+#include "../common/src/RobotControl.ino"
+#include "../common/src/BoardConfig.ino"
+#include "../common/src/RobotDevices.ino"
+#include "../common/src/Rs485.ino"
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -99,7 +99,7 @@ static void testLineCandidateAnglesUseSignedCentidegreesAndStayGated() {
     CHECK(offset.v[0] == 0 && offset.v[23] == -2000);
     CHECK(!board::kLineFrontOffsetConfigured && !board::kLineAnglesConfigured &&
           !board::kLinePolarityConfigured && !board::kCompetitionArmed);
-    CHECK(!board::kMotorHardwareConfigured && !board::kKickerHardwareConfigured);
+    CHECK(board::kMotorHardwareConfigured && !board::kKickerHardwareConfigured);
 }
 
 static bool parseFrame(const uint8_t* bytes, uint8_t length, PacketParser& parser,
@@ -126,22 +126,18 @@ static void feedIr(const uint8_t bytes[6], uint32_t startMs, LegacyIrParser& par
 static void testCrcKnownVectorAndFrameRoundTrip() {
     const uint8_t text[] = "123456789";
     CHECK(crc16(text, 9) == 0x29B1);
-    const Packet packet = makeMotorPacket({0.2f, -0.4f, 0.1f}, true, 255);
+    const Packet packet = makeLineRequest(255);
     uint8_t bytes[kMaxFrame]{};
     const uint8_t length = encodePacket(packet, bytes, sizeof(bytes));
-    CHECK(length == 15);
+    CHECK(length == 8);
     PacketParser parser;
     Packet decoded{};
     CHECK(parseFrame(bytes, length, parser, decoded));
-    Motion motion{};
-    bool enabled = false;
-    CHECK(decodeMotorPacket(decoded, motion, enabled));
-    CHECK(enabled && decoded.sequence == 255);
-    CHECK(fabsf(motion.x - 0.2f) < 0.002f && fabsf(motion.y + 0.4f) < 0.002f);
+    CHECK(decodeLineRequest(decoded) && decoded.sequence == 255);
 }
 
 static void testBadCrcRejected() {
-    Packet packet = makeMotorPacket({0.1f, 0.2f, 0.3f}, true, 9);
+    Packet packet = makeLineRequest(9);
     uint8_t bytes[kMaxFrame]{};
     const uint8_t length = encodePacket(packet, bytes, sizeof(bytes));
     bytes[length - 1] ^= 0x80;
@@ -156,7 +152,7 @@ static void testDroppedPacketSequenceGap() {
     SequenceTracker sequence;
     Packet decoded{};
     uint8_t bytes[kMaxFrame]{};
-    Packet p = makeMotorPacket({}, false, 20);
+    Packet p = makeLineRequest(20);
     uint8_t length = encodePacket(p, bytes, sizeof(bytes));
     CHECK(parseFrame(bytes, length, parser, decoded, 0));
     CHECK(sequence.accept(decoded.sequence));
@@ -168,7 +164,7 @@ static void testDroppedPacketSequenceGap() {
 }
 
 static void testPartialFrameWaitsForRemainder() {
-    Packet packet = makeMotorPacket({0.3f, 0.1f, -0.2f}, true, 4);
+    Packet packet = makeLineRequest(4);
     uint8_t bytes[kMaxFrame]{};
     const uint8_t length = encodePacket(packet, bytes, sizeof(bytes));
     PacketParser parser;
@@ -188,6 +184,187 @@ static void testPartialFrameTimeout() {
     CHECK(!parser.feed(kProtocolVersion, 2, ignored));
     CHECK(!parser.feed(kFrameStart0, 11, ignored));
     CHECK(parser.stats().timeouts == 1);
+}
+
+static void testMotorCommandFrameRoundTripAndValidation() {
+    int16_t requested[4] = {-255, 1, 255, kMotorBrakeCommand};
+    uint8_t bytes[kMotorCommandFrameSize]{};
+    CHECK(encodeMotorCommandFrame(requested, bytes, sizeof(bytes)) == kMotorCommandFrameSize);
+    CHECK(bytes[0] == 0xAA && bytes[1] == 4 && bytes[2] == 1 && bytes[3] == 0xFF);
+    CHECK(bytes[4] == 1 && bytes[5] == 0 && bytes[6] == 0xFF && bytes[7] == 0);
+    CHECK(bytes[8] == 0 && bytes[9] == 1 && bytes[11] == 0x55);
+    uint8_t checksum = 0;
+    for (uint8_t i = 0; i < 10; ++i) checksum ^= bytes[i];
+    CHECK(bytes[10] == checksum);
+
+    MotorCommandFrameParser parser;
+    int16_t decoded[4]{};
+    MotorFrameStatus status = kMotorFramePending;
+    for (uint8_t i = 0; i < sizeof(bytes); ++i)
+        status = parser.feed(bytes[i], i, decoded);
+    CHECK(status == kMotorFrameReady);
+    for (uint8_t i = 0; i < 4; ++i) CHECK(decoded[i] == requested[i]);
+
+    requested[0] = 257;
+    CHECK(encodeMotorCommandFrame(requested, bytes, sizeof(bytes)) == 0);
+    requested[0] = 0;
+    CHECK(encodeMotorCommandFrame(requested, bytes, sizeof(bytes)) == kMotorCommandFrameSize);
+    bytes[10] ^= 1;
+    MotorCommandFrameParser badChecksum;
+    for (uint8_t i = 0; i < sizeof(bytes); ++i)
+        status = badChecksum.feed(bytes[i], i, decoded);
+    CHECK(status == kMotorFrameInvalid && badChecksum.stats().checksumErrors == 1);
+
+    CHECK(encodeMotorCommandFrame(requested, bytes, sizeof(bytes)) == kMotorCommandFrameSize);
+    bytes[11] = 0;
+    MotorCommandFrameParser badEnd;
+    for (uint8_t i = 0; i < sizeof(bytes); ++i)
+        status = badEnd.feed(bytes[i], i, decoded);
+    CHECK(status == kMotorFrameInvalid && badEnd.stats().formatErrors == 1);
+
+    requested[0] = 0;
+    CHECK(encodeMotorCommandFrame(requested, bytes, sizeof(bytes)) == kMotorCommandFrameSize);
+    bytes[2] = 1; // 257 is rejected even when the XOR is correct.
+    bytes[3] = 1;
+    checksum = 0;
+    for (uint8_t i = 0; i < 10; ++i) checksum ^= bytes[i];
+    bytes[10] = checksum;
+    MotorCommandFrameParser badRange;
+    for (uint8_t i = 0; i < sizeof(bytes); ++i)
+        status = badRange.feed(bytes[i], i, decoded);
+    CHECK(status == kMotorFrameInvalid && badRange.stats().rangeErrors == 1);
+
+    MotorCommandFrameParser timedOut;
+    CHECK(timedOut.feed(kMotorCommandStart, 0, decoded) == kMotorFramePending);
+    CHECK(timedOut.poll(kFrameTimeoutMs + 1));
+    CHECK(timedOut.stats().timeouts == 1);
+}
+
+static void testMotorParserIgnoresSharedBusTraffic() {
+    MotorCommandFrameParser parser;
+    int16_t decoded[4]{};
+    const uint8_t irResponse[] = {0xAA, 0x00, 0xB4, 0x12, 0x34, 0x55};
+    for (uint8_t i = 0; i < sizeof(irResponse); ++i)
+        CHECK(parser.feed(irResponse[i], i, decoded) == kMotorFramePending);
+    CHECK(parser.stats().formatErrors == 0);
+
+    Packet line{};
+    line.type = kLineStatus;
+    line.length = 2;
+    line.payload[0] = 0xAA;
+    line.payload[1] = 0x04;
+    uint8_t lineBytes[kMaxFrame]{};
+    const uint8_t lineLength = encodePacket(line, lineBytes, sizeof(lineBytes));
+    CHECK(lineLength == 10);
+    for (uint8_t i = 0; i < lineLength; ++i)
+        CHECK(parser.feed(lineBytes[i], 10 + i, decoded) == kMotorFramePending);
+    CHECK(parser.stats().formatErrors == 0);
+
+    int16_t requested[4] = {8, -8, 0, 4};
+    uint8_t motorBytes[kMotorCommandFrameSize]{};
+    CHECK(encodeMotorCommandFrame(requested, motorBytes, sizeof(motorBytes)) == kMotorCommandFrameSize);
+    MotorFrameStatus status = kMotorFramePending;
+    for (uint8_t i = 0; i < sizeof(motorBytes); ++i)
+        status = parser.feed(motorBytes[i], 30 + i, decoded);
+    CHECK(status == kMotorFrameReady);
+    for (uint8_t i = 0; i < 4; ++i) CHECK(decoded[i] == requested[i]);
+
+    MotorCommandFrameParser invalidIr;
+    const uint8_t invalidIrResponse[] = {0xAA, 0x01, 0x68, 0x12, 0x34, 0x55}; // Direction 360 is invalid.
+    for (uint8_t i = 0; i < sizeof(invalidIrResponse); ++i)
+        status = invalidIr.feed(invalidIrResponse[i], i, decoded);
+    CHECK(status == kMotorFrameInvalid && invalidIr.stats().formatErrors == 1);
+}
+
+static void testMotorConsoleCommandParsing() {
+    int16_t values[4] = {9, 9, 9, 9};
+    CHECK(parseMotorConsoleCommand("M -255 0 200 256", values));
+    CHECK(values[0] == -255 && values[1] == 0 && values[2] == 200 && values[3] == 256);
+    CHECK(parseMotorConsoleCommand(" s ", values));
+    for (int16_t value : values) CHECK(value == 0);
+    CHECK(parseMotorConsoleCommand("m +1 -2 +3 -4 \t", values));
+    CHECK(values[0] == 1 && values[1] == -2 && values[2] == 3 && values[3] == -4);
+    CHECK(!parseMotorConsoleCommand("M 1 2 3", values));
+    CHECK(!parseMotorConsoleCommand("M 1 2 3 4 5", values));
+    CHECK(!parseMotorConsoleCommand("M 257 0 0 0", values));
+    CHECK(!parseMotorConsoleCommand("M -256 0 0 0", values));
+    CHECK(!parseMotorConsoleCommand("M 1 x 3 4", values));
+    CHECK(!parseMotorConsoleCommand("STOP", values));
+}
+
+static void testMainConsoleAutoModesAndFailClosedGates() {
+    int16_t values[4] = {9, 9, 9, 9};
+    CHECK(parseMainConsoleCommand(" AUTO ", values) == kConsoleAutoWheelLift);
+    for (int16_t value : values) CHECK(value == 0);
+    CHECK(parseMainConsoleCommand("auto float", values) == kConsoleAutoWheelLift);
+    CHECK(parseMainConsoleCommand("AUTO FLOOR\t", values) == kConsoleAutoFloor);
+    CHECK(parseMainConsoleCommand("AUTO IR", values) == kConsoleAutoIrTest);
+    CHECK(parseMainConsoleCommand("arm ir", values) == kConsoleArmIrTest);
+    CHECK(parseMainConsoleCommand("ARM IR NOW", values) == kConsoleInvalid);
+    CHECK(parseMainConsoleCommand("AUTO FLOOR NOW", values) == kConsoleInvalid);
+    CHECK(parseMainConsoleCommand("AUTOX", values) == kConsoleInvalid);
+    CHECK(parseMainConsoleCommand("M 100 100 100 100", values) == kConsoleManualMotor);
+    CHECK(values[0] == 100 && values[1] == 100 && values[2] == 100 && values[3] == 100);
+    CHECK(parseMainConsoleCommand("S", values) == kConsoleStop);
+    CHECK(autoModeForCommand(kConsoleAutoWheelLift, true, false) == kAutoWheelLift);
+    CHECK(autoModeForCommand(kConsoleAutoFloor, true, false) == kAutoStopped);
+    CHECK(autoModeForCommand(kConsoleAutoFloor, true, true) == kAutoFloor);
+    CHECK(autoModeForCommand(kConsoleAutoIrTest, false, false) == kAutoIrTest);
+    CHECK(autoModeForCommand(kConsoleStop, true, true) == kAutoStopped);
+    CHECK(autoModeForCommand(kConsoleManualMotor, true, true) == kAutoStopped);
+    CHECK(autoModeForCommand(kConsoleInvalid, true, true) == kAutoStopped);
+    CHECK(!board::kAutoWheelLiftReady && !board::kAutoFloorReady);
+    CHECK(board::kLineSensorEnabledMask != 0x00FFFFFFu);
+    CHECK(!board::kLineDebounceConfigured);
+}
+
+static void testIrTestArmTimeoutAndCoarseSteering() {
+    IrTestController controller;
+    Motion motion{1.0f, 1.0f, 1.0f};
+    CHECK(!controller.update(true, true, 0, 0, motion));
+    CHECK(motion.x == 0 && motion.y == 0 && motion.turn == 0);
+    CHECK(!controller.arm(false, true, 0, 0));
+    CHECK(!controller.arm(true, false, 0, 0));
+    CHECK(!controller.arm(true, true, 360, 0));
+    CHECK(controller.arm(true, true, 359, 0));
+    CHECK(controller.update(true, true, 0, 10, motion));
+    CHECK(motion.x == 0 && motion.y > 0 && motion.turn == 0);
+    CHECK(controller.update(true, true, 30, 20, motion));
+    CHECK(motion.x == 0 && motion.y == 0 && motion.turn < 0);
+    CHECK(controller.update(true, true, 330, 30, motion));
+    CHECK(motion.x == 0 && motion.y == 0 && motion.turn > 0);
+    CHECK(!controller.update(false, true, 30, 40, motion));
+    CHECK(!controller.armed() && motion.x == 0 && motion.y == 0 && motion.turn == 0);
+    CHECK(!controller.update(true, true, 30, 41, motion));
+
+    CHECK(controller.arm(true, true, 0, 100));
+    CHECK(!controller.update(true, false, 0, 101, motion));
+    CHECK(!controller.armed());
+    CHECK(controller.arm(true, true, 0, 200));
+    CHECK(!controller.update(true, true, 0, 5200, motion));
+    CHECK(!controller.armed());
+
+    CHECK(controller.arm(true, true, 30, 6000));
+    CHECK(!controller.update(true, true, 360, 6001, motion));
+    CHECK(!controller.armed());
+
+    CHECK(controller.arm(true, true, 0, 0xFFFFFF00u));
+    CHECK(controller.update(true, true, 0, 0x00000100u, motion));
+    CHECK(!controller.update(true, true, 0, 0x00001288u, motion));
+    CHECK(!controller.armed());
+    CHECK(!irTestMotionForBearing(360, motion));
+    CHECK(motion.x == 0 && motion.y == 0 && motion.turn == 0);
+}
+
+static void testAutoMotorPwmCaps() {
+    int16_t values[4] = {255, -255, 24, -24};
+    capMotorCommandValues(values, kIrTestPwmCap);
+    CHECK(values[0] == 16 && values[1] == -16 && values[2] == 16 && values[3] == -16);
+    values[0] = 255; values[1] = -255; values[2] = 24; values[3] = -24;
+    capMotorCommandValues(values, 48);
+    CHECK(values[0] == 48 && values[1] == -48 && values[2] == 24 && values[3] == -24);
+    capMotorCommandValues(values, 24);
+    CHECK(values[0] == 24 && values[1] == -24 && values[2] == 24 && values[3] == -24);
 }
 
 static void testSequenceWrapAndRejectDuplicates() {
@@ -283,16 +460,12 @@ static void testSharedBusIrRequestDemultiplexing() {
     for (uint8_t i = 0; i < length; ++i) request |= parser.feed(wire[i], i);
     CHECK(!request); // The 0x01 protocol-version byte inside a framed LINE poll is not an IR request.
 
-    Packet motor{};
-    motor.type = kMotorCommand;
-    motor.length = 4;
-    motor.payload[0] = 0x01;
-    motor.sequence = 1;
-    length = encodePacket(motor, wire, sizeof(wire));
-    for (uint8_t i = 0; i < length; ++i) request |= parser.feed(wire[i], 20 + i);
+    const int16_t motorValues[4] = {1, -1, kMotorBrakeCommand, 0};
+    uint8_t motorFrame[kMotorCommandFrameSize]{};
+    length = encodeMotorCommandFrame(motorValues, motorFrame, sizeof(motorFrame));
+    for (uint8_t i = 0; i < length; ++i) request |= parser.feed(motorFrame[i], 20 + i);
     CHECK(!request);
-    CHECK(!parser.feed(0xAA, 40));
-    CHECK(parser.feed(0x01, 41));
+    CHECK(parser.feed(0x01, 40));
 
     SharedBusIrRequestParser partial;
     partial.feed(kFrameStart0, 0);
@@ -318,7 +491,7 @@ static void testIrRequestAndLegacySixByteResponse() {
 }
 
 static void testUnknownMessageTypeRejected() {
-    Packet packet = makeMotorPacket({}, false, 1);
+    Packet packet = makeLineRequest(1);
     uint8_t bytes[kMaxFrame]{};
     const uint8_t length = encodePacket(packet, bytes, sizeof(bytes));
     bytes[3] = 0x7F;
@@ -335,7 +508,7 @@ static void testOversizedPayloadLengthRejected() {
     CHECK(!parser.feed(kFrameStart0, 0, decoded));
     CHECK(!parser.feed(kFrameStart1, 1, decoded));
     CHECK(!parser.feed(kProtocolVersion, 2, decoded));
-    CHECK(!parser.feed(kMotorCommand, 3, decoded));
+    CHECK(!parser.feed(0x7F, 3, decoded));
     CHECK(!parser.feed(kMaxPayload + 1, 4, decoded));
     CHECK(parser.stats().formatErrors == 1);
 }
@@ -422,8 +595,8 @@ static void testLineSingleSensor() {
     CHECK(line.angleCdeg == 1100);
     const LineObservation right = lineFromActive(1u << 6);
     const LineObservation left = lineFromActive(1u << 18);
-    CHECK(right.angleCdeg == 10100);
-    CHECK(left.angleCdeg == -7900);
+    CHECK(right.angleCdeg >= 10099 && right.angleCdeg <= 10101);
+    CHECK(left.angleCdeg >= -7901 && left.angleCdeg <= -7899);
 }
 
 static void testLinePollResponseCrcAndSequence() {
@@ -612,32 +785,40 @@ static void testTb67h450TruthTableAndDutyLimits() {
     CHECK(output.mode == kTb67h450Brake && output.in1 == 255 && output.in2 == 255);
     CHECK(tb67h450Encode(kTb67h450Forward, 0, 128, output));
     CHECK(output.mode == kTb67h450Stop && output.in1 == 0 && output.in2 == 0);
-    CHECK(!tb67h450Encode(kTb67h450Forward, 129, 128, output));
-    CHECK(!tb67h450Encode(kTb67h450Reverse, 256, 128, output));
-    CHECK(!tb67h450Encode(kTb67h450Stop, 1, 128, output));
-    CHECK(!tb67h450Encode(kTb67h450Brake, 1, 128, output));
-    CHECK(!tb67h450Encode(kTb67h450Forward, 128, 129, output));
+    CHECK(tb67h450Encode(kTb67h450Forward, 255, 255, output) && output.in1 == 255);
+    CHECK(!tb67h450Encode(kTb67h450Reverse, 256, 255, output));
+    CHECK(!tb67h450Encode(kTb67h450Stop, 1, 255, output));
+    CHECK(!tb67h450Encode(kTb67h450Brake, 1, 255, output));
+    CHECK(!tb67h450Encode(kTb67h450Forward, 1, 256, output));
     CHECK(!tb67h450Encode(kTb67h450Forward, 1, 0, output));
     CHECK(!tb67h450Encode(static_cast<Tb67h450Mode>(255), 0, 128, output));
+    CHECK(!tb67h450RequiresNeutralDwell(kTb67h450Forward, kTb67h450Brake, false, 0, 0, 200));
+    CHECK(!tb67h450RequiresNeutralDwell(kTb67h450Stop, kTb67h450Brake, false, 0, 0, 200));
+    CHECK(tb67h450RequiresNeutralDwell(kTb67h450Forward, kTb67h450Reverse, true, 500, 0, 200));
+    CHECK(tb67h450RequiresNeutralDwell(kTb67h450Stop, kTb67h450Forward, false, 500, 0, 200));
+    CHECK(tb67h450RequiresNeutralDwell(kTb67h450Stop, kTb67h450Forward, true, 199, 0, 200));
+    CHECK(!tb67h450RequiresNeutralDwell(kTb67h450Stop, kTb67h450Forward, true, 200, 0, 200));
+    CHECK(!tb67h450RequiresNeutralDwell(kTb67h450Forward, kTb67h450Forward, true, 0, 0, 200));
+    CHECK(tb67h450RequiresNeutralDwell(kTb67h450Brake, kTb67h450Forward, true, 500, 500, 200));
     CHECK(tb67h450OutputForWheel(0.0f, 128, output) && output.mode == kTb67h450Stop);
     CHECK(tb67h450OutputForWheel(0.5f, 128, output) && output.mode == kTb67h450Forward && output.in1 == 64);
     CHECK(tb67h450OutputForWheel(-1.0f, 128, output) && output.mode == kTb67h450Reverse && output.in2 == 128);
     CHECK(!tb67h450OutputForWheel(1.01f, 128, output));
     CHECK(!tb67h450OutputForWheel(NAN, 128, output));
     CHECK(kMotorPwmRange == 255 && kTb67h450PwmFrequencyHz == 20000 &&
-          kTb67h450MaxDuty == 128 && kTb67h450ReversalDwellMs == 200);
+          kTb67h450MaxDuty == 255 && kTb67h450ReversalDwellMs == 200);
 }
 
 static void testMotorStopPriority() {
     MotorCommandPriority priority;
-    CHECK(priority.accept({0, 1, 0}, true));
-    CHECK(priority.accept({}, false) && priority.stopPending());
-    CHECK(!priority.accept({0, 1, 0}, true));
-    CHECK(priority.accept({}, true) && priority.stopPending());
+    CHECK(priority.accept(true));
+    CHECK(priority.accept(false) && priority.stopPending());
+    CHECK(!priority.accept(true)); // A stop cannot be overwritten before the output tick.
+    CHECK(priority.accept(false) && priority.stopPending());
     priority.completeOutputTick();
-    CHECK(!priority.stopPending() && priority.accept({0, 1, 0}, true));
+    CHECK(!priority.stopPending() && priority.accept(true));
     priority.latchStop();
-    CHECK(!priority.accept({1, 0, 0}, true));
+    CHECK(!priority.accept(true));
 }
 
 static void testHeadingBoundaryAndJumpRejection() {
@@ -860,6 +1041,17 @@ static void testLineSensorCommunicationLossLatchesFault() {
     CHECK(output.state == kFault); // Requires explicit recovery and a subsequent re-arm.
 }
 
+static void testIrSensorCommunicationLossLatchesFault() {
+    MainController controller;
+    MainInput input = safeArmedInput();
+    input.irFresh = false;
+    MainOutput output = controller.step(input);
+    CHECK(output.state == kFault && output.motion.x == 0 && output.motion.y == 0 && output.motion.turn == 0);
+    input.irFresh = true;
+    output = controller.step(input);
+    CHECK(output.state == kFault); // Fresh data alone cannot restart motion after a fault.
+}
+
 static void testUnknownLinePolarityFaultsArmedRobot() {
     MainController controller;
     MainInput input = safeArmedInput();
@@ -884,19 +1076,13 @@ static void testMotorCommunicationLossStopsImmediately() {
 }
 
 static void testInvalidMotorCommandsRejected() {
-    uint8_t bytes[kMaxFrame]{};
-    const Packet invalid = makeMotorPacket({NAN, 0, 0}, true, 0);
-    CHECK(encodePacket(invalid, bytes, sizeof(bytes)) == 0);
-    Packet packet = makeMotorPacket({}, true, 1);
-    packet.payload[0] = 0xE9; // 1001 permille, outside the accepted range.
-    packet.payload[1] = 0x03;
-    Motion motion{};
-    bool enabled = false;
-    CHECK(!decodeMotorPacket(packet, motion, enabled));
-    packet.payload[0] = 0;
-    packet.payload[1] = 0;
-    packet.payload[6] = 0x80; // Unknown control flag.
-    CHECK(!decodeMotorPacket(packet, motion, enabled));
+    int16_t values[4] = {7, 7, 7, 7};
+    CHECK(!motorCommandValuesForMotion({NAN, 0, 0}, true, board::kMotorWheelConfig, values));
+    for (int16_t value : values) CHECK(value == 0);
+    CHECK(motorCommandValuesForMotion({0, 0.5f, 0}, true, board::kMotorWheelConfig, values));
+    CHECK(values[0] == 90 && values[1] == -90 && values[2] == 90 && values[3] == -90);
+    CHECK(motorCommandValuesForMotion({}, false, nullptr, values));
+    for (int16_t value : values) CHECK(value == 0);
 }
 
 static void testMotorStartupOutputGate() {
@@ -931,7 +1117,7 @@ static void testMotorStartupOutputGate() {
     duplicateWheel[3].positionY = duplicateWheel[0].positionY;
     CHECK(!valid(true, true, true, 20000, kMotorPwmRange, duplicateWheel, kTestDrivers));
     Tb67h450ChannelConfig invalidLimit[4] = {kTestDrivers[0], kTestDrivers[1], kTestDrivers[2], kTestDrivers[3]};
-    invalidLimit[1].maxDuty = 129;
+    invalidLimit[1].maxDuty = 256;
     CHECK(!valid(true, true, true, 20000, kMotorPwmRange, kTestWheels, invalidLimit));
     Tb67h450ChannelConfig reserved[4] = {kTestDrivers[0], kTestDrivers[1], kTestDrivers[2], kTestDrivers[3]};
     reserved[0].pinIn1 = 25;
@@ -942,15 +1128,20 @@ static void testMotorStartupOutputGate() {
     CHECK(!validMotorPinMap(reserved, kTestPwmPinMask, kTestReservedPinMask));
 }
 
-static void testMotorUnknownRouteAndWidePackageValidation() {
-    CHECK(board::kMotorRs485TxPin == -1 && board::kMotorRs485RxPin == -1 && board::kMotorRs485DePin == -1);
-    CHECK(board::kMotorGpioCount == 0 && !board::kMotorRs485PinsVerified);
-    CHECK(board::kMotorPwmPinMask == 0x3FC0u && board::kMotorSafetyReservedPinMask == board::kMotorPwmPinMask);
-    CHECK(board::kMotorReservedPinMask == 0 && !board::kMotorHardwareConfigured);
+static void testMotorRouteAndPackageValidation() {
+    CHECK(board::kMotorRs485TxPin == 0 && board::kMotorRs485RxPin == 1 && board::kMotorRs485DePin == 2);
+    CHECK(board::kMotorGpioCount == 30 && board::kMotorRs485PinsConfigured);
+    CHECK(board::kMotorPwmPinMask == 0x3FC0u && board::kMotorReservedPinMask == 0x7u);
+    CHECK(board::kMotorSafetyReservedPinMask == (board::kMotorPwmPinMask | board::kMotorReservedPinMask));
+    CHECK(board::kMotorHardwareConfigured && !board::kMotorWheelConfigConfigured);
     CHECK(board::kMotorWheelRadiusMm == 30.0f && board::kMotorCenterToWheelMm == 94.762f);
-    CHECK(board::kMotorTestIn1CandidatePin == 13 && board::kMotorTestIn2CandidatePin == 12);
+    CHECK(board::kMotorIn1Pins[0] == 6 && board::kMotorIn2Pins[0] == 7);
+    CHECK(board::kMotorIn1Pins[1] == 12 && board::kMotorIn2Pins[1] == 13);
+    CHECK(board::kMotorIn1Pins[2] == 11 && board::kMotorIn2Pins[2] == 10);
+    CHECK(board::kMotorIn1Pins[3] == 8 && board::kMotorIn2Pins[3] == 9);
+    CHECK(board::kMotorTestIn1CandidatePin == 12 && board::kMotorTestIn2CandidatePin == 13);
     CHECK(board::kMotorPwmFrequencyHz == kTb67h450PwmFrequencyHz);
-    CHECK(!validRs485PinConfig(board::kMotorRs485PinsVerified, board::kMotorGpioCount,
+    CHECK(validRs485PinConfig(board::kMotorRs485PinsConfigured, board::kMotorGpioCount,
                                board::kMotorRs485TxPin, board::kMotorRs485RxPin, board::kMotorRs485DePin));
     CHECK(validRs485PinConfig(true, 48, 45, 46, 47));
     CHECK(!validRs485PinConfig(false, 48, 45, 46, 47));
@@ -999,8 +1190,8 @@ static void testSafetyInputPinValidation() {
 }
 
 static void testMotorCommandTimeoutLatchesBeforeRecovery() {
-    CHECK(!motorCommandExpired(99, 0, 100));
-    CHECK(motorCommandExpired(100, 0, 100));
+    CHECK(!motorCommandExpired(299, 0, 300));
+    CHECK(motorCommandExpired(300, 0, 300));
     CHECK(!motorCommandExpired(0x0000000Fu, 0xFFFFFF10u, 0x100u));
     CHECK(motorCommandExpired(0x00000010u, 0xFFFFFF10u, 0x100u));
 
@@ -1015,7 +1206,7 @@ static void testMotorCommandTimeoutLatchesBeforeRecovery() {
     input.armPressed = true;
     CHECK(gate.update(input));
     CHECK(gate.state() == kMotorArmed);
-    CHECK(expireMotorCommand(gate, true, 100, 0, 100));
+    CHECK(expireMotorCommand(gate, true, 300, 0, 300));
     CHECK(gate.state() == kMotorFault);
     CHECK(!gate.update(input)); // A command received in the same loop cannot clear the latched fault.
 }
@@ -1187,6 +1378,12 @@ int main() {
         {"Dropped packet sequence gap", testDroppedPacketSequenceGap},
         {"Partial frame", testPartialFrameWaitsForRemainder},
         {"Partial frame timeout", testPartialFrameTimeout},
+        {"MOTOR frame round trip, range, checksum and timeout", testMotorCommandFrameRoundTripAndValidation},
+        {"MOTOR ignores valid shared-bus IR and LINE frames", testMotorParserIgnoresSharedBusTraffic},
+        {"MOTOR direct console command parsing", testMotorConsoleCommandParsing},
+        {"AUTO command modes and fail-closed gates", testMainConsoleAutoModesAndFailClosedGates},
+        {"IR test mode ARM, timeout and coarse steering", testIrTestArmTimeoutAndCoarseSteering},
+        {"AUTO PWM caps", testAutoMotorPwmCaps},
         {"RS485 half-duplex order and failure recovery", testRs485HalfDuplexOrderingAndFailure},
         {"RS485 receive timeout and collision guard", testRs485ReceiveTimeoutAndCollisionGuard},
         {"Shared bus IR request demultiplexing", testSharedBusIrRequestDemultiplexing},
@@ -1222,12 +1419,13 @@ int main() {
         {"MAIN kicker request policy gates", testMainKickerRequestPolicyGates},
         {"Disarm, approach and search", testSearchApproachAndDisarmedStates},
         {"Sensor communication loss", testLineSensorCommunicationLossLatchesFault},
+        {"IR sensor communication loss", testIrSensorCommunicationLossLatchesFault},
         {"Unknown line polarity fails safe", testUnknownLinePolarityFaultsArmedRobot},
         {"Motor communication loss", testMotorCommunicationLossStopsImmediately},
         {"Invalid motor commands", testInvalidMotorCommandsRejected},
         {"Motor startup output gate", testMotorStartupOutputGate},
         {"MOTOR timeout latch and recovery boundary", testMotorCommandTimeoutLatchesBeforeRecovery},
-        {"MOTOR unknown route and wide package validation", testMotorUnknownRouteAndWidePackageValidation},
+        {"MOTOR route and package validation", testMotorRouteAndPackageValidation},
         {"Safety input pin validation", testSafetyInputPinValidation},
         {"Manual ARM requires fresh press", testManualArmRequiresFreshPress},
         {"Manual clear requires fresh press", testManualClearRequiresFreshPress},

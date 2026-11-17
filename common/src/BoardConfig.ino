@@ -1,12 +1,12 @@
 #pragma once
 
 #include <stdint.h>
-#include "RobotControl.h"
+#include "RobotControl.ino"
 
 namespace soccer { namespace board {
 
 // MAIN, IR, and LINE pin maps follow the current project configuration; verify physical continuity on the board.
-// The MOTOR PWM map below is user-reported for the manufactured revision; its RS485 and safety routes remain unknown.
+// MOTOR routes below use the user's reference code; RS485 and safety wiring remain physically unverified.
 constexpr int8_t kMainRs485TxPin = 0;
 constexpr int8_t kMainRs485RxPin = 1;
 constexpr int8_t kMainRs485DePin = 8;
@@ -32,22 +32,29 @@ constexpr bool kLineSensorEnabled[24] = {
 };
 constexpr uint32_t kLineSensorEnabledMask = makeLineSensorEnabledMask(kLineSensorEnabled);
 
-constexpr int8_t kMotorRs485TxPin = -1;
-constexpr int8_t kMotorRs485RxPin = -1;
-constexpr int8_t kMotorRs485DePin = -1;
+constexpr int8_t kMotorRs485TxPin = 0;
+constexpr int8_t kMotorRs485RxPin = 1;
+constexpr int8_t kMotorRs485DePin = 2;
 constexpr int8_t kMotorRs485SharedDePin = -1;
-// The user-reported J2 left-front test pins are retained for test provenance.
-constexpr int8_t kMotorTestIn1CandidatePin = 13;
-constexpr int8_t kMotorTestIn2CandidatePin = 12;
-constexpr uint8_t kMotorGpioCount = 0; // Package and complete route/reservation map are unverified; keeps validation fail-closed.
-constexpr bool kMotorRs485PinsVerified = false;
+constexpr int8_t kMotorIn1Pins[4] = {6, 12, 11, 8};
+constexpr int8_t kMotorIn2Pins[4] = {7, 13, 10, 9};
+// The user-reported J2 left-front pins are retained for test provenance.
+constexpr int8_t kMotorTestIn1CandidatePin = 12;
+constexpr int8_t kMotorTestIn2CandidatePin = 13;
+constexpr uint8_t kMotorGpioCount = 30; // The final ZIP's MOTOR parent-board BOM specifies RP2354A.
+constexpr bool kMotorRs485PinsConfigured = true; // From the reference code, not a hardware test.
 constexpr uint64_t kMotorPwmPinMask = (1u << 6) | (1u << 7) | (1u << 8) | (1u << 9) |
                                       (1u << 10) | (1u << 11) | (1u << 12) | (1u << 13);
-constexpr uint64_t kMotorReservedPinMask = 0;
-constexpr uint64_t kMotorSafetyReservedPinMask = kMotorPwmPinMask;
+constexpr uint64_t kMotorReservedPinMask = (1u << 0) | (1u << 1) | (1u << 2);
+constexpr uint64_t kMotorSafetyReservedPinMask = kMotorPwmPinMask | kMotorReservedPinMask;
 
 constexpr float kMotorWheelRadiusMm = 30.0f;
 constexpr float kMotorCenterToWheelMm = 94.762f;
+// Candidate mapping used by the host integration model; polarity and roller directions need a four-wheel test.
+constexpr WheelConfig kMotorWheelConfig[4] = {
+    {1, -1, 45, 1}, {-1, 1, 225, 1}, {1, 1, 135, 1}, {-1, -1, 315, 1}
+};
+constexpr bool kMotorWheelConfigConfigured = false;
 
 // No MOTOR safety input pins or electrical bias have been confirmed on the manufactured board.
 constexpr int8_t kMotorArmPin = -1;
@@ -58,7 +65,7 @@ constexpr int8_t kMotorEStopActiveLevel = -1;
 constexpr int8_t kMotorClearFaultActiveLevel = -1;
 constexpr bool kMotorSafetyInputBiasVerified = false;
 
-// MAIN also stays unable to arm until the physical switch wiring and safe input bias are measured.
+// MAIN has no physical E-stop; keep its safety GPIOs unassigned and competition AUTO fail-closed.
 constexpr int8_t kMainArmPin = -1;
 constexpr int8_t kMainEStopPin = -1;
 constexpr int8_t kMainClearFaultPin = -1;
@@ -108,9 +115,18 @@ constexpr const int16_t (&kLineSensorAngleCdeg)[24] = kLineAngleTable.v;
 constexpr bool kLineAnglesConfigured = false; // 前方オフセット実測後に kLineFrontOffsetConfigured と同時に true にする。
 constexpr uint32_t kLineSensorAngleValidMask = kLineSensorEnabledMask;
 static_assert(!kLineAnglesConfigured || kLineFrontOffsetConfigured, "LINE angles need a measured front offset");
-constexpr bool kMotorHardwareConfigured = false;
+constexpr bool kMotorHardwareConfigured = true; // Uses the user's four-wheel tested TB67H450 pin map.
 constexpr bool kCompetitionArmed = false;
 constexpr uint32_t kMotorPwmFrequencyHz = kTb67h450PwmFrequencyHz;
+// Compile-time setup gates; runtime sensor freshness and the physical ARM/E-stop path are still required.
+constexpr bool kAutoWheelLiftReady = kCompetitionArmed && kMotorWheelConfigConfigured &&
+                                     kMainSafetyInputBiasVerified && kMotorSafetyInputBiasVerified &&
+                                     kLinePolarityConfigured;
+constexpr bool kAutoFloorReady = kAutoWheelLiftReady &&
+                                 kLineSensorEnabledMask == 0x00FFFFFFu && kLineFrontOffsetConfigured &&
+                                 kLineAnglesConfigured && kLineDebounceConfigured &&
+                                 kBnoOffsetsVerified && kAttackHeadingConfigured;
+static_assert(!kAutoFloorReady || kAutoWheelLiftReady, "floor AUTO needs wheel-lift AUTO prerequisites");
 constexpr bool kKickerHardwareConfigured = false;
 constexpr bool kKickerRequestPolicyConfigured = false;
 constexpr bool kKickerHeadingWindowConfigured = false;

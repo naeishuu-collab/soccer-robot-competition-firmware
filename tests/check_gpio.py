@@ -51,9 +51,10 @@ def validate_motor_routing(node):
     if len(pwm_a) != 4 or len(pwm_b) != 4:
         return ["MOTOR: expected four PWMh/PWMl channel pairs"]
     used = set()
+    gpio_count = {"RP2354A": 30, "RP2354B": 48}.get(node.get("chip"), 0)
     for channel, pin in enumerate(pwm_a + pwm_b):
-        if not isinstance(pin, int) or pin < 0 or pin >= 30:
-            errors.append(f"MOTOR: PWM GPIO {pin} is outside RP2354A package range")
+        if not isinstance(pin, int) or pin < 0 or pin >= gpio_count:
+            errors.append(f"MOTOR: PWM GPIO {pin} is outside {node.get('chip', 'unknown')} package range")
         elif pin in reserved:
             errors.append(f"MOTOR: PWM GPIO{pin} conflicts with a reserved RS485 pin")
         if isinstance(pin, int) and pin >= 0:
@@ -100,12 +101,8 @@ def extract_bool_array(path, symbol):
 
 
 def extract_motor_driver_pins(path):
-    source = path.read_text(encoding="utf-8")
-    match = re.search(r"\bkDriver\s*\[4\]\s*=\s*\{(.*?)\};", source, re.S)
-    if not match:
-        raise ValueError(f"Could not find kDriver[4] in {path}")
-    return [(int(a), int(b)) for a, b in re.findall(
-        r"\{\s*(-?\d+)\s*,\s*(-?\d+)(?:\s*,[^}]*)?\s*\}", match.group(1))]
+    config = path.resolve().parents[1] / "common/src/BoardConfig.ino"
+    return list(zip(extract_array(config, "kMotorIn1Pins"), extract_array(config, "kMotorIn2Pins")))
 
 
 def extract_gpio_mask(source, symbol):
@@ -117,7 +114,7 @@ def extract_gpio_mask(source, symbol):
 
 def verify_active_sources():
     ir_copy = ROOT / "ir/ir.ino"
-    config = ROOT / "common/src/BoardConfig.h"
+    config = ROOT / "common/src/BoardConfig.ino"
     expected = CUSTOM["nodes"]
     errors = []
     if extract_array(ir_copy, "sensorPins") != expected["IR"]["SENSORS"]:
@@ -147,6 +144,13 @@ def verify_active_sources():
     motor_channels = MOTOR_REPORTED["channels"]
     expected_driver = [(motor_channels[name]["IN1"], motor_channels[name]["IN2"])
                        for name in MOTOR_REPORTED["channel_order"]]
+    motor_node = expected.get("MOTOR", {})
+    if motor_node.get("chip") != "RP2354A" or motor_node.get("UART_TX") != 0 or \
+       motor_node.get("UART_RX") != 1 or motor_node.get("RS485_DE") != 2 or \
+       list(zip(motor_node.get("PWM_A", []), motor_node.get("PWM_B", []))) != expected_driver:
+        errors.append("MOTOR parent-board routing must match the RP2354A design and user-tested channel map")
+    if validate_motor_routing(motor_node):
+        errors.append("MOTOR parent-board GPIO map is invalid for its RP2354A package")
     if extract_motor_driver_pins(ROOT / "motor/motor.ino") != expected_driver:
         errors.append("MOTOR driver table differs from the user-reported current-revision mapping")
     if "board::kLineSensorPins[i]" not in line_source or "board::kLineSensorEnabledMask" not in line_source:
@@ -155,34 +159,33 @@ def verify_active_sources():
         errors.append("MAIN must validate LINE packets with the same failed-sensor mask")
     if "kBnoOffsetsVerified = false" not in source or not re.search(r"if\s*\(\s*board::kBnoOffsetsVerified\s*\)\s*devices->sensor->setSensorOffsets\(offsets\);", main_source):
         errors.append("unverified BNO055 offsets must remain disabled until calibrated")
-    for header in ("RobotControl.h", "Rs485.h"):
-        local_header = ROOT / "motor" / header
-        common_header = ROOT / "common/src" / header
-        if local_header.read_bytes() != common_header.read_bytes():
-            errors.append(f"MOTOR sketch-local {header} differs from the tested common header")
     constants = {
         "kMainRs485TxPin": expected["MAIN"]["UART_TX"], "kMainRs485RxPin": expected["MAIN"]["UART_RX"],
         "kMainRs485DePin": expected["MAIN"]["RS485_DE"], "kIrRs485TxPin": expected["IR"]["UART_TX"],
         "kIrRs485RxPin": expected["IR"]["UART_RX"], "kIrRs485DePin": expected["IR"]["RS485_DE"],
         "kLineRs485TxPin": expected["LINE"]["UART_TX"], "kLineRs485RxPin": expected["LINE"]["UART_RX"],
-        "kLineRs485DePin": expected["LINE"]["RS485_DE"], "kMotorRs485TxPin": -1,
-        "kMotorRs485RxPin": -1, "kMotorRs485DePin": -1, "kMotorRs485SharedDePin": -1,
+        "kLineRs485DePin": expected["LINE"]["RS485_DE"], "kMotorRs485TxPin": 0,
+        "kMotorRs485RxPin": 1, "kMotorRs485DePin": 2, "kMotorRs485SharedDePin": -1,
         "kBnoSdaPin": expected["MAIN"]["BNO_SDA"], "kBnoSclPin": expected["MAIN"]["BNO_SCL"],
     }
     for name, value in constants.items():
         match = re.search(rf"constexpr\s+int8_t\s+{name}\s*=\s*(-?\d+)", source)
         if not match or int(match.group(1)) != value:
             errors.append(f"{name} differs from the verified profile or must remain UNKNOWN")
-    for name, value in (("kMotorTestIn1CandidatePin", 13), ("kMotorTestIn2CandidatePin", 12)):
+    for name, value in (("kMotorTestIn1CandidatePin", 12), ("kMotorTestIn2CandidatePin", 13)):
         match = re.search(rf"constexpr\s+int8_t\s+{name}\s*=\s*(-?\d+)", source)
         if not match or int(match.group(1)) != value:
             errors.append(f"{name} must preserve the user-reported test candidate only")
-    for setting in ("kLinePolarityConfigured", "kLineFrontOffsetConfigured", "kLineAnglesConfigured", "kMotorHardwareConfigured",
+    for setting in ("kLinePolarityConfigured", "kLineFrontOffsetConfigured", "kLineAnglesConfigured",
                     "kCompetitionArmed", "kKickerHardwareConfigured", "kKickerRequestPolicyConfigured",
                     "kKickerHeadingWindowConfigured", "kDribblerHardwareConfigured",
-                    "kMotorRs485PinsVerified"):
+                    "kMotorWheelConfigConfigured"):
         if not re.search(rf"constexpr\s+bool\s+{setting}\s*=\s*false", source):
             errors.append(f"safety/configuration gate {setting} must remain false until confirmed")
+    if not re.search(r"constexpr\s+bool\s+kAutoWheelLiftReady\s*=\s*kCompetitionArmed\s*&&\s*kMotorWheelConfigConfigured\s*&&\s*kMainSafetyInputBiasVerified\s*&&\s*kMotorSafetyInputBiasVerified\s*&&\s*kLinePolarityConfigured", source):
+        errors.append("wheel-lift AUTO must require competition, wheel, safety-bias, and LINE-polarity validation")
+    if not re.search(r"kAutoFloorReady\s*=\s*kAutoWheelLiftReady\s*&&\s*kLineSensorEnabledMask\s*==\s*0x00FFFFFFu\s*&&\s*kLineFrontOffsetConfigured\s*&&\s*kLineAnglesConfigured\s*&&\s*kLineDebounceConfigured\s*&&\s*kBnoOffsetsVerified\s*&&\s*kAttackHeadingConfigured", source):
+        errors.append("floor AUTO must require all LINE sensors, measured angles/filtering, and verified BNO heading")
     for name in ("kMotorArmPin", "kMotorEStopPin", "kMotorClearFaultPin",
                  "kMainArmPin", "kMainEStopPin", "kMainClearFaultPin"):
         if not re.search(rf"constexpr\s+int8_t\s+{name}\s*=\s*-1", source):
@@ -193,8 +196,8 @@ def verify_active_sources():
         errors.append("LINE debounce stays disabled until the physical edge timing is measured")
     if "lineDebouncer.update(enabledState, board::kLineDebounceSamples)" not in line_source:
         errors.append("LINE scan must pass through the configurable debounce layer")
-    if not re.search(r"constexpr\s+uint8_t\s+kMotorGpioCount\s*=\s*0", source):
-        errors.append("MOTOR package count must stay unknown until the complete package/route map is verified")
+    if not re.search(r"constexpr\s+uint8_t\s+kMotorGpioCount\s*=\s*30", source):
+        errors.append("MOTOR firmware GPIO count must match the RP2354A parent-board design")
     if "constexpr bool kMotorSafetyInputBiasVerified = false" not in source or \
        "constexpr bool kMainSafetyInputBiasVerified = false" not in source:
         errors.append("safety inputs require verified fail-safe electrical bias")
@@ -202,29 +205,34 @@ def verify_active_sources():
        "kickerController.update(kickerInput, nowMs)" not in main_source:
         errors.append("MAIN must route its gated kick policy through the safe KickerController")
     try:
-        if "MOTOR" in expected:
-            errors.append("LEGACY_REFERENCE MOTOR data must not appear in active nodes")
         if not valid_motor_legacy_reference(LEGACY_MOTOR):
-            errors.append("MOTOR old design must be explicitly classified LEGACY_REFERENCE")
+            errors.append("older MOTOR driver design must remain explicitly classified LEGACY_REFERENCE")
         if validate_motor_routing(LEGACY_MOTOR["old_reference_only"]):
             errors.append("LEGACY_REFERENCE motor route fixture is internally inconsistent")
         expected_pwm_mask = sum(1 << pin for pair in expected_driver for pin in pair)
         if extract_gpio_mask(source, "kMotorPwmPinMask") != expected_pwm_mask:
             errors.append("MOTOR PWM whitelist differs from the user-reported current-revision mapping")
-        if extract_gpio_mask(source, "kMotorReservedPinMask") != 0:
-            errors.append("MOTOR reserved pins must not be inferred from legacy design data")
-        if not re.search(r"constexpr\s+uint64_t\s+kMotorSafetyReservedPinMask\s*=\s*kMotorPwmPinMask", source):
+        if extract_gpio_mask(source, "kMotorReservedPinMask") != 0x7:
+            errors.append("MOTOR RS485 TX/RX/DE pins must be reserved from PWM and safety-input use")
+        if not re.search(r"constexpr\s+uint64_t\s+kMotorSafetyReservedPinMask\s*=\s*kMotorPwmPinMask\s*\|\s*kMotorReservedPinMask", source):
             errors.append("MOTOR safety inputs must not reuse a mapped motor output pin")
-        if not re.search(r"constexpr\s+bool\s+kWheelsConfigured\s*=\s*false", motor_source):
+        if not re.search(r"constexpr\s+bool\s+kMotorWheelConfigConfigured\s*=\s*false", source):
             errors.append("MOTOR wheel geometry and polarity must remain unconfigured")
         if "if (motorRs485PinsReady())" not in motor_source:
-            errors.append("MOTOR UART setup and receive must remain behind the verified-pin gate")
-        if "tb67h450OutputForWheel" not in motor_source or "kTb67h450ReversalDwellMs" not in motor_source:
-            errors.append("MOTOR output must use the TB67H450 adapter and 200 ms reversal dwell")
-        if "gpio_put_masked64" not in motor_source or "selectDriverSioLow(channel)" not in motor_source:
-            errors.append("MOTOR brake transitions must preload both SIO outputs low and switch them together")
-        if "commandPriority.accept(next, enable)" not in motor_source:
-            errors.append("MOTOR must retain STOP priority until its output tick")
+            errors.append("MOTOR UART setup and receive must use its configured candidate pins")
+        if "void motorOutput" not in motor_source or "kTb67h450ReversalDwellMs" not in motor_source or \
+           "digitalWrite(in1, HIGH)" not in motor_source or "digitalWrite(in2, LOW)" not in motor_source:
+            errors.append("MOTOR output must preserve the tested TB67H450 direction map and 200 ms reversal dwell")
+        if "MotorCommandFrameParser" not in motor_source or "kCommandTimeoutMs = 300" not in motor_source or \
+           "kRampStep = 5" not in motor_source or "kRampIntervalMs = 10" not in motor_source:
+            errors.append("MOTOR must validate the 12-byte command and retain 300 ms timeout / 5-per-10-ms ramp")
+        if "if (!commandPriority.accept(nextEnabled))" not in motor_source or \
+           "commandPriority.stopPending()" not in motor_source:
+            errors.append("MOTOR must preserve a stop command through the next output tick")
+        if "parseMotorConsoleCommand" not in (ROOT / "common/src/RobotProtocol.ino").read_text(encoding="utf-8") or \
+           "parseMainConsoleCommand" not in (ROOT / "common/src/RobotProtocol.ino").read_text(encoding="utf-8") or \
+           "kMotorConsoleTimeoutMs = 300" not in main_source:
+            errors.append("MAIN must accept validated direct/AUTO commands and keep the 300 ms manual timeout")
     except ValueError as error:
         errors.append(str(error))
     sketches = (ROOT / "main/main.ino", ROOT / "ir/ir.ino", ROOT / "line/line.ino", ROOT / "motor/motor.ino")
@@ -234,6 +242,26 @@ def verify_active_sources():
 
 
 class GpioCheckerTests(unittest.TestCase):
+    def test_common_modules_are_inlined_in_every_board_sketch(self):
+        self.assertEqual(list(ROOT.rglob("*.h")), [])
+        module_order = ("RobotProtocol", "RobotControl", "BoardConfig", "RobotDevices", "Rs485")
+        modules = []
+        for name in module_order:
+            module = (ROOT / "common/src" / f"{name}.ino").read_text(encoding="utf-8")
+            module = re.sub(r"(?m)^#pragma once\r?\n", "", module)
+            module = re.sub(r'(?m)^#include\s+"(?:RobotControl|RobotProtocol)\.ino"\r?\n', "", module)
+            modules.append(module.strip())
+        expected = "\n\n".join(modules)
+        for board in ("main", "ir", "line", "motor"):
+            source = (ROOT / board / f"{board}.ino").read_text(encoding="utf-8")
+            match = re.search(
+                r"// BEGIN INTEGRATED COMMON CODE\r?\n(.*?)\r?\n// END INTEGRATED COMMON CODE",
+                source,
+                re.S,
+            )
+            self.assertIsNotNone(match, f"{board} common code block is missing")
+            self.assertEqual(match.group(1).strip(), expected, f"{board} common code differs")
+
     def test_custom_rp2354_package_ranges_have_no_collisions(self):
         self.assertEqual(validate_profile(CUSTOM), [])
 
@@ -252,30 +280,33 @@ class GpioCheckerTests(unittest.TestCase):
         self.assertTrue(any("collision" in error for error in errors))
         self.assertTrue(any("outside RP2354A package range" in error for error in errors))
 
-    def test_motor_legacy_reference_is_not_active_routing(self):
-        self.assertNotIn("MOTOR", CUSTOM["nodes"])
+    def test_motor_parent_route_matches_report_and_legacy_driver_stays_separate(self):
+        self.assertIn("MOTOR", CUSTOM["nodes"])
+        self.assertEqual(CUSTOM["nodes"]["MOTOR"]["chip"], "RP2354A")
+        self.assertEqual(validate_motor_routing(CUSTOM["nodes"]["MOTOR"]), [])
         self.assertTrue(valid_motor_legacy_reference(LEGACY_MOTOR))
         self.assertEqual(validate_motor_routing(LEGACY_MOTOR["old_reference_only"]), [])
-        self.assertEqual(extract_motor_driver_pins(ROOT / "motor/motor.ino"), [(13, 12), (11, 10), (9, 8), (7, 6)])
+        self.assertEqual(extract_motor_driver_pins(ROOT / "motor/motor.ino"), [(6, 7), (12, 13), (11, 10), (8, 9)])
 
-    def test_reported_motor_map_is_unique_and_still_gated(self):
+    def test_reported_motor_map_is_unique_and_direct_control_is_enabled(self):
         pins = [pin for pair in extract_motor_driver_pins(ROOT / "motor/motor.ino") for pin in pair]
         self.assertEqual(len(pins), 8)
         self.assertEqual(len(set(pins)), 8)
-        config = (ROOT / "common/src/BoardConfig.h").read_text(encoding="utf-8")
+        config = (ROOT / "common/src/BoardConfig.ino").read_text(encoding="utf-8")
         motor = (ROOT / "motor/motor.ino").read_text(encoding="utf-8")
-        self.assertIn("kMotorHardwareConfigured = false", config)
-        self.assertIn("kWheelsConfigured = false", motor)
+        self.assertIn("kMotorHardwareConfigured = true", config)
+        self.assertIn("kMotorWheelConfigConfigured = false", config)
+        self.assertIn("parseMainConsoleCommand", (ROOT / "main/main.ino").read_text(encoding="utf-8"))
 
     def test_line_fault_mask_matches_reported_indices(self):
-        enabled = extract_bool_array(ROOT / "common/src/BoardConfig.h", "kLineSensorEnabled")
+        enabled = extract_bool_array(ROOT / "common/src/BoardConfig.ino", "kLineSensorEnabled")
         self.assertEqual(len(enabled), 24)
         self.assertEqual([i for i, value in enumerate(enabled) if not value], LINE_FAULTS["failed_indices"])
 
     def test_candidate_line_angles_match_code_and_remain_disabled(self):
         expected = [11, 21, 41, 51, 71, 81, 101, 111, 131, 141, 161, 171,
                     191, 201, 221, 231, 251, 261, 281, 291, 311, 321, 341, 351]
-        config = ROOT / "common/src/BoardConfig.h"
+        config = ROOT / "common/src/BoardConfig.ino"
         self.assertEqual(extract_array(config, "kLineBoardAngleCdeg"), [angle * 100 for angle in expected])
         source = config.read_text(encoding="utf-8")
         self.assertIn("kLineFrontOffsetConfigured = false", source)
@@ -289,7 +320,7 @@ class GpioCheckerTests(unittest.TestCase):
         self.assertIn("if (!Serial) return;", debug)
 
     def test_motor_gpio25_and_rs485_pins_are_rejected_for_pwm(self):
-        node = {"UART_TX": 0, "UART_RX": 1, "RS485_DE": 2, "DE_SHARED_INPUT_GPIO": "25",
+        node = {"chip": "RP2354B", "UART_TX": 0, "UART_RX": 1, "RS485_DE": 2, "DE_SHARED_INPUT_GPIO": "25",
                 "PWM_A": [25, 13, 11, 9], "PWM_B": [6, 12, 10, 8]}
         errors = validate_motor_routing(node)
         self.assertTrue(any("GPIO25 conflicts" in error for error in errors))
@@ -298,7 +329,7 @@ class GpioCheckerTests(unittest.TestCase):
         errors = validate_motor_routing(node)
         self.assertTrue(any("GPIO2 conflicts" in error for error in errors))
 
-    def test_active_source_maps_and_motor_headers_are_consistent(self):
+    def test_active_source_maps_and_motor_config_are_consistent(self):
         self.assertEqual(verify_active_sources(), [])
 
 def main():
@@ -318,8 +349,8 @@ def main():
         raise SystemExit(1)
     print("PASS IR coherence/prediction; 18 LINE sensors enabled and 6 failed sensors excluded")
     print("PASS project IR/LINE pin maps; physical continuity and LINE angles still need measurement")
-    print("PASS user-reported MOTOR PWM map matches firmware; RS485/safety routes are unknown and output stays disabled")
-    print("LEGACY_REFERENCE: old MOTOR design remains separate from the user-reported current-revision map")
+    print("PASS MOTOR pin map and TB67H450 direction logic match the user-tested four-wheel code")
+    print("PASS MAIN direct/AUTO commands; AUTO readiness gates; manual 300 ms timeout")
 
 
 if __name__ == "__main__":

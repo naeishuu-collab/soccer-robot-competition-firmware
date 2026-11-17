@@ -1,11 +1,14 @@
-#include "../common/src/RobotControl.h"
-#include "../common/src/BoardConfig.h"
-#include "../common/src/RobotDevices.h"
-#include "../common/src/Rs485.h"
+#include "../common/src/RobotControl.ino"
+#include "../common/src/BoardConfig.ino"
+#include "../common/src/RobotDevices.ino"
+#include "../common/src/Rs485.ino"
 #include <math.h>
 #include <stdio.h>
 
 using namespace soccer;
+
+static constexpr uint32_t kMotorCommandTimeoutMs = 300;
+static constexpr uint32_t kMotorRampIntervalMs = 10;
 
 static unsigned testCases = 0;
 static unsigned checks = 0;
@@ -88,11 +91,71 @@ public:
     }
 
     bool motorTick(uint32_t nowMs, bool outputGate = true) {
-        const bool fresh = motorSeen_ && !motorCommandExpired(nowMs, lastMotorMs_, 100);
-        const bool ok = safeMotorUpdate(motorMotion_, fresh, outputGate && motorEnabled_,
-                                        wheels_, motorSlew_, wheelOutputs_, 0.1f, nowMs,
-                                        kTb67h450ReversalDwellMs);
-        return ok;
+        const bool fresh = motorSeen_ && !motorCommandExpired(nowMs, lastMotorMs_, kMotorCommandTimeoutMs);
+        if (!fresh || !outputGate || !motorEnabled_) {
+            for (uint8_t i = 0; i < 4; ++i) {
+                wheelOutputs_[i] = 0.0f;
+                motorCurrent_[i] = 0;
+                reversing_[i] = false;
+                reverseUntil_[i] = 0;
+            }
+            return true;
+        }
+        for (uint8_t i = 0; i < 4; ++i) {
+            const int16_t requested = motorValues_[i];
+            if (requested == kMotorBrakeCommand) {
+                wheelOutputs_[i] = 0.0f;
+                motorCurrent_[i] = kMotorBrakeCommand;
+                reversing_[i] = false;
+                lastRampMs_[i] = nowMs;
+                continue;
+            }
+            if (requested == 0) {
+                wheelOutputs_[i] = 0.0f;
+                motorCurrent_[i] = 0;
+                reversing_[i] = false;
+                lastRampMs_[i] = nowMs;
+                continue;
+            }
+            int16_t current = motorCurrent_[i];
+            if (current == kMotorBrakeCommand) {
+                current = 0;
+                motorCurrent_[i] = 0;
+                wheelOutputs_[i] = 0.0f;
+            }
+            if (reversing_[i]) {
+                if (static_cast<int32_t>(nowMs - reverseUntil_[i]) < 0) continue;
+                reversing_[i] = false;
+                current = 0;
+            }
+            if (current != 0 && ((current > 0) != (requested > 0))) {
+                motorCurrent_[i] = 0;
+                wheelOutputs_[i] = 0.0f;
+                reversing_[i] = true;
+                reverseUntil_[i] = nowMs + kTb67h450ReversalDwellMs;
+                continue;
+            }
+            const int16_t magnitude = requested < 0 ? -requested : requested;
+            if (magnitude <= 200) {
+                motorCurrent_[i] = requested;
+            } else if ((current < 0 ? -current : current) < 200) {
+                current = requested > 0 ? 200 : -200;
+                motorCurrent_[i] = current;
+                lastRampMs_[i] = nowMs;
+            } else if (static_cast<uint32_t>(nowMs - lastRampMs_[i]) >= kMotorRampIntervalMs) {
+                lastRampMs_[i] = nowMs;
+                if (current < requested) {
+                    const int16_t next = static_cast<int16_t>(current + 5);
+                    current = next > requested ? requested : next;
+                } else if (current > requested) {
+                    const int16_t next = static_cast<int16_t>(current - 5);
+                    current = next < requested ? requested : next;
+                }
+                motorCurrent_[i] = current;
+            }
+            wheelOutputs_[i] = static_cast<float>(motorCurrent_[i]) / 255.0f;
+        }
+        return true;
     }
 
     const Motion& motorMotion() const { return motorMotion_; }
@@ -117,20 +180,18 @@ private:
         return true;
     }
     void transmitMotor(const Motion& motion, bool enabled, uint32_t nowMs) {
-        const Packet packet = makeMotorPacket(motion, enabled, motorSequenceTx_++);
-        uint8_t wire[kMaxFrame]{};
-        const uint8_t length = encodePacket(packet, wire, sizeof(wire));
+        int16_t values[kMotorCommandWheelCount]{};
+        if (!motorCommandValuesForMotion(motion, enabled, board::kMotorWheelConfig, values)) return;
+        uint8_t wire[kMotorCommandFrameSize]{};
+        const uint8_t length = encodeMotorCommandFrame(values, wire, sizeof(wire));
         if (!length) return;
-        Packet decoded{};
-        bool ready = false;
+        MotorFrameStatus status = kMotorFramePending;
         for (uint8_t i = 0; i < length; ++i)
-            ready = motorParser_.feed(wire[i], nowMs + i, decoded) || ready;
-        if (!ready || !motorSequenceRx_.accept(decoded.sequence)) return;
-        Motion next{};
-        bool enable = false;
-        if (!decodeMotorPacket(decoded, next, enable)) return;
-        motorMotion_ = next;
-        motorEnabled_ = enable;
+            status = motorParser_.feed(wire[i], nowMs, motorValues_);
+        if (status != kMotorFrameReady) return;
+        motorMotion_ = motion;
+        motorEnabled_ = false;
+        for (int16_t value : motorValues_) motorEnabled_ |= value != 0;
         motorSeen_ = true;
         lastMotorMs_ = nowMs;
     }
@@ -139,9 +200,8 @@ private:
     MainInput input_{};
     LegacyIrParser irParser_{};
     PacketParser lineParser_{};
-    PacketParser motorParser_{};
+    MotorCommandFrameParser motorParser_{};
     SequenceTracker lineSequenceRx_{};
-    SequenceTracker motorSequenceRx_{};
     LineObservation line_{};
     bool irSeen_ = false;
     uint32_t lastIrMs_ = 0;
@@ -152,13 +212,13 @@ private:
     bool motorSeen_ = false;
     uint32_t lastMotorMs_ = 0;
     uint8_t lineSequenceTx_ = 0;
-    uint8_t motorSequenceTx_ = 0;
     Motion motorMotion_{};
     bool motorEnabled_ = false;
-    const WheelConfig wheels_[4] = {
-        {1, 1, 135, 1}, {-1, 1, 225, 1}, {-1, -1, 315, 1}, {1, -1, 45, 1}
-    };
-    MotorWheelSlew motorSlew_[4]{};
+    int16_t motorValues_[kMotorCommandWheelCount]{};
+    uint32_t lastRampMs_[4]{};
+    int16_t motorCurrent_[4]{};
+    bool reversing_[4]{};
+    uint32_t reverseUntil_[4]{};
     float wheelOutputs_[4]{};
 };
 
@@ -170,7 +230,7 @@ static void testIrMainMotorFrontAndSideTracking() {
     MainOutput output = front.tick(0);
     CHECK(output.state == kApproachBall && output.motion.y > 0);
     CHECK(front.motorSeen() && front.motorEnabled());
-    CHECK(front.motorTick(0));
+    CHECK(front.motorTick(10));
     bool moving = false;
     for (uint8_t i = 0; i < 4; ++i) moving |= fabsf(front.wheels()[i]) > 0.01f;
     CHECK(moving);
@@ -196,7 +256,7 @@ static void testBallLostWithHeadingMockSearchesSafely() {
     CHECK(output.state == kSearchBall);
     CHECK(fabsf(output.motion.x) == 0.15f);
     CHECK(output.motion.turn == 0); // Heading controller holds the mock attack heading.
-    CHECK(robot.motorTick(0));
+    CHECK(robot.motorTick(10));
 }
 
 static void testLineOverridesBallAndHoldsBeforeRecovery() {
@@ -280,7 +340,8 @@ static void testMainToMotorLossUsesLocalWatchdog() {
     bool moving = false;
     for (uint8_t i = 0; i < 4; ++i) moving |= fabsf(robot.wheels()[i]) > 0.01f;
     CHECK(moving);
-    CHECK(robot.motorTick(100)); // No new MAIN packet: motor-side timeout clears output at the 100 ms deadline.
+    CHECK(robot.motorTick(299)); // The command is still fresh just before the local timeout.
+    CHECK(robot.motorTick(300)); // No new MAIN packet: MOTOR clears output at 300 ms.
     for (uint8_t i = 0; i < 4; ++i) CHECK(robot.wheels()[i] == 0.0f);
 }
 

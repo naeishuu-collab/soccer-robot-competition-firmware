@@ -12,9 +12,8 @@ $builds = @(
     @{Name='MAIN RP2354A'; Variant='RP2350A'; Sketch=(Join-Path $root 'main')},
     @{Name='IR RP2354A'; Variant='RP2350A'; Sketch=(Join-Path $root 'ir')},
     @{Name='LINE RP2354B'; Variant='RP2350B'; Sketch=(Join-Path $root 'line')},
-    @{Name='MOTOR RP2354B'; Variant='RP2350B'; Sketch=(Join-Path $root 'motor')}
+    @{Name='MOTOR RP2354A'; Variant='RP2350A'; Sketch=(Join-Path $root 'motor')}
 )
-$library = Join-Path $root 'common'
 $log = [System.Collections.Generic.List[string]]::new()
 $log.Add("Build timestamp: $([DateTime]::UtcNow.ToString('yyyy-MM-dd HH:mm:ss UTC'))")
 $log.Add("Arduino CLI: $(& $cliPath version)")
@@ -26,7 +25,7 @@ foreach ($build in $builds) {
     $fqbn = "rp2040:rp2040:generic_rp2350:variantchip=$($build.Variant),flash=2097152_0"
     $log.Add("=== $($build.Name) [$fqbn] ===")
     Write-Host "Building $($build.Name)"
-    $output = & $cliPath compile --fqbn $fqbn --library $library --warnings all $build.Sketch 2>&1
+    $output = & $cliPath compile --fqbn $fqbn --warnings all $build.Sketch 2>&1
     $exitCode = $LASTEXITCODE
     foreach ($line in $output) { $log.Add([string]$line) }
     $log.Add("RESULT: $exitCode")

@@ -1,26 +1,29 @@
 # テスト・ビルド結果
 
-最終確認日: 2026-11-16（JST）
+最終確認日: 2026-11-17（JST）
 
-## 2026-11-16 ソフトウェア完了確認（最新）
+## 2026-11-17 IR安全修正とArduino `.ino` 化後の確認（最新）
 
 | 検証 | 結果 | 範囲 |
 |---|---|---|
-| GPIO checker自己試験 | PASS 11/11 | 現行作業フォルダーと、旧スケッチの兄弟フォルダーを含めない隔離コピーで実行 |
-| GPIO/ソース検査 | PASS | 両方の場所で現行GPIO表、LINE故障マスク、LINE角度候補の無効ゲート、IR予測・ログ制限、MOTOR出力無効を確認 |
-| C++ `test_core.cpp` | COMPILE ONLY PASS | MSVC C++17、UTF-8ソース指定でオブジェクト生成。リンク・起動・アサーション実行なし |
-| C++ `test_integration.cpp` | COMPILE ONLY PASS | MSVC C++17、UTF-8ソース指定でオブジェクト生成。リンク・起動・アサーション実行なし |
-| 競技用Arduinoスケッチ | PASS 4/4 | Arduino CLI 1.6.0、Arduino-Pico 6.3.2、Generic RP2350A/B。コンパイルのみ、アップロードなし |
-| C++アサーションと30分シミュレーション | BLOCKED / 未実行 | Windows Application Controlが前回の`test_core.exe`起動を拒否した記録あり。今回は再起動を試していない |
-| 実機検証 | NOT RUN | 書込み・通電・駆動・キッカー充電/発射なし |
+| Python GPIO/ソース検査 | PASS、自己テスト12/12 | LINE 18ch使用/故障6ch除外、GPIO配列、MOTOR出力、コマンド処理、独自ヘッダー不使用を確認 |
+| C++ `test_core.cpp` | COMPILE PASS / RUN BLOCKED | MSVC C++17。Windows Application Controlが実行を拒否。60件/585チェックは`.ino`移行前に通過した結果で、今回の実行値には含めない |
+| C++ `test_integration.cpp` | COMPILE PASS / RUN NOT ATTEMPTED | MSVC C++17。`test_core.exe`がApplication Controlで拒否されたため実行せず |
+| 競技用Arduinoスケッチ | PASS 4/4 | Arduino CLI 1.6.0、Arduino-Pico 6.3.2。MAIN/IR RP2354A、LINE RP2354B、MOTOR RP2354A。共通コードを各スケッチに直接統合し、追加検索パスなしでコンパイル。アップロードなし。各スケッチのローカルbuild成果物も更新 |
+| MAIN→RS485→MOTOR→4輪 | ユーザー報告でPASS | 以前の手動実機確認。今回の作業では通電・書き込み・再試験なし |
+| IR/LINE RS485、IR方位、BNO055、AUTO走行 | 未確認 | センサー実通信、方向符号、車輪合成方向、GPIO4/5 I2C、境界検出、床上走行は未実施 |
 
-ArduinoのFlash/グローバルRAMはMAIN `70,144/10,860 B`、IR `59,988/14,836 B`、LINE `56,508/10,164 B`、MOTOR `54,316/10,184 B`でした。MOTORのRP2350Bはコンパイル用選択で、実装MCUのリビジョン確定を意味しません。
+今回のArduino Flash/グローバルRAMはMAIN `72,968/10,932 B`、IR `60,044/14,840 B`、LINE `56,508/10,164 B`、MOTOR `57,636/10,204 B`でした。MOTORのRP2350AはZIP親基板BOMに合わせたビルド対象ですが、実装MCU刻印は未照合です。
 
-UTF-8を指定しないMSVCコンパイルは、日本語コメントを現行コードページ932として読み取り失敗しました。`/utf-8`を付けたコンパイル専用再確認は両ファイル成功です。C++テスト実行ファイルは今回リンクも起動もしていません。Windowsの実行制御を変更・迂回せず、PowerShellの`.ps1`ビルドランナーも実行していません。ArduinoはPowerShellスクリプトを介さずArduino CLIを直接呼び出しました。
+`AUTO IR`は一時試験専用です。LINE照会なしで、直近の有効なボール検出後に`ARM IR`を明示入力すると5秒以内だけ走り、各輪PWMは16/255以下です。正面0°を含む30°区分で、正面だけ低速前進、他方向はその場旋回します。IR無応答/不正値/不完全フレーム、ボール消失、時間切れ、`S`で停止・解除し、再始動には再ARMが必要です。通常`AUTO`/`AUTO FLOOR`の構成ゲートは引き続き閉じています。
 
-詳細記録: [Arduino 4基板コンパイル](../tests/arduino_compile_software_completion_2026-11-16.txt)、[C++コンパイル専用記録](../tests/host_compile_software_completion_2026-11-16.txt)、[GPIO検査](../tests/gpio_check_software_completion_2026-11-16.txt)。詳細なローカル監査台帳とバックアップ履歴は個人環境の記録を含むため、このリポジトリには含めていません。
+共通5モジュールを4基板それぞれの`.ino`に直接統合しました。`common/src`はホストテスト用の原本として残し、Python検査で4つの統合コピーとの一致を確認します。追加インクルードパスは不要です。MOTOR PWM/方向実装は変更していません。Arduinoコアと外部ライブラリのヘッダーは引き続き使用します。
 
-この節が、以前の2026-11-16同日記録にある自己試験件数・C++実行状況を置き換えます。2026-11-15以下は当時の履歴で、今回の合格件数として再利用しません。
+IR試験は未確認の車輪合成方向を使い、LINE境界検出を行いません。MAIN基板に物理E-stopはありません。ユーザー報告ではMOTOR基板の物理スイッチがモーター電源を切りますが、この作業では遮断を実測していません。車輪を浮かせ、スイッチをすぐ操作できる状態でのみ試してください。MOTORにはMAINへのACKがなく、通信断時の停止はMOTOR側300ms期限に依存します。今回、実機電源投入・モーター起動・ファームウェア書き込みは行っていません。
+
+詳細記録: [Arduino 4基板コンパイル](../tests/arduino_compile_current.txt)、[C++テスト](../tests/results_last_run.txt)、[GPIO検査](../tests/gpio_check_current.txt)。
+
+この節の結果が同日以前の検証記録より新しいものです。2026-11-15以下は履歴で、今回の合格件数として再利用しません。
 
 ## 2026-11-15 実行結果（履歴）
 
@@ -93,8 +96,8 @@ MOTORの2行は旧版KiCad由来で、製造された改善新版のDRC結果で
 
 ## 安全上の実機境界
 
-- ユーザー報告のMOTOR PWM GPIO表は記録したが、UART/DE・安全入力・車輪極性が未確認のためUARTを開始せず、PWM/ARMを無効のままにした。
-- MAINは診断モード、競技ARM=false。
+- MOTORは基準コードのTX/RX/DE候補でUARTを設定したが、実配線・RS485通信は未確認。MOTORの安全GPIOは未設定で、ユーザー報告の物理電源スイッチ遮断も実測していない。
+- MAINに物理E-stopはない。`AUTO`/`AUTO FLOOR`の構成ゲートは閉じたまま。`AUTO IR`のみ明示ARM・5秒・PWM 16上限の車輪浮上試験用で、手動`M`は従来どおり-255..255。
 - キッカーの物理出力アダプターはなく、ハードウェア・要求ポリシー・姿勢窓は未設定。
 - 60ms pulse / 1000ms cooldownはホストモック用で、実機設定値ではない。
 - 実機で確認済みと扱うのはユーザー報告の過去の電源投入とLED点灯だけ。今回再現していない。
