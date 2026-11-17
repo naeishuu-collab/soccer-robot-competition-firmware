@@ -1,14 +1,12 @@
-Host test record updated: 2026-11-17 20:06:32 +09:00
-Repository PowerShell test runner: BLOCKED by unsigned-script policy; no policy change made.
-MSVC C++17 direct compile (/EHsc /utf-8 /std:c++17 /W4).
-Build location: %TEMP%\soccer-competition-tests-auto-start-20261117
+Host test record updated: 2026-11-17 22:23:30 +09:00
+Repository PowerShell runner: BLOCKED by unsigned-script policy; MSVC was invoked directly without changing policy.
+MSVC C++17 (/EHsc /utf-8 /std:c++17 /W4).
 === test_core.cpp ===
-COMPILE: PASS (includes one-shot auto-start assertions)
-RUN: BLOCKED by Windows Application Control policy; no workaround used.
+COMPILE: PASS
+RUN: PASS
+UNIT SUMMARY: 60 cases, 1791 checks, 0 failed
 === test_integration.cpp ===
 COMPILE: PASS
 RUN: PASS
 INTEGRATION SUMMARY: 14 scenarios, 107 checks, 0 failed
-=== tests/check_gpio.py ===
-PASS; self-test 12/12
-No board power, firmware upload, or motor startup.
+No board power, firmware upload, motor startup, or RS485 hardware test.

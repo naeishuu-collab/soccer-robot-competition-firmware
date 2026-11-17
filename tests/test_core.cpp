@@ -318,51 +318,50 @@ static void testMainConsoleAutoModesAndFailClosedGates() {
     CHECK(!board::kLineDebounceConfigured);
 }
 
-static void testIrTestArmTimeoutAndCoarseSteering() {
+static void testIrTestContinuousTrackingAndCoarseSteering() {
     IrTestController controller;
     Motion motion{1.0f, 1.0f, 1.0f};
     IrTestController bootController;
-    CHECK(!bootController.armOnFirstFreshBall(false, true, 0, 0));
-    CHECK(!bootController.armOnFirstFreshBall(true, false, 0, 0));
-    CHECK(bootController.armOnFirstFreshBall(true, true, 0, 100));
-    CHECK(!bootController.armOnFirstFreshBall(true, true, 0, 101));
-    CHECK(!bootController.update(true, true, 0, 5100, motion));
-    CHECK(!bootController.armOnFirstFreshBall(true, true, 0, 5101));
+    CHECK(!bootController.armOnFirstFreshBall(false, true, 0));
+    CHECK(!bootController.armOnFirstFreshBall(true, false, 0));
+    CHECK(bootController.armOnFirstFreshBall(true, true, 0));
+    CHECK(!bootController.armOnFirstFreshBall(true, true, 0));
+    for (uint16_t i = 0; i < 600; ++i) CHECK(bootController.update(true, true, 0, motion));
+    CHECK(bootController.armed());
+    CHECK(!bootController.update(false, true, 0, motion));
+    CHECK(!bootController.armOnFirstFreshBall(true, true, 0));
     IrTestController cancelledBootController;
     cancelledBootController.disableAutoStart();
-    CHECK(!cancelledBootController.armOnFirstFreshBall(true, true, 0, 0));
-    CHECK(cancelledBootController.arm(true, true, 0, 0));
+    CHECK(!cancelledBootController.armOnFirstFreshBall(true, true, 0));
+    CHECK(cancelledBootController.arm(true, true, 0));
 
-    CHECK(!controller.update(true, true, 0, 0, motion));
+    CHECK(!controller.update(true, true, 0, motion));
     CHECK(motion.x == 0 && motion.y == 0 && motion.turn == 0);
-    CHECK(!controller.arm(false, true, 0, 0));
-    CHECK(!controller.arm(true, false, 0, 0));
-    CHECK(!controller.arm(true, true, 360, 0));
-    CHECK(controller.arm(true, true, 359, 0));
-    CHECK(controller.update(true, true, 0, 10, motion));
+    CHECK(!controller.arm(false, true, 0));
+    CHECK(!controller.arm(true, false, 0));
+    CHECK(!controller.arm(true, true, 360));
+    CHECK(controller.arm(true, true, 359));
+    CHECK(controller.update(true, true, 0, motion));
     CHECK(motion.x == 0 && motion.y > 0 && motion.turn == 0);
-    CHECK(controller.update(true, true, 30, 20, motion));
+    CHECK(controller.update(true, true, 30, motion));
     CHECK(motion.x == 0 && motion.y == 0 && motion.turn < 0);
-    CHECK(controller.update(true, true, 330, 30, motion));
+    CHECK(controller.update(true, true, 330, motion));
     CHECK(motion.x == 0 && motion.y == 0 && motion.turn > 0);
-    CHECK(!controller.update(false, true, 30, 40, motion));
+    CHECK(!controller.update(false, true, 30, motion));
     CHECK(!controller.armed() && motion.x == 0 && motion.y == 0 && motion.turn == 0);
-    CHECK(!controller.update(true, true, 30, 41, motion));
+    CHECK(!controller.update(true, true, 30, motion));
 
-    CHECK(controller.arm(true, true, 0, 100));
-    CHECK(!controller.update(true, false, 0, 101, motion));
+    CHECK(controller.arm(true, true, 0));
+    CHECK(!controller.update(true, false, 0, motion));
     CHECK(!controller.armed());
-    CHECK(controller.arm(true, true, 0, 200));
-    CHECK(!controller.update(true, true, 0, 5200, motion));
-    CHECK(!controller.armed());
-
-    CHECK(controller.arm(true, true, 30, 6000));
-    CHECK(!controller.update(true, true, 360, 6001, motion));
+    CHECK(controller.arm(true, true, 0));
+    for (uint16_t i = 0; i < 600; ++i) CHECK(controller.update(true, true, 0, motion));
+    CHECK(controller.armed());
+    CHECK(!controller.update(true, false, 0, motion));
     CHECK(!controller.armed());
 
-    CHECK(controller.arm(true, true, 0, 0xFFFFFF00u));
-    CHECK(controller.update(true, true, 0, 0x00000100u, motion));
-    CHECK(!controller.update(true, true, 0, 0x00001288u, motion));
+    CHECK(controller.arm(true, true, 30));
+    CHECK(!controller.update(true, true, 360, motion));
     CHECK(!controller.armed());
     CHECK(!irTestMotionForBearing(360, motion));
     CHECK(motion.x == 0 && motion.y == 0 && motion.turn == 0);
@@ -371,7 +370,7 @@ static void testIrTestArmTimeoutAndCoarseSteering() {
 static void testAutoMotorPwmCaps() {
     int16_t values[4] = {255, -255, 24, -24};
     capMotorCommandValues(values, kIrTestPwmCap);
-    CHECK(values[0] == 16 && values[1] == -16 && values[2] == 16 && values[3] == -16);
+    CHECK(values[0] == 255 && values[1] == -255 && values[2] == 24 && values[3] == -24);
     values[0] = 255; values[1] = -255; values[2] = 24; values[3] = -24;
     capMotorCommandValues(values, 48);
     CHECK(values[0] == 48 && values[1] == -48 && values[2] == 24 && values[3] == -24);
@@ -1394,7 +1393,7 @@ int main() {
         {"MOTOR ignores valid shared-bus IR and LINE frames", testMotorParserIgnoresSharedBusTraffic},
         {"MOTOR direct console command parsing", testMotorConsoleCommandParsing},
         {"AUTO command modes and fail-closed gates", testMainConsoleAutoModesAndFailClosedGates},
-        {"IR test mode ARM, timeout and coarse steering", testIrTestArmTimeoutAndCoarseSteering},
+        {"IR test mode continuous tracking and coarse steering", testIrTestContinuousTrackingAndCoarseSteering},
         {"AUTO PWM caps", testAutoMotorPwmCaps},
         {"RS485 half-duplex order and failure recovery", testRs485HalfDuplexOrderingAndFailure},
         {"RS485 receive timeout and collision guard", testRs485ReceiveTimeoutAndCollisionGuard},

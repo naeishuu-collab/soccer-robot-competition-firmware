@@ -231,10 +231,9 @@ struct Motion {
     float turn = 0.0f; // Counter-clockwise, normalized -1..1.
 };
 
-constexpr uint8_t kIrTestPwmCap = 16;
-constexpr uint32_t kIrTestArmTimeoutMs = 5000;
+constexpr uint8_t kIrTestPwmCap = 255;
 
-// shortcut: uses provisional wheel geometry at <=16 PWM; replace after a four-wheel direction check.
+// shortcut: wheel geometry is provisional; replace after a four-wheel direction check.
 inline bool irTestMotionForBearing(uint16_t directionDeg, Motion& motion) {
     motion = {};
     if (directionDeg >= 360) return false;
@@ -246,30 +245,27 @@ inline bool irTestMotionForBearing(uint16_t directionDeg, Motion& motion) {
 
 class IrTestController {
 public:
-    bool arm(bool irFresh, bool ballFound, uint16_t directionDeg, uint32_t nowMs) {
+    bool arm(bool irFresh, bool ballFound, uint16_t directionDeg) {
         if (!irFresh || !ballFound || directionDeg >= 360) {
             disarm();
             return false;
         }
         armed_ = true;
-        startedMs_ = nowMs;
         return true;
     }
 
-    bool armOnFirstFreshBall(bool irFresh, bool ballFound, uint16_t directionDeg, uint32_t nowMs) {
+    bool armOnFirstFreshBall(bool irFresh, bool ballFound, uint16_t directionDeg) {
         if (!autoStartPending_ || !irFresh || !ballFound) return false;
         autoStartPending_ = false;
-        return arm(irFresh, ballFound, directionDeg, nowMs);
+        return arm(irFresh, ballFound, directionDeg);
     }
 
     void disableAutoStart() { autoStartPending_ = false; }
 
-    bool update(bool irFresh, bool ballFound, uint16_t directionDeg, uint32_t nowMs,
-                Motion& motion) {
+    bool update(bool irFresh, bool ballFound, uint16_t directionDeg, Motion& motion) {
         motion = {};
         if (!armed_) return false;
-        if (static_cast<uint32_t>(nowMs - startedMs_) >= kIrTestArmTimeoutMs ||
-            !irFresh || !ballFound || !irTestMotionForBearing(directionDeg, motion)) {
+        if (!irFresh || !ballFound || !irTestMotionForBearing(directionDeg, motion)) {
             disarm();
             motion = {};
             return false;
@@ -277,13 +273,12 @@ public:
         return true;
     }
 
-    void disarm() { armed_ = false; startedMs_ = 0; }
+    void disarm() { armed_ = false; }
     bool armed() const { return armed_; }
 
 private:
     bool autoStartPending_ = true;
     bool armed_ = false;
-    uint32_t startedMs_ = 0;
 };
 
 enum AutoMode : uint8_t { kAutoStopped, kAutoWheelLift, kAutoFloor, kAutoIrTest };
