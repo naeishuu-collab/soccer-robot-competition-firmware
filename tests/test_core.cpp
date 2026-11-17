@@ -321,6 +321,18 @@ static void testMainConsoleAutoModesAndFailClosedGates() {
 static void testIrTestArmTimeoutAndCoarseSteering() {
     IrTestController controller;
     Motion motion{1.0f, 1.0f, 1.0f};
+    IrTestController bootController;
+    CHECK(!bootController.armOnFirstFreshBall(false, true, 0, 0));
+    CHECK(!bootController.armOnFirstFreshBall(true, false, 0, 0));
+    CHECK(bootController.armOnFirstFreshBall(true, true, 0, 100));
+    CHECK(!bootController.armOnFirstFreshBall(true, true, 0, 101));
+    CHECK(!bootController.update(true, true, 0, 5100, motion));
+    CHECK(!bootController.armOnFirstFreshBall(true, true, 0, 5101));
+    IrTestController cancelledBootController;
+    cancelledBootController.disableAutoStart();
+    CHECK(!cancelledBootController.armOnFirstFreshBall(true, true, 0, 0));
+    CHECK(cancelledBootController.arm(true, true, 0, 0));
+
     CHECK(!controller.update(true, true, 0, 0, motion));
     CHECK(motion.x == 0 && motion.y == 0 && motion.turn == 0);
     CHECK(!controller.arm(false, true, 0, 0));

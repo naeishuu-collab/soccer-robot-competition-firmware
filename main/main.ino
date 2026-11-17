@@ -813,6 +813,14 @@ public:
         return true;
     }
 
+    bool armOnFirstFreshBall(bool irFresh, bool ballFound, uint16_t directionDeg, uint32_t nowMs) {
+        if (!autoStartPending_ || !irFresh || !ballFound) return false;
+        autoStartPending_ = false;
+        return arm(irFresh, ballFound, directionDeg, nowMs);
+    }
+
+    void disableAutoStart() { autoStartPending_ = false; }
+
     bool update(bool irFresh, bool ballFound, uint16_t directionDeg, uint32_t nowMs,
                 Motion& motion) {
         motion = {};
@@ -830,6 +838,7 @@ public:
     bool armed() const { return armed_; }
 
 private:
+    bool autoStartPending_ = true;
     bool armed_ = false;
     uint32_t startedMs_ = 0;
 };
@@ -2052,7 +2061,7 @@ Rs485MasterArbiter busArbiter;
 enum BusPhase : uint8_t { kBusIdle, kBusNeedLine };
 BusPhase busPhase = kBusIdle;
 MainController controller;
-AutoMode autoMode = kAutoStopped;
+AutoMode autoMode = kAutoIrTest;
 IrTestController irTestController;
 KickerController kickerController;
 ManualArmLatch operatorArm;
@@ -2464,6 +2473,7 @@ void pollMotorConsole(uint32_t nowMs) {
         const MainConsoleCommand command = motorConsoleOverflow
                                                ? kConsoleInvalid
                                                : parseMainConsoleCommand(motorConsoleLine, parsed);
+        irTestController.disableAutoStart();
         if (command == kConsoleAutoWheelLift || command == kConsoleAutoFloor ||
             command == kConsoleAutoIrTest) {
             autoMode = autoModeForCommand(command, board::kAutoWheelLiftReady, board::kAutoFloorReady);
@@ -2563,13 +2573,13 @@ void printLineLevels() {
 void setup() {
     Serial.begin(115200);
     if (Serial && Serial.availableForWrite() >= 48)
-        Serial.println("BOOT MAIN; AUTO=OFF; diagnostics active");
+        Serial.println("BOOT MAIN; AUTO IR wait; diagnostics active");
     if (Serial && Serial.availableForWrite() >= 64)
         Serial.println("USB: AUTO [FLOAT] / AUTO FLOOR / AUTO IR; ARM IR; S=stop; M <v0> <v1> <v2> <v3>");
     if (Serial && Serial.availableForWrite() >= 64)
         Serial.println("MOTOR M range -255..255, 256=brake; M command timeout 300ms");
     if (Serial && Serial.availableForWrite() >= 72)
-        Serial.println("IR TEST: no LINE protection; 5s ARM, PWM cap 16; keep wheels raised");
+        Serial.println("IR TEST: no LINE guard; auto-arm once; 5s, PWM 16; wheels up");
 
     pinMode(board::kMainRs485DePin, OUTPUT);
     digitalWrite(board::kMainRs485DePin, LOW);
@@ -2656,6 +2666,7 @@ void loop() {
     motorEnabled = autoConfigured && input.armed && output.state != kFault;
     if (autoMode == kAutoIrTest) {
         // Bench-only exception: no LINE guard or MAIN E-stop; keep the MOTOR power cutoff reachable.
+        irTestController.armOnFirstFreshBall(input.irFresh, input.ballFound, irDirection, nowMs);
         const bool wasArmed = irTestController.armed();
         motorEnabled = irTestController.update(input.irFresh, input.ballFound, irDirection, nowMs,
                                               motorMotion);

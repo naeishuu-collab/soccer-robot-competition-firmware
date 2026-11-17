@@ -813,6 +813,14 @@ public:
         return true;
     }
 
+    bool armOnFirstFreshBall(bool irFresh, bool ballFound, uint16_t directionDeg, uint32_t nowMs) {
+        if (!autoStartPending_ || !irFresh || !ballFound) return false;
+        autoStartPending_ = false;
+        return arm(irFresh, ballFound, directionDeg, nowMs);
+    }
+
+    void disableAutoStart() { autoStartPending_ = false; }
+
     bool update(bool irFresh, bool ballFound, uint16_t directionDeg, uint32_t nowMs,
                 Motion& motion) {
         motion = {};
@@ -830,6 +838,7 @@ public:
     bool armed() const { return armed_; }
 
 private:
+    bool autoStartPending_ = true;
     bool armed_ = false;
     uint32_t startedMs_ = 0;
 };

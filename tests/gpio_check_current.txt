@@ -1,4 +1,4 @@
-Final GPIO/source checks: 2026-11-17 19:36:23 +09:00
+Final GPIO/source checks: 2026-11-17 20:06:01 +09:00
 === python tests/check_gpio.py ===
 PASS IR coherence/prediction; 18 LINE sensors enabled and 6 failed sensors excluded
 PASS project IR/LINE pin maps; physical continuity and LINE angles still need measurement
@@ -8,7 +8,7 @@ RESULT: 0
 === python tests/check_gpio.py --self-test ===
 ............
 ----------------------------------------------------------------------
-Ran 12 tests in 0.044s
+Ran 12 tests in 0.045s
 
 OK
 RESULT: 0
