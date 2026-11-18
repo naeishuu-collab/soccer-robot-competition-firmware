@@ -98,6 +98,8 @@ OWN_GOAL = "BLUE"
 # 見た場合は誤るため、必要なら AUTO_TARGET_COLOR=False にして定数で固定する。
 AUTO_TARGET_COLOR = True
 TARGET_LOCK_FRAMES = 5
+# セット時の正面(0°)に最も近いゴールを相手ゴールとする。それより後ろのゴールは候補にしない。
+TARGET_LOCK_MAX_ANGLE_DEG = 90.0
 target_locked = not AUTO_TARGET_COLOR
 target_candidate = None
 target_candidate_count = 0
@@ -187,19 +189,31 @@ def estimate_virtual_line(wx, wy, wsize):
     return line_detected, penalty_detected, angle, dist_line
 
 
-def lock_target_from_goals(ysize, bsize):
-    """最初に安定して見えたゴールの色を攻撃対象としてロックする。"""
+def lock_target_from_goals(ysize, bsize, yx=255, yy=255, bx=255, by=255):
+    """起動時に正面(0°)へ最も近いゴールの色を相手ゴールとしてロックする。
+
+    カメラが広範囲に見えて両方のゴールが同時に映っても、方位误差が小さい
+    （＝セッティングで正面に向かっている）ほうを選ぶ。
+    """
     global TARGET_GOAL, OWN_GOAL, target_locked, target_candidate, target_candidate_count
     if target_locked or not AUTO_TARGET_COLOR:
         return
-    if ysize >= GOAL_NEAR_PIX and bsize < GOAL_NEAR_PIX:
-        color = "YELLOW"
-    elif bsize >= GOAL_NEAR_PIX and ysize < GOAL_NEAR_PIX:
-        color = "BLUE"
-    else:
+    candidates = []
+    for size, nx, ny, color in ((ysize, yx, yy, "YELLOW"), (bsize, bx, by, "BLUE")):
+        if size < GOAL_NEAR_PIX:
+            continue
+        angle = angle_from_normalized(nx, ny)
+        if angle is None:
+            continue
+        err = abs(angle_error(angle, 0.0))
+        if err <= TARGET_LOCK_MAX_ANGLE_DEG:
+            candidates.append((err, color))
+    if not candidates:
         target_candidate = None
         target_candidate_count = 0
         return
+    candidates.sort()
+    color = candidates[0][1]
     if color == target_candidate:
         target_candidate_count += 1
     else:
@@ -377,7 +391,7 @@ def main_loop():
         wx, wy = norm_coord(wcx, wcy, img)
         ball_x, ball_y = norm_coord(ball_cx, ball_cy, img)
         obs_x, obs_y = norm_coord(obs_cx, obs_cy, img)
-        lock_target_from_goals(ysize, bsize)
+        lock_target_from_goals(ysize, bsize, yx, yy, bx, by)
         now = pyb.millis()
         vx, vy, turn, want_kick, mode, name, flags = decide_navigation(
             yx, yy, bx, by, wx, wy, wsize, (ysize, bsize),

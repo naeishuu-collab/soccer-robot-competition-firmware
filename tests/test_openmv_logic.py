@@ -179,17 +179,43 @@ class OpenMvNavigationTests(unittest.TestCase):
         self.assertTrue(any("BALL: SEEN" in line for line in lines))
 
 
-    def test_auto_target_locks_first_stable_goal(self):
+    def test_auto_target_locks_front_goal(self):
         nav.AUTO_TARGET_COLOR = True
         nav.target_locked = False
         nav.target_candidate = None
         nav.target_candidate_count = 0
         try:
             for _ in range(nav.TARGET_LOCK_FRAMES):
-                nav.lock_target_from_goals(500, 0)
+                nav.lock_target_from_goals(500, 0, 128, 30, 255, 255)
             self.assertEqual(nav.TARGET_GOAL, "YELLOW")
             self.assertEqual(nav.OWN_GOAL, "BLUE")
             self.assertTrue(nav.target_locked)
+        finally:
+            nav.target_locked = False
+
+    def test_auto_target_prefers_goal_nearest_front_even_if_both_visible(self):
+        nav.AUTO_TARGET_COLOR = True
+        nav.target_locked = False
+        nav.target_candidate = None
+        nav.target_candidate_count = 0
+        try:
+            # 黄は後方(180°)、青は正面(0°)→ 青を相手ゴールにする
+            for _ in range(nav.TARGET_LOCK_FRAMES):
+                nav.lock_target_from_goals(800, 500, 128, 254, 128, 30)
+            self.assertEqual(nav.TARGET_GOAL, "BLUE")
+            self.assertEqual(nav.OWN_GOAL, "YELLOW")
+        finally:
+            nav.target_locked = False
+
+    def test_auto_target_ignores_goal_behind(self):
+        nav.AUTO_TARGET_COLOR = True
+        nav.target_locked = False
+        nav.target_candidate = None
+        nav.target_candidate_count = 0
+        try:
+            for _ in range(nav.TARGET_LOCK_FRAMES + 2):
+                nav.lock_target_from_goals(500, 0, 128, 254, 255, 255)
+            self.assertFalse(nav.target_locked)
         finally:
             nav.target_locked = False
 
