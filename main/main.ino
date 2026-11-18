@@ -1582,8 +1582,9 @@ constexpr int8_t kMotorRs485TxPin = 0;
 constexpr int8_t kMotorRs485RxPin = 1;
 constexpr int8_t kMotorRs485DePin = 2;
 constexpr int8_t kMotorRs485SharedDePin = -1;
-constexpr int8_t kMotorIn1Pins[4] = {6, 12, 11, 8};
-constexpr int8_t kMotorIn2Pins[4] = {7, 13, 10, 9};
+// Matches the user-reported working MOTOR test code (RP2354B + TB67H450 x4).
+constexpr int8_t kMotorIn1Pins[4] = {6, 12, 11, 9};
+constexpr int8_t kMotorIn2Pins[4] = {7, 13, 10, 8};
 // The user-reported J2 left-front pins are retained for test provenance.
 constexpr int8_t kMotorTestIn1CandidatePin = 12;
 constexpr int8_t kMotorTestIn2CandidatePin = 13;
@@ -2127,10 +2128,10 @@ uint32_t maxControlUs = 0;
 uint16_t controlOverruns = 0;
 uint8_t diagnosticPhase = 0;
 
-// OpenMV navigation link: UART2 at 9600 baud (assumed wiring TX=GP16, RX=GP17).
+// OpenMV navigation link: UART2 at 9600 baud (TX=GP2, RX=GP3).
 // 0x20 [vx][vy][turn][kick][mode][xor] - signed /100 maps to Motion -1..1.
-constexpr int8_t kOpenMvTxPin = 16;
-constexpr int8_t kOpenMvRxPin = 17;
+constexpr int8_t kOpenMvTxPin = 2;
+constexpr int8_t kOpenMvRxPin = 3;
 constexpr uint32_t kOpenMvBaud = 9600;
 constexpr uint8_t kOpenMvNavHeader = 0x20;
 constexpr uint8_t kOpenMvNavFrameSize = 8;

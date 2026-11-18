@@ -1582,8 +1582,9 @@ constexpr int8_t kMotorRs485TxPin = 0;
 constexpr int8_t kMotorRs485RxPin = 1;
 constexpr int8_t kMotorRs485DePin = 2;
 constexpr int8_t kMotorRs485SharedDePin = -1;
-constexpr int8_t kMotorIn1Pins[4] = {6, 12, 11, 8};
-constexpr int8_t kMotorIn2Pins[4] = {7, 13, 10, 9};
+// Matches the user-reported working MOTOR test code (RP2354B + TB67H450 x4).
+constexpr int8_t kMotorIn1Pins[4] = {6, 12, 11, 9};
+constexpr int8_t kMotorIn2Pins[4] = {7, 13, 10, 8};
 // The user-reported J2 left-front pins are retained for test provenance.
 constexpr int8_t kMotorTestIn1CandidatePin = 12;
 constexpr int8_t kMotorTestIn2CandidatePin = 13;

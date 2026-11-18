@@ -1206,7 +1206,7 @@ static void testMotorRouteAndPackageValidation() {
     CHECK(board::kMotorIn1Pins[0] == 6 && board::kMotorIn2Pins[0] == 7);
     CHECK(board::kMotorIn1Pins[1] == 12 && board::kMotorIn2Pins[1] == 13);
     CHECK(board::kMotorIn1Pins[2] == 11 && board::kMotorIn2Pins[2] == 10);
-    CHECK(board::kMotorIn1Pins[3] == 8 && board::kMotorIn2Pins[3] == 9);
+    CHECK(board::kMotorIn1Pins[3] == 9 && board::kMotorIn2Pins[3] == 8);
     CHECK(board::kMotorTestIn1CandidatePin == 12 && board::kMotorTestIn2CandidatePin == 13);
     CHECK(board::kMotorPwmFrequencyHz == kTb67h450PwmFrequencyHz);
     CHECK(validRs485PinConfig(board::kMotorRs485PinsConfigured, board::kMotorGpioCount,

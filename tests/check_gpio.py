@@ -311,7 +311,7 @@ class GpioCheckerTests(unittest.TestCase):
         self.assertEqual(validate_motor_routing(CUSTOM["nodes"]["MOTOR"]), [])
         self.assertTrue(valid_motor_legacy_reference(LEGACY_MOTOR))
         self.assertEqual(validate_motor_routing(LEGACY_MOTOR["old_reference_only"]), [])
-        self.assertEqual(extract_motor_driver_pins(ROOT / "motor/motor.ino"), [(6, 7), (12, 13), (11, 10), (8, 9)])
+        self.assertEqual(extract_motor_driver_pins(ROOT / "motor/motor.ino"), [(6, 7), (12, 13), (11, 10), (9, 8)])
 
     def test_reported_motor_map_is_unique_and_direct_control_is_enabled(self):
         pins = [pin for pair in extract_motor_driver_pins(ROOT / "motor/motor.ino") for pin in pair]
