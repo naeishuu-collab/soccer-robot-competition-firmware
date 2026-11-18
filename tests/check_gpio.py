@@ -72,7 +72,7 @@ def valid_motor_legacy_reference(record):
 
 
 def custom_route_status(_node, _pin):
-    # Chip bonding is not carrier routing; only the actual schematic/netlist can resolve this.
+    # チップのボンディングはキャリア配線ではない。実際の回路図/ネットリストでしか解決できない。
     return "UNKNOWN"
 
 

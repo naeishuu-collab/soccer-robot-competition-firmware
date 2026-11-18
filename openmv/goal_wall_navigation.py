@@ -1,4 +1,4 @@
-# OpenMV H7: wall distance -> virtual line + goal shooting
+# OpenMV H7: 壁距離 → 仮想白線 + ゴールシュート
 # ------------------------------------------------------------
 # 大会: RCJ 関東ブロック / サッカーインフラレッド (2026ルール適用)
 # 競技台 (Appendix A):
@@ -208,9 +208,9 @@ def init_camera():
         sensor.set_auto_whitebal(False)
     except Exception:
         pass
-    # RCJ 2026 rule 6.2.B: IR emitters are forbidden in the Infrared league.
-    # Turn off the OpenMV H7 auxiliary IR LED and any visible status LEDs so they
-    # cannot interfere with opponents (rule 3.1.3). Guarded for API differences.
+    # RCJ 2026 ルール6.2.B: 赤外線リーグではIR発光器は禁止。
+    # OpenMV H7 の補助IR LEDと可視状態LEDをすべて消灯し、
+    # 相手機体に干渉しないようにする（ルール3.1.3）。API差に備えガード付き。
     try:
         sensor.set_ir_led(False)
     except Exception:
@@ -245,8 +245,8 @@ def main_loop():
         img = sensor.snapshot()
         ysize, ycx, ycy = biggest_blob(img, YellowThresholds, GoalRoi, PIXELS_THRESHOLD)
         bsize, bcx, bcy = biggest_blob(img, BlueThresholds, GoalRoi, PIXELS_THRESHOLD)
-        # Rule 3.1.4: ignore colors above the walls (shirts etc.) by limiting the
-        # wall search to the lower two thirds of the image.
+        # ルール3.1.4: 壁の上の色（服など）を無視するため、
+        # 壁探索を画像下2/3に制限する。
         wall_roi = (0, img.height() // 3, img.width(), img.height() * 2 // 3)
         wsize, wcx, wcy = biggest_blob(img, BlackThresholds, wall_roi, WALL_PIX_TH)
         yx, yy = norm_coord(ycx, ycy, img)

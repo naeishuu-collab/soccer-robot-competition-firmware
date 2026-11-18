@@ -21,7 +21,7 @@ static const char* currentCase = "";
     } \
 } while (0)
 
-// Synthetic host-only values. The tested runtime profile is not derived from these pins or wheel angles.
+// ホスト専用の架空値。テスト対象の実行時プロファイルはこれらのピンや車輪角度からは導出されない。
 static const uint32_t kTestPwmPinMask = (1u << 14) | (1u << 15) | (1u << 16) | (1u << 17) |
                                         (1u << 18) | (1u << 19) | (1u << 20) | (1u << 21);
 static const uint32_t kTestReservedPinMask = (1u << 0) | (1u << 1) | (1u << 2) | (1u << 25);
@@ -35,7 +35,7 @@ static const Tb67h450ChannelConfig kTestDrivers[4] = {
     {18, 19, kTb67h450MaxDuty}, {20, 21, kTb67h450MaxDuty}
 };
 
-// Host fixtures use the current PCB-angle candidate table; runtime remains gated until measured.
+// ホストのフィクスチャは現行のPCB角度候補表を使用。実測まで実行時はゲートされたまま。
 static const int16_t* const kLineTestAngles = board::kLineSensorAngleCdeg;
 static const uint32_t kLineTestAngleMask = board::kLineSensorAngleValidMask;
 
@@ -84,7 +84,7 @@ static void testLineFaultMaskExcludesFailedSensors() {
     badPacket.payload[0] |= static_cast<uint8_t>(1u << 1);
     CHECK(!decodeLinePacket(badPacket, decoded, kLineTestAngles, kLineTestAngleMask,
                             board::kLineSensorEnabledMask));
-    packet.payload[6] = 2; // A peer that counts a disabled input is rejected.
+    packet.payload[6] = 2; // 無効入力をカウントする相手は拒否される。
     CHECK(!decodeLinePacket(packet, decoded, kLineTestAngles, kLineTestAngleMask,
                             board::kLineSensorEnabledMask));
 }
@@ -156,7 +156,7 @@ static void testDroppedPacketSequenceGap() {
     uint8_t length = encodePacket(p, bytes, sizeof(bytes));
     CHECK(parseFrame(bytes, length, parser, decoded, 0));
     CHECK(sequence.accept(decoded.sequence));
-    p.sequence = 22;  // Sequence 21 represents the dropped frame.
+    p.sequence = 22;  // 連番21が欠落フレームを表す。
     length = encodePacket(p, bytes, sizeof(bytes));
     CHECK(parseFrame(bytes, length, parser, decoded, 20));
     CHECK(sequence.accept(decoded.sequence));
@@ -224,7 +224,7 @@ static void testMotorCommandFrameRoundTripAndValidation() {
 
     requested[0] = 0;
     CHECK(encodeMotorCommandFrame(requested, bytes, sizeof(bytes)) == kMotorCommandFrameSize);
-    bytes[2] = 1; // 257 is rejected even when the XOR is correct.
+    bytes[2] = 1; // XORが正しくても257は拒否される。
     bytes[3] = 1;
     checksum = 0;
     for (uint8_t i = 0; i < 10; ++i) checksum ^= bytes[i];
@@ -270,7 +270,7 @@ static void testMotorParserIgnoresSharedBusTraffic() {
     for (uint8_t i = 0; i < 4; ++i) CHECK(decoded[i] == requested[i]);
 
     MotorCommandFrameParser invalidIr;
-    const uint8_t invalidIrResponse[] = {0xAA, 0x01, 0x68, 0x12, 0x34, 0x55}; // Direction 360 is invalid.
+    const uint8_t invalidIrResponse[] = {0xAA, 0x01, 0x68, 0x12, 0x34, 0x55}; // 方位360は無効。
     for (uint8_t i = 0; i < sizeof(invalidIrResponse); ++i)
         status = invalidIr.feed(invalidIrResponse[i], i, decoded);
     CHECK(status == kMotorFrameInvalid && invalidIr.stats().formatErrors == 1);
@@ -319,7 +319,7 @@ static void testMainConsoleAutoModesAndFailClosedGates() {
 }
 
 static void testUsbInputCancelsBootAutoArm() {
-    // MAIN calls disableAutoStart() on the first USB byte, not only on a complete line.
+    // MAINは完全な行だけでなく、最初のUSBバイトでdisableAutoStart()を呼ぶ。
     IrTestController controller;
     Motion motion{1.0f, 1.0f, 1.0f};
     controller.disableAutoStart();
@@ -327,7 +327,7 @@ static void testUsbInputCancelsBootAutoArm() {
         CHECK(!controller.armOnFirstFreshBall(true, true, static_cast<uint16_t>(i % 360)));
         CHECK(!controller.armed());
     }
-    // An explicit manual ARM remains available after the boot auto-arm is cancelled.
+    // 起動時自動ARMが解除された後も、明示的な手動ARMは使える。
     CHECK(controller.arm(true, true, 0));
     CHECK(controller.update(true, true, 0, motion));
     CHECK(controller.armed());
@@ -403,7 +403,7 @@ static void testSequenceWrapAndRejectDuplicates() {
     CHECK(!sequence.accept(0));
     CHECK(sequence.rejected() == 2);
     sequence.resetPeer();
-    CHECK(sequence.accept(0)); // A timed-out peer may restart its sequence at zero.
+    CHECK(sequence.accept(0)); // タイムアウトした相手は連番を0から再開できる。
     CHECK(sequence.gaps() == 0 && sequence.rejected() == 2);
 }
 
@@ -456,7 +456,7 @@ static void testRs485HalfDuplexOrderingAndFailure() {
     Rs485Driver failedBus{io};
     CHECK(!failedBus.send(bytes, sizeof(bytes), 0));
     mock.events[mock.used] = '\0';
-    CHECK(strcmp(mock.events, "TDWFDRD") == 0); // DE returns low even after a short write.
+    CHECK(strcmp(mock.events, "TDWFDRD") == 0); // 短い書き込み後もDEはLowに戻る。
     CHECK(failedBus.diagnostics().txErrors == 1);
 }
 
@@ -468,7 +468,7 @@ static void testRs485ReceiveTimeoutAndCollisionGuard() {
     uint8_t byte = 0;
     CHECK(bus.receiveByte(byte, 1000) && byte == 0x42);
     CHECK(bus.diagnostics().rxBytes == 1 && bus.linkFresh(1050, 100));
-    CHECK(!bus.canTransmit(1050)); // Master waits for the quiet guard after a received frame.
+    CHECK(!bus.canTransmit(1050)); // 親局は受信後に静穏ガードを待つ。
     const uint8_t request = 0x01;
     CHECK(!bus.send(&request, 1, 1050));
     CHECK(bus.diagnostics().txBusy == 1);
@@ -484,7 +484,7 @@ static void testSharedBusIrRequestDemultiplexing() {
     uint8_t length = encodePacket(linePoll, wire, sizeof(wire));
     bool request = false;
     for (uint8_t i = 0; i < length; ++i) request |= parser.feed(wire[i], i);
-    CHECK(!request); // The 0x01 protocol-version byte inside a framed LINE poll is not an IR request.
+    CHECK(!request); // フレーム化されたLINE照会内の0x01はIR要求ではない。
 
     const int16_t motorValues[4] = {1, -1, kMotorBrakeCommand, 0};
     uint8_t motorFrame[kMotorCommandFrameSize]{};
@@ -603,14 +603,14 @@ static void testIrPredictionWrapsBearingBoundsSpeedAndRecoversFromClockWrap() {
 
 static void testLineDebounceRejectsShortTransitions() {
     LineDebouncer filter;
-    CHECK(filter.update(0x1u, 2) == 0x1u); // First scan seeds the stable state immediately.
+    CHECK(filter.update(0x1u, 2) == 0x1u); // 最初のスキャンで安定状態を即座に初期化する。
     CHECK(filter.update(0x0u, 2) == 0x1u);
-    CHECK(filter.update(0x1u, 2) == 0x1u); // A one-scan glitch is rejected.
+    CHECK(filter.update(0x1u, 2) == 0x1u); // 1スキャンのグリッチは除外される。
     CHECK(filter.update(0x0u, 2) == 0x1u);
     CHECK(filter.update(0x0u, 2) == 0x0u);
     CHECK(filter.update(0x3u, 2) == 0x0u);
-    CHECK(filter.update(0x1u, 2) == 0x1u); // Each sensor bit has its own history.
-    CHECK(filter.update(0xFF000001u, 1) == 0x1u); // Levels above sensor 23 are ignored.
+    CHECK(filter.update(0x1u, 2) == 0x1u); // センサーごとに履歴を持つ。
+    CHECK(filter.update(0xFF000001u, 1) == 0x1u); // センサー23より上のレベルは無視される。
     filter.reset();
     CHECK(filter.update(0x4u, 2) == 0x4u);
 }
@@ -650,7 +650,7 @@ static void testLinePollResponseCrcAndSequence() {
 static void testLineMultipleAdjacentSensors() {
     const LineObservation line = lineFromActive((1u << 2) | (1u << 3));
     CHECK(line.detected && !line.ambiguous && line.count == 2);
-    CHECK(line.angleCdeg > 4500 && line.angleCdeg < 4700); // Adjacent healthy sensors use their non-uniform angles.
+    CHECK(line.angleCdeg > 4500 && line.angleCdeg < 4700); // 隣接する正常センサーは不等間隔の角度を使う。
 }
 
 static void testLineOpposingSensorsAreAmbiguous() {
@@ -839,7 +839,7 @@ static void testMotorStopPriority() {
     MotorCommandPriority priority;
     CHECK(priority.accept(true));
     CHECK(priority.accept(false) && priority.stopPending());
-    CHECK(!priority.accept(true)); // A stop cannot be overwritten before the output tick.
+    CHECK(!priority.accept(true)); // 停止は出力tickまでに上書きできない。
     CHECK(priority.accept(false) && priority.stopPending());
     priority.completeOutputTick();
     CHECK(!priority.stopPending() && priority.accept(true));
@@ -857,7 +857,7 @@ static void testHeadingBoundaryAndJumpRejection() {
     CHECK(heading.update(1, 0, true, turn));
     CHECK(fabsf(turn + 0.012f) < 0.001f);
     CHECK(!heading.update(100, 0, true, turn) && turn == 0);
-    CHECK(heading.update(100.5f, 0, true, turn)); // A stable second sample confirms a real heading step.
+    CHECK(heading.update(100.5f, 0, true, turn)); // 2回目の安定した値で実際の方位変化を確認する。
     CHECK(!heading.update(NAN, 0, true, turn) && turn == 0);
 }
 
@@ -886,11 +886,11 @@ static void testBnoInitFailureDisconnectInvalidDataAndRecovery() {
     Bno055Io io{&mock, mockBnoBegin, mockBnoRead};
     Bno055Monitor monitor;
     Bno055Sample sample{};
-    CHECK(!monitor.poll(io, kBnoAddressAuto, 0, sample)); // Neither strap address responds.
+    CHECK(!monitor.poll(io, kBnoAddressAuto, 0, sample)); // どちらのストラップアドレスも応答しない。
     CHECK(!monitor.initialized() && mock.beginCalls == 2);
     mock.availableAddress = 0x29;
     CHECK(!monitor.poll(io, kBnoAddressAuto, 999, sample));
-    CHECK(mock.beginCalls == 2); // Retry delay prevents repeated bus probing.
+    CHECK(mock.beginCalls == 2); // 再試行遅延によりバスを繰り返し探索しない。
     mock.heading = 359.8f;
     CHECK(monitor.poll(io, kBnoAddressAuto, 1000, sample));
     CHECK(sample.connected && sample.headingValid && sample.address == 0x29);
@@ -901,18 +901,18 @@ static void testBnoInitFailureDisconnectInvalidDataAndRecovery() {
     CHECK(!sample.connected && !monitor.initialized());
     mock.readFails = false;
     CHECK(!monitor.poll(io, kBnoAddressAuto, 2019, sample));
-    CHECK(monitor.poll(io, kBnoAddressAuto, 2020, sample)); // Reinitialized after an outage.
+    CHECK(monitor.poll(io, kBnoAddressAuto, 2020, sample)); // 通信断後に再初期化される。
 
     mock.heading = NAN;
     CHECK(!monitor.poll(io, kBnoAddressAuto, 2040, sample));
     CHECK(sample.connected && !sample.headingValid);
     mock.heading = 90;
     mock.calibration[0] = 2;
-    // Working-test criterion: a finite 0..360 heading is valid regardless of SYS calibration.
+    // 実機動作テストの判定: 有限な0..360の方位はSYS校正値に関わらず有効。
     CHECK(monitor.poll(io, kBnoAddressAuto, 2060, sample));
     CHECK(sample.connected && sample.headingValid);
     mock.calibration[0] = 3;
-    CHECK(monitor.poll(io, 0x29, 2080, sample)); // Explicit address override is supported.
+    CHECK(monitor.poll(io, 0x29, 2080, sample)); // 明示的なアドレス指定に対応。
 }
 
 static KickerInput readyKickerInput() {
@@ -920,7 +920,7 @@ static KickerInput readyKickerInput() {
     input.commandFresh = true;
     input.armed = true;
     input.emergencyStop = false;
-    input.hardwareConfigured = true; // Model only; no physical output adapter exists.
+    input.hardwareConfigured = true; // モデル専用。物理出力アダプタは存在しない。
     input.ballFresh = true;
     input.ballDetected = true;
     input.headingValid = true;
@@ -932,13 +932,13 @@ static KickerInput readyKickerInput() {
 
 static void testMainKickerRequestPolicyGates() {
     CHECK(board::kKickerRequestPolicyConfigured);
-    CHECK(!board::kKickerHeadingWindowConfigured); // BNO gate stays closed; IR bearing is used instead.
+    CHECK(!board::kKickerHeadingWindowConfigured); // BNOゲートは閉じたまま。代わりにIR方位を使う。
     CHECK(board::kKickerPin == 11);
     KickerInput input = readyKickerInput();
     CHECK(!kickerRequestAllowed(false, true, input));
     CHECK(!kickerRequestAllowed(true, false, input));
     CHECK(kickerRequestAllowed(true, true, input));
-    input.ballAligned = false; // Ball off the front axis must not produce a kick request.
+    input.ballAligned = false; // 正面から外れたボールではキック要求を出さない。
     CHECK(!kickerRequestAllowed(true, true, input));
     input = readyKickerInput();
     input.emergencyStop = true;
@@ -955,7 +955,7 @@ static void testKickerFrontBearingTimingAndPulseOverride() {
     input.request = true;
     CHECK(!kicker.update(input, 0, board::kKickerPulseMs, board::kKickerCooldownMs).pulseActive());
     CHECK(kicker.update(input, 1, board::kKickerPulseMs, board::kKickerCooldownMs).state == kKickerDisarmed);
-    // With the ball aligned and the request released the controller becomes READY.
+    // ボールが整合し要求が解除されるとコントローラはREADYになる。
     input.ballAligned = true;
     input.request = false;
     CHECK(kicker.update(input, 2, board::kKickerPulseMs, board::kKickerCooldownMs).state == kKickerReady);
@@ -964,13 +964,13 @@ static void testKickerFrontBearingTimingAndPulseOverride() {
     CHECK(out.state == kKickerFiring && out.pulseActive());
     out = kicker.update(input, 3 + board::kKickerPulseMs - 1, board::kKickerPulseMs, board::kKickerCooldownMs);
     CHECK(out.state == kKickerFiring && out.pulseActive());
-    // kKickerCooldownMs is 0: after the pulse the controller returns to READY immediately.
+    // kKickerCooldownMsは0: パルス後すぐにREADYへ戻る。
     const uint32_t pulseEnd = 3 + board::kKickerPulseMs;
     out = kicker.update(input, pulseEnd, board::kKickerPulseMs, board::kKickerCooldownMs);
     CHECK(out.state == kKickerReady && !out.pulseActive());
-    CHECK(board::kKickerCooldownMs == 0); // Cooldown removed at the operator's request.
+    CHECK(board::kKickerCooldownMs == 0); // 運用者要望でクールダウンは削除済み。
 
-    // Explicit timing overrides are honoured by the controller.
+    // 明示的なタイミング上書きはコントローラに反映される。
     KickerController custom;
     KickerInput ci = readyKickerInput();
     ci.request = false;
@@ -986,14 +986,14 @@ static void testKickerFrontBearingTimingAndPulseOverride() {
 static void testKickerAndDribblerOutputGates() {
     KickerController kicker;
     CHECK(board::kKickerHardwareConfigured);
-    CHECK(board::kBnoOffsetsVerified); // Offsets from the working BNO055 test are applied.
+    CHECK(board::kBnoOffsetsVerified); // 動作BNO055テスト由来のオフセットが適用される。
     KickerInput input = readyKickerInput();
     input.hardwareConfigured = false;
     input.request = true;
     KickerOutput output = kicker.update(input, 1000);
     CHECK(output.state == kKickerDisarmed && !output.mockPulseActive);
     input.hardwareConfigured = true;
-    output = kicker.update(input, 1001); // A request held while disabled is not queued.
+    output = kicker.update(input, 1001); // 無効中に保持された要求はキューされない。
     CHECK(output.state == kKickerReady && !output.mockPulseActive);
     output = kicker.update(input, 1002);
     CHECK(output.state == kKickerReady && !output.mockPulseActive);
@@ -1052,7 +1052,7 @@ static void testKickerAndDribblerOutputGates() {
     CHECK(output.state == kKickerFault && !output.mockPulseActive);
     input.emergencyStop = false;
     input.clearFault = true;
-    CHECK(latched.update(input, 11).state == kKickerFault); // Held request cannot clear or retrigger.
+    CHECK(latched.update(input, 11).state == kKickerFault); // 保持された要求では解除も再トリガもできない。
     input.request = false;
     CHECK(latched.update(input, 12).state == kKickerDisarmed);
     input.clearFault = false;
@@ -1107,7 +1107,7 @@ static void testLineSensorCommunicationLossLatchesFault() {
     CHECK(output.state == kFault && output.motion.x == 0 && output.motion.y == 0 && output.motion.turn == 0);
     input.lineFresh = true;
     output = controller.step(input);
-    CHECK(output.state == kFault); // Requires explicit recovery and a subsequent re-arm.
+    CHECK(output.state == kFault); // 明示的な復帰とその後の再ARMが必要。
 }
 
 static void testIrSensorCommunicationLossLatchesFault() {
@@ -1118,7 +1118,7 @@ static void testIrSensorCommunicationLossLatchesFault() {
     CHECK(output.state == kFault && output.motion.x == 0 && output.motion.y == 0 && output.motion.turn == 0);
     input.irFresh = true;
     output = controller.step(input);
-    CHECK(output.state == kFault); // Fresh data alone cannot restart motion after a fault.
+    CHECK(output.state == kFault); // 故障後、新しいデータだけでは走行を再開できない。
 }
 
 static void testUnknownLinePolarityFaultsArmedRobot() {
@@ -1271,23 +1271,23 @@ static void testMotorCommandTimeoutLatchesBeforeRecovery() {
     input.emergencyStop = false;
     input.commandFresh = true;
     input.commandEnabled = true;
-    CHECK(!gate.update(input)); // ARM must first be observed released.
+    CHECK(!gate.update(input)); // まずARMが解除されたことを検出する必要がある。
     input.armPressed = true;
     CHECK(gate.update(input));
     CHECK(gate.state() == kMotorArmed);
     CHECK(expireMotorCommand(gate, true, 300, 0, 300));
     CHECK(gate.state() == kMotorFault);
-    CHECK(!gate.update(input)); // A command received in the same loop cannot clear the latched fault.
+    CHECK(!gate.update(input)); // 同じループで受信した命令ではラッチされた故障を解除できない。
 }
 
 static void testManualArmRequiresFreshPress() {
     ManualArmLatch arm;
     CHECK(!arm.update(false, false, false));
-    CHECK(!arm.update(true, true, false)); // A held button at boot cannot arm.
+    CHECK(!arm.update(true, true, false)); // 起動時に押しっぱなしのボタンではARMできない。
     CHECK(!arm.update(true, false, false));
     CHECK(arm.update(true, true, false));
     CHECK(arm.update(true, false, false));
-    CHECK(!arm.update(true, true, true)); // Fault drops the latch.
+    CHECK(!arm.update(true, true, true)); // 故障でラッチが落ちる。
     CHECK(!arm.update(true, true, false));
     CHECK(!arm.update(true, false, false));
     CHECK(arm.update(true, true, false));
@@ -1295,13 +1295,13 @@ static void testManualArmRequiresFreshPress() {
 
 static void testManualClearRequiresFreshPress() {
     ManualActionLatch clear;
-    CHECK(!clear.update(true, true, false)); // A clear button held at boot is ignored.
+    CHECK(!clear.update(true, true, false)); // 起動時に押しっぱなしの解除ボタンは無視される。
     CHECK(!clear.update(true, false, false));
     CHECK(clear.update(true, true, false));
-    CHECK(clear.update(true, false, false)); // The request stays available while a fault is being cleared.
+    CHECK(clear.update(true, false, false)); // 故障解除中も要求は有効なまま。
     clear.reset();
     CHECK(!clear.update(true, true, false));
-    CHECK(!clear.update(true, true, true)); // An asserted E-stop cancels the clear request.
+    CHECK(!clear.update(true, true, true)); // E-stopが有効だと解除要求は取り消される。
     CHECK(!clear.update(true, true, false));
     CHECK(!clear.update(true, false, false));
     CHECK(clear.update(true, true, false));
@@ -1316,7 +1316,7 @@ static void testMotorSafetyGateLatchesAndRequiresRearm() {
     input.commandFresh = true;
     input.commandEnabled = true;
     input.armPressed = true;
-    CHECK(!gate.update(input)); // A button held at power-up is not a new ARM action.
+    CHECK(!gate.update(input)); // 電源投入時に押しっぱなしのボタンは新しいARM操作ではない。
     input.armPressed = false;
     CHECK(!gate.update(input));
     input.armPressed = true;
@@ -1336,11 +1336,11 @@ static void testMotorSafetyGateLatchesAndRequiresRearm() {
     CHECK(!gate.update(input));
     input.armPressed = true;
     CHECK(gate.update(input));
-    input.commandFresh = false; // 100 ms timeout after arming latches a fault.
+    input.commandFresh = false; // ARM後100msタイムアウトで故障をラッチする。
     CHECK(!gate.update(input));
     CHECK(gate.state() == kMotorFault);
     input.commandFresh = true;
-    CHECK(!gate.update(input)); // A fresh MAIN command cannot automatically restart it.
+    CHECK(!gate.update(input)); // 新しいMAIN命令でも自動再起動しない。
 
     MotorSafetyGate configGate;
     MotorSafetyInput invalidConfig{};
@@ -1348,7 +1348,7 @@ static void testMotorSafetyGateLatchesAndRequiresRearm() {
     invalidConfig.commandFresh = true;
     invalidConfig.commandEnabled = true;
     CHECK(!configGate.update(invalidConfig));
-    CHECK(configGate.state() == kMotorFault); // MAIN enable with an invalid motor configuration faults closed.
+    CHECK(configGate.state() == kMotorFault); // 無効なMOTOR設定でMAINが有効になってもfail-closeする。
 }
 
 static void testHeadingFaultAndExplicitRecovery() {
@@ -1367,7 +1367,7 @@ static void testHeadingFaultAndExplicitRecovery() {
     input.nowMs = 600;
     CHECK(controller.step(input).state == kDisarmed);
     input.nowMs = 601;
-    CHECK(controller.step(input).state == kDisarmed); // A held ARM cannot bypass the required re-arm cycle.
+    CHECK(controller.step(input).state == kDisarmed); // 押しっぱなしのARMでは必須の再ARMサイクルを迂回できない。
     input.armed = false;
     input.nowMs = 602;
     CHECK(controller.step(input).state == kDisarmed);

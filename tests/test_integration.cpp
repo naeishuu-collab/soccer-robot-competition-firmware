@@ -23,7 +23,7 @@ static const char* currentCase = "";
     } \
 } while (0)
 
-// Integration fixtures exercise the current PCB-angle candidate, while BoardConfig keeps it disabled.
+// 統合フィクスチャは現行のPCB角度候補を使う。BoardConfig側は無効のまま。
 static const int16_t* const kLineTestAngles = board::kLineSensorAngleCdeg;
 static const uint32_t kLineTestAngleMask = board::kLineSensorAngleValidMask;
 static LineObservation testLine(uint32_t activeBits) {
@@ -255,7 +255,7 @@ static void testBallLostWithHeadingMockSearchesSafely() {
     MainOutput output = robot.tick(0);
     CHECK(output.state == kSearchBall);
     CHECK(fabsf(output.motion.x) == 0.15f);
-    CHECK(output.motion.turn == 0); // Heading controller holds the mock attack heading.
+    CHECK(output.motion.turn == 0); // 方位コントローラはモックの攻撃方位を保持する。
     CHECK(robot.motorTick(10));
 }
 
@@ -292,7 +292,7 @@ static void testIrCommunicationLossProducesIdleStop() {
     robot.configure(true);
     CHECK(robot.injectLine(0, 0) && robot.injectIr(0, 500, 0));
     CHECK(robot.tick(0).state == kApproachBall);
-    MainOutput output = robot.tick(61); // IR response freshness expires after 60 ms.
+    MainOutput output = robot.tick(61); // IR応答の鮮度は60msで切れる。
     CHECK(output.state == kFault);
     CHECK(output.motion.x == 0 && output.motion.y == 0 && output.motion.turn == 0);
     CHECK(robot.motorTick(61));
@@ -303,7 +303,7 @@ static void testBnoHeadingControlsTurnAlongsideBallApproach() {
     MockRobot robot;
     robot.configure(true);
     CHECK(robot.injectLine(0, 0) && robot.injectIr(0, 500, 0));
-    robot.setHeading(true, true, 10.0f); // Mock BNO055 is 10 degrees clockwise of the configured 0-degree target.
+    robot.setHeading(true, true, 10.0f); // モックBNO055は設定された0度目標より10度時計回り。
     const MainOutput output = robot.tick(0);
     CHECK(output.state == kApproachBall && output.motion.y > 0 && output.motion.turn < 0);
     CHECK(robot.motorSeen() && robot.motorEnabled());
@@ -324,7 +324,7 @@ static void testLineCommunicationLossFaultsAndDisablesMotor() {
     robot.configure(true);
     CHECK(robot.injectLine(0, 0) && robot.injectIr(0, 500, 0));
     CHECK(robot.tick(0).state == kApproachBall);
-    MainOutput output = robot.tick(101); // LINE frame freshness expires after 100 ms.
+    MainOutput output = robot.tick(101); // LINEフレームの鮮度は100msで切れる。
     CHECK(output.state == kFault && output.motion.y == 0);
     CHECK(!robot.motorEnabled());
     CHECK(robot.motorTick(101));
@@ -340,8 +340,8 @@ static void testMainToMotorLossUsesLocalWatchdog() {
     bool moving = false;
     for (uint8_t i = 0; i < 4; ++i) moving |= fabsf(robot.wheels()[i]) > 0.01f;
     CHECK(moving);
-    CHECK(robot.motorTick(299)); // The command is still fresh just before the local timeout.
-    CHECK(robot.motorTick(300)); // No new MAIN packet: MOTOR clears output at 300 ms.
+    CHECK(robot.motorTick(299)); // ローカルタイムアウト直前はまだ有効。
+    CHECK(robot.motorTick(300)); // 新しいMAINパケットがなければ300msで出力をクリア。
     for (uint8_t i = 0; i < 4; ++i) CHECK(robot.wheels()[i] == 0.0f);
 }
 
@@ -364,7 +364,7 @@ static void testBnoFaultMultipleFaultsAndEmergencyStop() {
     output = multiple.tick(10);
     CHECK(output.state == kFault && !multiple.motorEnabled());
     multiple.setEmergencyStop(false);
-    output = multiple.tick(101); // Both IR and LINE are now stale as well.
+    output = multiple.tick(101); // この時点でIRとLINEの両方も古くなっている。
     CHECK(output.state == kFault && output.motion.x == 0 && output.motion.y == 0);
     CHECK(multiple.motorTick(101));
     for (uint8_t i = 0; i < 4; ++i) CHECK(multiple.wheels()[i] == 0.0f);
@@ -387,7 +387,7 @@ static void testExplicitEmergencyStopAndRearmPath() {
     CHECK(robot.injectLine(0, 502));
     CHECK(robot.injectIr(0, 0, 502));
     CHECK(robot.tick(502).state == kDisarmed);
-    CHECK(robot.tick(503).state == kDisarmed); // Held arm cannot restart automatically.
+    CHECK(robot.tick(503).state == kDisarmed); // 押しっぱなしのARMでは自動再起動しない。
 }
 
 static void testAccessoryCommandsRemainGatedInMockIntegration() {
@@ -406,11 +406,11 @@ static void testAccessoryCommandsRemainGatedInMockIntegration() {
     input.lineClear = true;
     input.hardwareConfigured = board::kKickerHardwareConfigured;
     KickerOutput output = kicker.update(input, 0);
-    CHECK(!output.mockPulseActive && output.state == kKickerReady); // GPIO11 wiring is enabled now.
+    CHECK(!output.mockPulseActive && output.state == kKickerReady); // GPIO11配線は有効になった。
     CHECK(dribbler.update(0.8f, true, true, false, false, false) == 0.0f);
-    // GPIO11 is now driven by MAIN; a request held through DISARMED is still not queued.
+    // GPIO11はMAINが駆動する。DISARMEDを通して保持された要求は依然キューされない。
     output = kicker.update(input, 1);
-    CHECK(!output.mockPulseActive && output.state == kKickerReady); // Held request is not queued.
+    CHECK(!output.mockPulseActive && output.state == kKickerReady); // 保持された要求はキューされない。
     input.emergencyStop = true;
     output = kicker.update(input, 10);
     CHECK(!output.mockPulseActive && output.state == kKickerFault);
@@ -420,7 +420,7 @@ static void testAccessoryCommandsRemainGatedInMockIntegration() {
 static void testSharedBusArbitrationPreventsOverlappingReplies() {
     Rs485MasterArbiter bus;
     CHECK(bus.acquire(kIrRs485Peer));
-    CHECK(!bus.idle()); // MAIN waits for IR before it can poll LINE or send MOTOR.
+    CHECK(!bus.idle()); // MAINはLINE照会やMOTOR送信の前にIRを待つ。
     CHECK(!bus.acquire(kLineRs485Peer));
     CHECK(!bus.complete(kLineRs485Peer));
     CHECK(bus.activePeer() == kIrRs485Peer);

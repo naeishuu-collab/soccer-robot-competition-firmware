@@ -1,4 +1,4 @@
-// Default: MOTOR board (GP0 TX, GP1 RX, GP2 DE). Verify the physical DE route before use.
+// 既定: MOTOR基板 (GP0 TX, GP1 RX, GP2 DE)。使用前に物理DE経路を確認すること。
 constexpr uint8_t kRs485TxPin = 0;
 constexpr uint8_t kRs485RxPin = 1;
 constexpr uint8_t kRs485DePin = 2;
@@ -22,7 +22,7 @@ bool isTestProbe() {
 }
 
 void echoProbe() {
-    delayMicroseconds(200);  // Let the transmitter release the shared half-duplex bus.
+    delayMicroseconds(200);  // 送信側が共有ハーフデュプレックスバスを解放するのを待つ。
     digitalWrite(kRs485DePin, HIGH);
     delayMicroseconds(20);
     Serial1.write(reinterpret_cast<const uint8_t*>(rxFrame), rxLength);

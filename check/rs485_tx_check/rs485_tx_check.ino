@@ -1,4 +1,4 @@
-// Default: MAIN board (GP0 TX, GP1 RX, GP8 DE). Verify the physical DE route before use.
+// 既定: MAIN基板 (GP0 TX, GP1 RX, GP8 DE)。使用前に物理DE経路を確認すること。
 constexpr uint8_t kRs485TxPin = 0;
 constexpr uint8_t kRs485RxPin = 1;
 constexpr uint8_t kRs485DePin = 8;
