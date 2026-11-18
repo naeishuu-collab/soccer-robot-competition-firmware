@@ -51,11 +51,17 @@ PENALTY_WIDTH_CM = 80.0
 GOAL_W_CM = 60.0
 CENTER_CIRCLE_CM = 60.0
 VIRTUAL_LINE_MARGIN_CM = 8.0  # 白線からこの距離以内で「ライン上」とみなす
+# カメラは絶対位置を持たないため、cm定数は「距離推定の較正と妥当性チェック」に使う。
+# WALL_H_CM / PENALTY_WIDTH_CM / CENTER_CIRCLE_CM は資料用の参照値で判定には使わない。
+MAX_FIELD_CM = max(FIELD_W_CM, FIELD_L_CM)
+GOAL_SHOOT_MAX_DIST_CM = FIELD_L_CM * 0.6
+GOAL_REF_PIX = 500.0
+GOAL_REF_DIST_CM = 100.0
 
 # ---------- 検出設定 ----------
 PIXELS_THRESHOLD = 20
 WALL_PIX_TH = 70
-STREAM_INTERVAL_MS = 100
+STREAM_INTERVAL_MS = 200
 
 WALL_AVOID_ANGLE_DEG = 60.0
 WALL_AVOID_DIST_CM = 35.0     # 壁がこの距離より近ければ回避
@@ -87,13 +93,30 @@ GoalRoi = (30, 30, 260, 260)
 # 攻撃するゴールの色と守るゴールの色（試合のサイドに合わせて入れ替える）
 TARGET_GOAL = "YELLOW"
 OWN_GOAL = "BLUE"
+# 起動後に最初に安定して見えたゴールの色を相手ゴールとしてロックする。
+# コイントス／後半のエンド入れ替えに合わせて自動で決まるが、最初に自ゴールを
+# 見た場合は誤るため、必要なら AUTO_TARGET_COLOR=False にして定数で固定する。
+AUTO_TARGET_COLOR = True
+TARGET_LOCK_FRAMES = 5
+target_locked = not AUTO_TARGET_COLOR
+target_candidate = None
+target_candidate_count = 0
 BALL_FRONT_ANGLE_DEG = 25.0
+# シュートはボールとゴールが同じ方向に並んでいないと外れるため、両者の方位差も見る。
+BALL_GOAL_ALIGN_TOL_DEG = 12.0
 OBSTACLE_PIX_TH = 60
 MODE_DEFEND = 5
 FLAG_VIRTUAL_LINE = 0x01
 FLAG_PENALTY_AREA = 0x02
 FLAG_BALL = 0x04
 FLAG_BALL_ALIGNED = 0x08
+FLAG_BALL_IN_KICKER = 0x10
+# ボールのblob面積→距離（逆比例モデル）。実機のカメラ/レンズで要較正。
+BALL_REF_PIX = 4000.0
+BALL_REF_DIST_CM = 10.0
+# キッカーのポケットに入っているとみなす距離[cm]（ロボット半径約11cm＋捕獲ゾーン3cm）。
+BALL_KICK_MIN_CM = 5.0
+BALL_KICK_MAX_CM = 16.0
 
 
 # ---------- 純粋ロジック ----------
@@ -128,7 +151,21 @@ def wall_distance_cm(wsize):
     """黒い壁のblob.pixels()から距離[cm]を推定する (逆比例モデル)。"""
     if wsize is None or wsize <= 0:
         return None
-    return WALL_REF_DIST_CM * float(WALL_REF_PIX) / float(wsize)
+    return min(MAX_FIELD_CM, WALL_REF_DIST_CM * float(WALL_REF_PIX) / float(wsize))
+
+
+def goal_distance_cm(goal_size):
+    """ゴールのblob面積から距離[cm]を推定（要較正）。"""
+    if goal_size is None or goal_size <= 0:
+        return None
+    return min(MAX_FIELD_CM, GOAL_REF_DIST_CM * float(GOAL_REF_PIX) / float(goal_size))
+
+
+def ball_distance_cm(ball_size):
+    """ボールのblob面積から距離[cm]を推定（逆比例モデル・要較正）。"""
+    if ball_size is None or ball_size <= 0:
+        return None
+    return BALL_REF_DIST_CM * float(BALL_REF_PIX) / float(ball_size)
 
 
 def estimate_virtual_line(wx, wy, wsize):
@@ -150,6 +187,31 @@ def estimate_virtual_line(wx, wy, wsize):
     return line_detected, penalty_detected, angle, dist_line
 
 
+def lock_target_from_goals(ysize, bsize):
+    """最初に安定して見えたゴールの色を攻撃対象としてロックする。"""
+    global TARGET_GOAL, OWN_GOAL, target_locked, target_candidate, target_candidate_count
+    if target_locked or not AUTO_TARGET_COLOR:
+        return
+    if ysize >= GOAL_NEAR_PIX and bsize < GOAL_NEAR_PIX:
+        color = "YELLOW"
+    elif bsize >= GOAL_NEAR_PIX and ysize < GOAL_NEAR_PIX:
+        color = "BLUE"
+    else:
+        target_candidate = None
+        target_candidate_count = 0
+        return
+    if color == target_candidate:
+        target_candidate_count += 1
+    else:
+        target_candidate = color
+        target_candidate_count = 1
+    if target_candidate_count >= TARGET_LOCK_FRAMES:
+        TARGET_GOAL = color
+        OWN_GOAL = "BLUE" if color == "YELLOW" else "YELLOW"
+        target_locked = True
+        print("TARGET LOCKED: " + TARGET_GOAL)
+
+
 def decide_navigation(yx, yy, bx, by, wx, wy, wsize, goal_sizes,
                       ball=None, obstacle=None):
     """detections -> (vx, vy, turn, want_kick, mode_code, mode_name, flags)
@@ -157,8 +219,13 @@ def decide_navigation(yx, yy, bx, by, wx, wy, wsize, goal_sizes,
     ball: (nx, ny, size) or None  … カメラで見つけたオレンジボール
     obstacle: (nx, ny, size) or None … 相手ロボットのマーカー
     """
-    gx, gy, gsize = (bx, by, goal_sizes[1]) if TARGET_GOAL == "BLUE" else (yx, yy, goal_sizes[0])
-    ox, oy, osize = (yx, yy, goal_sizes[0]) if TARGET_GOAL == "BLUE" else (bx, by, goal_sizes[1])
+    if target_locked:
+        gx, gy, gsize = (bx, by, goal_sizes[1]) if TARGET_GOAL == "BLUE" else (yx, yy, goal_sizes[0])
+        ox, oy, osize = (yx, yy, goal_sizes[0]) if TARGET_GOAL == "BLUE" else (bx, by, goal_sizes[1])
+    else:
+        # 攻撃対象が未確定の間は自ゴール判定も行わず、シュートも禁止する。
+        gx = gy = ox = oy = 255
+        gsize = osize = 0
 
     line_hit, penalty_hit, wall_angle, wall_dist = estimate_virtual_line(wx, wy, wsize)
     flags = (1 if line_hit else 0) | (2 if penalty_hit else 0)
@@ -170,6 +237,11 @@ def decide_navigation(yx, yy, bx, by, wx, wy, wsize, goal_sizes,
         flags |= FLAG_BALL
     if ball_aligned:
         flags |= FLAG_BALL_ALIGNED
+    ball_dist = ball_distance_cm(ball[2]) if ball_seen else None
+    ball_in_kicker = (ball_aligned and ball_dist is not None and
+                      BALL_KICK_MIN_CM <= ball_dist <= BALL_KICK_MAX_CM)
+    if ball_in_kicker:
+        flags |= FLAG_BALL_IN_KICKER
 
     # 1) 壁/白線が近ければ最優先で内側へ回避し、キックはしない
     if wall_angle is not None and wall_dist is not None:
@@ -202,13 +274,18 @@ def decide_navigation(yx, yy, bx, by, wx, wy, wsize, goal_sizes,
             return 0, 40, int(clamp(-err * 0.6, -60.0, 60.0)), 0, MODE_APPROACH, "APPROACH", flags
         return 0, 10, 20, 0, MODE_SEARCH, "SEARCH", flags
 
-    # 6) 攻撃対象ゴールが見えている。シュートはボールが正面にある場合だけ。
+    # 6) 攻撃対象ゴールが見えている。シュートは「ボールがキッカーに入っており、
+    #    かつボールとゴールが同じ方向に並んでいる」場合だけ。
     goal_angle = angle_from_normalized(gx, gy)
     err = angle_error(goal_angle, 0.0)
     turn = int(clamp(-err * 0.6, -60.0, 60.0))
     vy = 20 if abs(err) > 45.0 else 55
-    if (abs(err) <= GOAL_SHOOT_ANGLE_DEG and gsize >= GOAL_NEAR_PIX and
-            not line_hit and ball_seen and ball_aligned):
+    goal_dist = goal_distance_cm(gsize)
+    if goal_dist is not None and goal_dist > GOAL_SHOOT_MAX_DIST_CM:
+        return 0, vy, turn, 0, MODE_APPROACH, "APPROACH", flags
+    ball_goal_error = abs(angle_error(goal_angle, ball_angle)) if ball_angle is not None else 180.0
+    if (target_locked and abs(err) <= GOAL_SHOOT_ANGLE_DEG and gsize >= GOAL_NEAR_PIX and
+            not line_hit and ball_in_kicker and ball_goal_error <= BALL_GOAL_ALIGN_TOL_DEG):
         return 0, vy, turn, 1, MODE_SHOOT, "SHOOT", flags
     return 0, vy, turn, 0, MODE_APPROACH, "APPROACH", flags
 
@@ -300,6 +377,7 @@ def main_loop():
         wx, wy = norm_coord(wcx, wcy, img)
         ball_x, ball_y = norm_coord(ball_cx, ball_cy, img)
         obs_x, obs_y = norm_coord(obs_cx, obs_cy, img)
+        lock_target_from_goals(ysize, bsize)
         now = pyb.millis()
         vx, vy, turn, want_kick, mode, name, flags = decide_navigation(
             yx, yy, bx, by, wx, wy, wsize, (ysize, bsize),

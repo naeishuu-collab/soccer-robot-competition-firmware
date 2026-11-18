@@ -12,6 +12,18 @@ SPEC.loader.exec_module(nav)
 
 
 class OpenMvNavigationTests(unittest.TestCase):
+    def setUp(self):
+        self._saved = (nav.TARGET_GOAL, nav.OWN_GOAL, nav.target_locked,
+                       nav.target_candidate, nav.target_candidate_count, nav.AUTO_TARGET_COLOR)
+        nav.TARGET_GOAL = "YELLOW"
+        nav.OWN_GOAL = "BLUE"
+        nav.target_locked = True
+        nav.AUTO_TARGET_COLOR = False
+
+    def tearDown(self):
+        (nav.TARGET_GOAL, nav.OWN_GOAL, nav.target_locked,
+         nav.target_candidate, nav.target_candidate_count, nav.AUTO_TARGET_COLOR) = self._saved
+
     def test_angle_conventions(self):
         self.assertAlmostEqual(nav.angle_from_normalized(128, 0), 0.0)
         self.assertAlmostEqual(nav.angle_from_normalized(254, 128), 90.0)
@@ -34,7 +46,7 @@ class OpenMvNavigationTests(unittest.TestCase):
         self.assertEqual(kick, 0)
 
     def test_front_goal_shoots_only_with_ball_in_front(self):
-        ball = (128, 30, 100)
+        ball = (128, 30, 4000)
         result = nav.decide_navigation(128, 30, 255, 255, 255, 255, 0, (500, 0), ball)
         self.assertEqual(result[5], "SHOOT")
         self.assertEqual(result[3], 1)
@@ -62,7 +74,7 @@ class OpenMvNavigationTests(unittest.TestCase):
         try:
             nav.TARGET_GOAL = "BLUE"
             result = nav.decide_navigation(255, 255, 128, 30, 255, 255, 0, (0, 500),
-                                           (128, 30, 100))
+                                           (128, 30, 4000))
             self.assertEqual(result[5], "SHOOT")
         finally:
             nav.TARGET_GOAL = original
@@ -128,14 +140,14 @@ class OpenMvNavigationTests(unittest.TestCase):
     def test_own_goal_only_defends_without_kick(self):
         # TARGET_GOAL=YELLOW のとき青ゴールだけ見えても自ゴールへは蹴らない
         result = nav.decide_navigation(255, 255, 128, 30, 255, 255, 0, (0, 500),
-                                       (128, 30, 100))
+                                       (128, 30, 4000))
         self.assertEqual(result[5], "DEFEND")
         self.assertEqual(result[3], 0)
         self.assertEqual(result[1], -20)
 
     def test_obstacle_in_front_avoids_without_kick(self):
         result = nav.decide_navigation(128, 30, 255, 255, 255, 255, 0, (500, 0),
-                                       (128, 30, 100), (128, 40, 200))
+                                       (128, 30, 4000), (128, 40, 200))
         self.assertEqual(result[5], "AVOID")
         self.assertEqual(result[3], 0)
 
@@ -165,6 +177,47 @@ class OpenMvNavigationTests(unittest.TestCase):
         lines = module.status_lines(objects, "SHOOT", 1, False, False, 30.0,
                                     module.FLAG_BALL | module.FLAG_BALL_ALIGNED)
         self.assertTrue(any("BALL: SEEN" in line for line in lines))
+
+
+    def test_auto_target_locks_first_stable_goal(self):
+        nav.AUTO_TARGET_COLOR = True
+        nav.target_locked = False
+        nav.target_candidate = None
+        nav.target_candidate_count = 0
+        try:
+            for _ in range(nav.TARGET_LOCK_FRAMES):
+                nav.lock_target_from_goals(500, 0)
+            self.assertEqual(nav.TARGET_GOAL, "YELLOW")
+            self.assertEqual(nav.OWN_GOAL, "BLUE")
+            self.assertTrue(nav.target_locked)
+        finally:
+            nav.target_locked = False
+
+    def test_no_kick_before_target_locked(self):
+        nav.target_locked = False
+        result = nav.decide_navigation(128, 30, 255, 255, 255, 255, 0, (500, 0),
+                                       (128, 30, 4000))
+        self.assertNotEqual(result[5], "SHOOT")
+        self.assertEqual(result[3], 0)
+
+    def test_no_kick_when_ball_not_in_kicker(self):
+        # ボールが遠すぎる（blobが小さい）→ キックしない
+        result = nav.decide_navigation(128, 30, 255, 255, 255, 255, 0, (500, 0),
+                                       (128, 30, 40))
+        self.assertEqual(result[3], 0)
+        self.assertFalse(result[6] & nav.FLAG_BALL_IN_KICKER)
+
+    def test_no_kick_when_ball_and_goal_not_aligned(self):
+        # ボールとゴールが両方とも正面でも、方位が20°ずれていればキックしない
+        result = nav.decide_navigation(128, 30, 255, 255, 255, 255, 0, (500, 0),
+                                       (171, 9, 400))
+        self.assertEqual(result[3], 0)
+        self.assertEqual(result[5], "APPROACH")
+
+    def test_ball_in_kicker_flag(self):
+        result = nav.decide_navigation(128, 30, 255, 255, 255, 255, 0, (500, 0),
+                                       (128, 30, 4000))
+        self.assertTrue(result[6] & nav.FLAG_BALL_IN_KICKER)
 
 
 if __name__ == "__main__":
