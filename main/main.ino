@@ -1681,9 +1681,9 @@ constexpr bool kKickerHeadingWindowConfigured = false; // BNO055 unverified; use
 constexpr float kKickerHeadingToleranceDeg = 0.0f;
 // Kick timing: the IR ball bearing must stay inside this front window while approaching.
 constexpr float kKickerBallAngleToleranceDeg = 30.0f;
-// Conservative unverified starting values for the physical GPIO pulse; measure on the bench.
+// Conservative unverified pulse width; cooldown removed at the operator's request (fire as fast as pulses allow).
 constexpr uint32_t kKickerPulseMs = 30;
-constexpr uint32_t kKickerCooldownMs = 2000;
+constexpr uint32_t kKickerCooldownMs = 0;
 constexpr bool kDribblerHardwareConfigured = false;
 
 }} // namespace soccer::board
@@ -2133,12 +2133,14 @@ constexpr int8_t kOpenMvTxPin = 16;
 constexpr int8_t kOpenMvRxPin = 17;
 constexpr uint32_t kOpenMvBaud = 9600;
 constexpr uint8_t kOpenMvNavHeader = 0x20;
-constexpr uint8_t kOpenMvNavFrameSize = 7;
+constexpr uint8_t kOpenMvNavFrameSize = 8;
 constexpr uint32_t kOpenMvFreshTimeoutMs = 500;
 uint8_t openMvFrame[kOpenMvNavFrameSize]{};
 uint8_t openMvUsed = 0;
 Motion openMvMotion{};
 bool openMvKick = false;
+bool openMvVirtualLine = false;
+bool openMvPenaltyArea = false;
 bool openMvFresh = false;
 uint32_t lastOpenMvMs = 0;
 
@@ -2449,14 +2451,10 @@ bool sendLinePoll(uint32_t nowUs) {
 bool sendMotorCommand(uint32_t nowMs, uint32_t nowUs) {
     if (!rs485.canTransmit(nowUs)) return false;
     int16_t values[kMotorCommandWheelCount]{};
-    if (!motorStopPending && motorConsoleCommandSeen && !motorCommandExpired(nowMs, lastMotorConsoleCommandMs,
-                                                         kMotorConsoleTimeoutMs)) {
+    // No software timeout: the manual command stays valid until a new command or 'S'.
+    if (!motorStopPending && motorConsoleCommandSeen) {
         for (uint8_t i = 0; i < kMotorCommandWheelCount; ++i) values[i] = motorConsoleValues[i];
     } else if (!motorStopPending) {
-        if (motorConsoleCommandSeen) {
-            motorConsoleCommandSeen = false;
-            for (int16_t& value : motorConsoleValues) value = 0;
-        }
         if (!motorCommandValuesForMotion(motorMotion, motorEnabled, board::kMotorWheelConfig, values)) {
             ++motorTxErrors;
         } else if (motorEnabled) {
@@ -2554,11 +2552,7 @@ void pollMotorConsole(uint32_t nowMs) {
         motorConsoleLineLength = 0;
         motorConsoleOverflow = false;
     }
-    if (motorConsoleCommandSeen && motorCommandExpired(nowMs, lastMotorConsoleCommandMs,
-                                                        kMotorConsoleTimeoutMs)) {
-        motorConsoleCommandSeen = false;
-        for (int16_t& value : motorConsoleValues) value = 0;
-    }
+    // Software command timeout intentionally removed; 'S' is now the only manual stop.
 }
 
 void pollSharedBus(uint32_t nowMs) {
@@ -2627,6 +2621,8 @@ void receiveOpenMv(uint32_t nowMs) {
         if (!validMotion(motion)) continue;
         openMvMotion = motion;
         openMvKick = (openMvFrame[4] & 0x01) != 0;
+        openMvVirtualLine = (openMvFrame[6] & 0x01) != 0;
+        openMvPenaltyArea = (openMvFrame[6] & 0x02) != 0;
         openMvFresh = true;
         lastOpenMvMs = nowMs;
     }
@@ -2634,6 +2630,8 @@ void receiveOpenMv(uint32_t nowMs) {
         openMvFresh = false;
         openMvMotion = {};
         openMvKick = false;
+        openMvVirtualLine = false;
+        openMvPenaltyArea = false;
     }
 }
 
@@ -2741,7 +2739,8 @@ void loop() {
         kickerInput.armed = irTestController.armed() || openMvFresh;
         kickerInput.emergencyStop = false;
         kickerInput.fault = false;
-        kickerInput.lineClear = true;
+        // Camera-derived virtual line replaces the faulty LINE sensor for kick suppression.
+        kickerInput.lineClear = !(openMvFresh && openMvVirtualLine);
         if (openMvKick) {
             kickerInput.ballFresh = true;
             kickerInput.ballDetected = true;

@@ -963,15 +963,11 @@ static void testKickerFrontBearingTimingAndPulseOverride() {
     CHECK(out.state == kKickerFiring && out.pulseActive());
     out = kicker.update(input, 3 + board::kKickerPulseMs - 1, board::kKickerPulseMs, board::kKickerCooldownMs);
     CHECK(out.state == kKickerFiring && out.pulseActive());
-    out = kicker.update(input, 3 + board::kKickerPulseMs, board::kKickerPulseMs, board::kKickerCooldownMs);
-    CHECK(out.state == kKickerCooldown && !out.pulseActive());
-    const uint32_t cooldownStart = 3 + board::kKickerPulseMs;
-    out = kicker.update(input, cooldownStart + board::kKickerCooldownMs - 1,
-                        board::kKickerPulseMs, board::kKickerCooldownMs);
-    CHECK(out.state == kKickerCooldown && !out.pulseActive());
-    out = kicker.update(input, cooldownStart + board::kKickerCooldownMs,
-                        board::kKickerPulseMs, board::kKickerCooldownMs);
-    CHECK(out.state == kKickerReady && !out.pulseActive()); // Held request must not retrigger.
+    // kKickerCooldownMs is 0: after the pulse the controller returns to READY immediately.
+    const uint32_t pulseEnd = 3 + board::kKickerPulseMs;
+    out = kicker.update(input, pulseEnd, board::kKickerPulseMs, board::kKickerCooldownMs);
+    CHECK(out.state == kKickerReady && !out.pulseActive());
+    CHECK(board::kKickerCooldownMs == 0); // Cooldown removed at the operator's request.
 
     // Explicit timing overrides are honoured by the controller.
     KickerController custom;

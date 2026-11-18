@@ -217,6 +217,11 @@ def verify_active_sources():
         errors.append("MAIN must receive the OpenMV 0x20 navigation packet")
     if "openMvKick" not in main_source or "motorMotion = openMvMotion" not in main_source:
         errors.append("AUTO IR must accept OpenMV motion and kick commands without LINE")
+    if "openMvVirtualLine" not in main_source or "estimate_virtual_line" not in \
+       (ROOT / "openmv/goal_wall_navigation.py").read_text(encoding="utf-8"):
+        errors.append("virtual line from camera wall distance must gate the kicker")
+    if not re.search(r"constexpr\s+uint32_t\s+kKickerCooldownMs\s*=\s*0", source):
+        errors.append("kicker cooldown must remain removed at the operator's request")
     try:
         if not valid_motor_legacy_reference(LEGACY_MOTOR):
             errors.append("older MOTOR driver design must remain explicitly classified LEGACY_REFERENCE")

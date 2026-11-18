@@ -136,9 +136,9 @@ constexpr bool kKickerHeadingWindowConfigured = false; // BNO055 unverified; use
 constexpr float kKickerHeadingToleranceDeg = 0.0f;
 // Kick timing: the IR ball bearing must stay inside this front window while approaching.
 constexpr float kKickerBallAngleToleranceDeg = 30.0f;
-// Conservative unverified starting values for the physical GPIO pulse; measure on the bench.
+// Conservative unverified pulse width; cooldown removed at the operator's request (fire as fast as pulses allow).
 constexpr uint32_t kKickerPulseMs = 30;
-constexpr uint32_t kKickerCooldownMs = 2000;
+constexpr uint32_t kKickerCooldownMs = 0;
 constexpr bool kDribblerHardwareConfigured = false;
 
 }} // namespace soccer::board

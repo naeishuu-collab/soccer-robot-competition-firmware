@@ -1679,9 +1679,9 @@ constexpr bool kKickerHeadingWindowConfigured = false; // BNO055 unverified; use
 constexpr float kKickerHeadingToleranceDeg = 0.0f;
 // Kick timing: the IR ball bearing must stay inside this front window while approaching.
 constexpr float kKickerBallAngleToleranceDeg = 30.0f;
-// Conservative unverified starting values for the physical GPIO pulse; measure on the bench.
+// Conservative unverified pulse width; cooldown removed at the operator's request (fire as fast as pulses allow).
 constexpr uint32_t kKickerPulseMs = 30;
-constexpr uint32_t kKickerCooldownMs = 2000;
+constexpr uint32_t kKickerCooldownMs = 0;
 constexpr bool kDribblerHardwareConfigured = false;
 
 }} // namespace soccer::board
@@ -2197,14 +2197,9 @@ void rejectMotorFrame() {
 }
 
 void receiveCommands(uint32_t nowMs) {
-    if (hadValidCommand && motorCommandExpired(nowMs, lastCommandMs, kCommandTimeoutMs)) {
-        ++commandTimeouts;
-        hasCommand = false;
-        commandEnabled = false;
-        hadValidCommand = false;
-        for (int16_t& value : command) value = 0;
-        writeSafeStop();
-    }
+    // NOTE: the 300 ms command watchdog was intentionally removed at the operator's request.
+    // The last valid wheel command is now held indefinitely until a new frame or the 'S' stop frame.
+    // Only the physical MOTOR power switch is a guaranteed stop.
     uint8_t byte = 0;
     uint8_t consumed = 0;
     while (consumed++ < 64 && rs485.receiveByte(byte, micros())) {
@@ -2277,7 +2272,7 @@ void loop() {
     lastTickUs = nowUs;
     const uint32_t nowMs = millis();
     if (motorRs485PinsReady()) receiveCommands(nowMs);
-    const bool fresh = hasCommand && !motorCommandExpired(nowMs, lastCommandMs, kCommandTimeoutMs);
+    const bool fresh = hasCommand; // No software timeout: command stays valid until replaced or 'S'.
     const bool driveAllowed = motorHardwareReady() && fresh && commandEnabled;
     if (!driveAllowed || commandPriority.stopPending()) {
         writeSafeStop(); // A local timeout or a disabled/unconfigured system clears the last drive command.
