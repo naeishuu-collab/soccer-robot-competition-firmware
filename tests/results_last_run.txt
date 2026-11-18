@@ -1,4 +1,4 @@
-Host test record updated: 2026-11-17 22:56:25 +09:00
+Host test record updated: 2026-11-18 16:47:29 +09:00
 MSVC C++17 (/EHsc /utf-8 /std:c++17 /W4); direct compile/run; repository script policy unchanged.
 === test_core.cpp ===
 test_core.cpp
@@ -12,6 +12,7 @@ PASS MOTOR frame round trip, range, checksum and timeout
 PASS MOTOR ignores valid shared-bus IR and LINE frames
 PASS MOTOR direct console command parsing
 PASS AUTO command modes and fail-closed gates
+PASS USB input cancels boot AUTO IR auto-arm
 PASS IR test mode continuous tracking and coarse steering
 PASS AUTO PWM caps
 PASS RS485 half-duplex order and failure recovery
@@ -63,7 +64,7 @@ PASS MOTOR safety fault latch and re-arm
 PASS Heading fault recovery and re-arm
 PASS Emergency stop latch
 PASS Unspecified safety inputs fail closed
-UNIT SUMMARY: 60 cases, 1791 checks, 0 failed
+UNIT SUMMARY: 61 cases, 3794 checks, 0 failed
 RUN: PASS
 === test_integration.cpp ===
 test_integration.cpp

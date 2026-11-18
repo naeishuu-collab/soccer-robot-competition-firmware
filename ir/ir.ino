@@ -2397,8 +2397,10 @@ void sendIRResponse() {
     direction =
       (uint16_t)(predictedAngle + 0.5f) % 360;
 
+    // A non-finite value must not reach the integer cast below; normal values are unchanged.
+    const float signal = isfinite(filteredRelativeSignal) ? filteredRelativeSignal : 0.0f;
     float limited = constrain(
-      filteredRelativeSignal,
+      signal,
       1.0f,
       65535.0f
     );

@@ -2086,6 +2086,7 @@ int16_t motorConsoleValues[kMotorCommandWheelCount]{};
 char motorConsoleLine[kMotorConsoleLineCapacity]{};
 uint8_t motorConsoleLineLength = 0;
 bool motorConsoleOverflow = false;
+bool bootAutoArmNoticeSent = false;
 bool motorConsoleCommandSeen = false;
 uint32_t lastMotorConsoleCommandMs = 0;
 uint32_t lastIrPacketMs = 0;
@@ -2450,6 +2451,16 @@ bool sendMotorCommand(uint32_t nowMs, uint32_t nowUs) {
 }
 
 void pollMotorConsole(uint32_t nowMs) {
+    // Any USB byte cancels the one-shot boot AUTO IR auto-arm immediately.
+    // Previously this only happened when a complete line ended with '\n'.
+    if (Serial.available() > 0) {
+        irTestController.disableAutoStart();
+        if (!bootAutoArmNoticeSent) {
+            bootAutoArmNoticeSent = true;
+            if (Serial && Serial.availableForWrite() >= 64)
+                Serial.println("USB input received; boot AUTO IR auto-arm disabled");
+        }
+    }
     while (Serial.available()) {
         const int readValue = Serial.read();
         if (readValue < 0) break;
@@ -2468,7 +2479,7 @@ void pollMotorConsole(uint32_t nowMs) {
         const MainConsoleCommand command = motorConsoleOverflow
                                                ? kConsoleInvalid
                                                : parseMainConsoleCommand(motorConsoleLine, parsed);
-        irTestController.disableAutoStart();
+        // Boot auto-arm was already cancelled by the first received byte above.
         if (command == kConsoleAutoWheelLift || command == kConsoleAutoFloor ||
             command == kConsoleAutoIrTest) {
             autoMode = autoModeForCommand(command, board::kAutoWheelLiftReady, board::kAutoFloorReady);

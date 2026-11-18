@@ -318,6 +318,21 @@ static void testMainConsoleAutoModesAndFailClosedGates() {
     CHECK(!board::kLineDebounceConfigured);
 }
 
+static void testUsbInputCancelsBootAutoArm() {
+    // MAIN calls disableAutoStart() on the first USB byte, not only on a complete line.
+    IrTestController controller;
+    Motion motion{1.0f, 1.0f, 1.0f};
+    controller.disableAutoStart();
+    for (uint16_t i = 0; i < 1000; ++i) {
+        CHECK(!controller.armOnFirstFreshBall(true, true, static_cast<uint16_t>(i % 360)));
+        CHECK(!controller.armed());
+    }
+    // An explicit manual ARM remains available after the boot auto-arm is cancelled.
+    CHECK(controller.arm(true, true, 0));
+    CHECK(controller.update(true, true, 0, motion));
+    CHECK(controller.armed());
+}
+
 static void testIrTestContinuousTrackingAndCoarseSteering() {
     IrTestController controller;
     Motion motion{1.0f, 1.0f, 1.0f};
@@ -1393,6 +1408,7 @@ int main() {
         {"MOTOR ignores valid shared-bus IR and LINE frames", testMotorParserIgnoresSharedBusTraffic},
         {"MOTOR direct console command parsing", testMotorConsoleCommandParsing},
         {"AUTO command modes and fail-closed gates", testMainConsoleAutoModesAndFailClosedGates},
+        {"USB input cancels boot AUTO IR auto-arm", testUsbInputCancelsBootAutoArm},
         {"IR test mode continuous tracking and coarse steering", testIrTestContinuousTrackingAndCoarseSteering},
         {"AUTO PWM caps", testAutoMotorPwmCaps},
         {"RS485 half-duplex order and failure recovery", testRs485HalfDuplexOrderingAndFailure},
