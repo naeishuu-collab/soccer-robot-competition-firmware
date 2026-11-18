@@ -2,7 +2,7 @@
 #include <Arduino.h>
 #include <math.h>
 
-// shortcut: shared modules are copied into four sketches; automate synchronization if updates start drifting.
+// 暫定: 共通モジュールは4スケッチに複製している。差が出たら同期を自動化する。
 // BEGIN INTEGRATED COMMON CODE
 #include <stdint.h>
 
@@ -273,7 +273,7 @@ public:
             return kMotorFrameInvalid;
         }
 
-        // shortcut: skip LINE by header/length, not CRC; add CRC checks if MOTOR must own LINE integrity.
+        // 暫定: LINEはヘッダ/長さで読み飛ばし（CRCは検査しない）。MOTOR側で完全性を担保するならCRC検査を追加。
         if (lineFrameUsed_) {
             if (lineFrameUsed_ == 1 && byte != kFrameStart1) {
                 resetLineFrame();
@@ -384,7 +384,7 @@ private:
     uint32_t lineFrameLastByteMs_ = 0;
 };
 
-// The legacy IR request is a single 0x01 byte; skip framed bus traffic so 0x01 inside a frame is not a request.
+// 従来のIR要求は1バイトの0x01。フレーム内の0x01を要求と誤認しないよう、フレーム形式の通信は読み飛ばす。
 class SharedBusIrRequestParser {
 public:
     bool feed(uint8_t byte, uint32_t nowMs) {
@@ -487,7 +487,7 @@ public:
         last_ = sequence;
         return true;
     }
-    // Start a new peer baseline after a communication outage; keep lifetime diagnostics.
+    // 通信途切れ後は相手側の連番基準をリセットする。累計診断値は維持する。
     void resetPeer() { seen_ = false; }
     uint16_t gaps() const { return gaps_; }
     uint16_t rejected() const { return rejected_; }
@@ -570,15 +570,15 @@ constexpr uint8_t kLineFlagPolarityValid = 0x08;
 constexpr uint8_t kLineFlagActiveHigh = 0x10;
 
 struct LineObservation {
-    uint32_t rawLevels = 0; // Reportable 24-bit input levels after configured filtering and disabled-sensor masking.
-    uint32_t bits = 0;      // Active white-line mask, populated only after polarity is configured.
+    uint32_t rawLevels = 0; // 設定済みフィルタと無効センサーマスク適用後の報告用24ビット入力。
+    uint32_t bits = 0;      // 有効な白線マスク。極性設定後にのみ値が入る。
     uint8_t count = 0;
     bool detected = false;
     bool ambiguous = false;
     bool polarityValid = false;
     bool activeHigh = false;
     bool directionValid = false;
-    int16_t angleCdeg = kNoLineAngle;  // Direction of detected white line, clockwise-positive from front.
+    int16_t angleCdeg = kNoLineAngle;  // 検出した白線の方向。機体前方から時計回りが正。
 };
 
 class LineDebouncer {
@@ -631,7 +631,7 @@ private:
 
 struct IrDirectionEstimate {
     float angleDeg = 0.0f;
-    float coherence = 0.0f; // Geometric sensor agreement, not a calibrated probability.
+    float coherence = 0.0f; // センサー幾何学的一致度。較正済み確率ではない。
     uint32_t totalWeight = 0;
     bool valid = false;
 };
@@ -675,7 +675,7 @@ constexpr uint32_t makeLineSensorEnabledMask(const bool enabled[24]) {
     return mask;
 }
 
-// Angles are per-sensor centidegrees, measured clockwise from robot-front; validMask marks surveyed entries.
+// 角度はセンサーごとの1/100度で、機体前方から時計回りに計測。validMask は実測済みエントリを示す。
 inline LineObservation calculateLine(uint32_t rawLevels, bool polarityValid, bool activeHigh,
                                      const int16_t angleCdeg[24], uint32_t validAngleMask,
                                      uint32_t enabledSensorMask = 0x00FFFFFFu) {
@@ -685,7 +685,7 @@ inline LineObservation calculateLine(uint32_t rawLevels, bool polarityValid, boo
     result.polarityValid = polarityValid;
     result.activeHigh = polarityValid && activeHigh;
     if (!polarityValid) {
-        result.count = countBits24(result.rawLevels & enabledSensorMask); // Diagnostic count of enabled HIGH levels only.
+        result.count = countBits24(result.rawLevels & enabledSensorMask); // 診断用。有効センサーのHIGHレベルのみ数える。
         return result;
     }
     result.bits = (activeHigh ? result.rawLevels : (~result.rawLevels & 0x00FFFFFFu)) & enabledSensorMask;
@@ -783,14 +783,14 @@ inline bool decodeLinePacket(const Packet& p, LineObservation& line,
 }
 
 struct Motion {
-    float x = 0.0f;    // Right, normalized -1..1.
-    float y = 0.0f;    // Forward, normalized -1..1.
-    float turn = 0.0f; // Counter-clockwise, normalized -1..1.
+    float x = 0.0f;    // 右方向、正規化 -1..1。
+    float y = 0.0f;    // 前方向、正規化 -1..1。
+    float turn = 0.0f; // 反時計回り、正規化 -1..1。
 };
 
 constexpr uint8_t kIrTestPwmCap = 16;
 
-// shortcut: wheel geometry is provisional; replace after a four-wheel direction check.
+// 暫定: 車輪ジオメトリは仮値。4輪の方向確認後に差し替える。
 inline bool irTestMotionForBearing(uint16_t directionDeg, Motion& motion) {
     motion = {};
     if (directionDeg >= 360) return false;
@@ -928,7 +928,7 @@ inline bool tb67h450RequiresNeutralDwell(Tb67h450Mode appliedMode, Tb67h450Mode 
 }
 
 inline bool validMotorPwmSettings(uint32_t frequencyHz, uint16_t range, uint32_t clockHz) {
-    // The Arduino-Pico core reduces timer range when one PWM period has fewer source-clock ticks.
+    // Arduino-Picoコアは、1PWM周期のソースクロック刻みが少ないとタイマー範囲を縮める。
     return frequencyHz >= 100 && frequencyHz <= 1000000 && range == kMotorPwmRange &&
            static_cast<uint64_t>(frequencyHz) * range <= clockHz;
 }
@@ -946,7 +946,7 @@ inline bool validMotorPinMap(const Tb67h450ChannelConfig driver[4], uint64_t pwm
     for (uint8_t i = 0; i < 4; ++i) {
         if (driver[i].maxDuty == 0 || driver[i].maxDuty > kTb67h450MaxDuty) return false;
         const int8_t pins[2] = {driver[i].pinIn1, driver[i].pinIn2};
-        // The paired brake transition uses one atomic SIO-bank write.
+        // ブレーキへの同時遷移はSIOバンクへの1回のアトミック書き込みで行う。
         if ((pins[0] < 32) != (pins[1] < 32)) return false;
         for (uint8_t j = 0; j < 2; ++j) {
             if (pins[j] < 0 || pins[j] >= gpioCount) return false;
@@ -1294,7 +1294,7 @@ inline float shortestAngleError(float target, float current) {
     return error;
 }
 
-// Uses at most the newest three valid sample intervals and wraps the bearing across 0 degrees.
+// 最新3件の有効なサンプリング間隔のみを使い、方位は0度をまたいで処理する。
 struct IrPrediction {
     float angleDeg = 0.0f;
     float relativeSignal = 0.0f;
@@ -1502,7 +1502,7 @@ public:
             if (ballAngleInitialized_) filtered = normalizeDegrees(ballAngle_ + shortestAngleError(angle, ballAngle_) * 0.25f);
             ballAngle_ = filtered;
             ballAngleInitialized_ = true;
-            // shortcut: 200-count midpoint is provisional; tune from sensor logs before arming.
+            // 暫定: 200カウントを中点として使用。ARM前にセンサーログで調整する。
             const float magnitude = 0.2f + 0.35f * (in.relativeSignal / (in.relativeSignal + 200.0f));
             out.motion.x = sinf(filtered * 0.01745329252f) * magnitude;
             out.motion.y = cosf(filtered * 0.01745329252f) * magnitude;
@@ -1550,12 +1550,12 @@ private:
 
 namespace soccer { namespace board {
 
-// MAIN, IR, and LINE pin maps follow the current project configuration; verify physical continuity on the board.
-// MOTOR routes below use the user's reference code; RS485 and safety wiring remain physically unverified.
+// MAIN/IR/LINEのピン配置は現行プロジェクト設定に従う。基板の物理導通は要確認。
+// 以下のMOTOR配線はユーザーの参考コード準拠。RS485と安全回路の実配線は未検証。
 constexpr int8_t kMainRs485TxPin = 0;
 constexpr int8_t kMainRs485RxPin = 1;
 constexpr int8_t kMainRs485DePin = 8;
-constexpr int8_t kKickerPin = 11; // User-reported MAIN wiring; circuit review is still pending.
+constexpr int8_t kKickerPin = 11; // ユーザー報告のMAIN配線。回路レビューは未完。
 
 constexpr int8_t kIrRs485TxPin = 0;
 constexpr int8_t kIrRs485RxPin = 1;
@@ -1582,14 +1582,14 @@ constexpr int8_t kMotorRs485TxPin = 0;
 constexpr int8_t kMotorRs485RxPin = 1;
 constexpr int8_t kMotorRs485DePin = 2;
 constexpr int8_t kMotorRs485SharedDePin = -1;
-// Matches the user-reported working MOTOR test code (RP2354B + TB67H450 x4).
+// ユーザー報告の動作MOTORテストコードに一致 (RP2354B + TB67H450 x4)。
 constexpr int8_t kMotorIn1Pins[4] = {6, 12, 11, 9};
 constexpr int8_t kMotorIn2Pins[4] = {7, 13, 10, 8};
-// The user-reported J2 left-front pins are retained for test provenance.
+// ユーザー報告のJ2左前ピンは、テストの来歴として残している。
 constexpr int8_t kMotorTestIn1CandidatePin = 12;
 constexpr int8_t kMotorTestIn2CandidatePin = 13;
-constexpr uint8_t kMotorGpioCount = 30; // The final ZIP's MOTOR parent-board BOM specifies RP2354A.
-constexpr bool kMotorRs485PinsConfigured = true; // From the reference code, not a hardware test.
+constexpr uint8_t kMotorGpioCount = 30; // 最終ZIPのMOTOR親基板BOMはRP2354Aを指定。
+constexpr bool kMotorRs485PinsConfigured = true; // 参考コード由来。ハードウェア試験済みではない。
 constexpr uint64_t kMotorPwmPinMask = (1u << 6) | (1u << 7) | (1u << 8) | (1u << 9) |
                                       (1u << 10) | (1u << 11) | (1u << 12) | (1u << 13);
 constexpr uint64_t kMotorReservedPinMask = (1u << 0) | (1u << 1) | (1u << 2);
@@ -1597,13 +1597,13 @@ constexpr uint64_t kMotorSafetyReservedPinMask = kMotorPwmPinMask | kMotorReserv
 
 constexpr float kMotorWheelRadiusMm = 30.0f;
 constexpr float kMotorCenterToWheelMm = 94.762f;
-// Candidate mapping used by the host integration model; polarity and roller directions need a four-wheel test.
+// ホスト統合モデルで使う候補マッピング。極性とローラー方向は4輪実機試験で要確認。
 constexpr WheelConfig kMotorWheelConfig[4] = {
     {1, -1, 45, 1}, {-1, 1, 225, 1}, {1, 1, 135, 1}, {-1, -1, 315, 1}
 };
 constexpr bool kMotorWheelConfigConfigured = false;
 
-// No MOTOR safety input pins or electrical bias have been confirmed on the manufactured board.
+// 量産基板ではMOTORの安全入力ピンも電気的バイアスも未確認。
 constexpr int8_t kMotorArmPin = -1;
 constexpr int8_t kMotorEStopPin = -1;
 constexpr int8_t kMotorClearFaultPin = -1;
@@ -1612,7 +1612,7 @@ constexpr int8_t kMotorEStopActiveLevel = -1;
 constexpr int8_t kMotorClearFaultActiveLevel = -1;
 constexpr bool kMotorSafetyInputBiasVerified = false;
 
-// MAIN has no physical E-stop; keep its safety GPIOs unassigned and competition AUTO fail-closed.
+// MAINには物理E-stopがない。安全GPIOは未割当てのままにし、競技用AUTOは不成立時に停止する fail-close とする。
 constexpr int8_t kMainArmPin = -1;
 constexpr int8_t kMainEStopPin = -1;
 constexpr int8_t kMainClearFaultPin = -1;
@@ -1623,19 +1623,19 @@ constexpr bool kMainSafetyInputBiasVerified = false;
 constexpr uint32_t kMainSafetyReservedPinMask = (1u << 0) | (1u << 1) | (1u << 4) |
                                                 (1u << 5) | (1u << 8) | (1u << 11);
 
-// BNO055 signals are on the MAIN processor in the ir&main schematic.
+// ir&main 回路図では BNO055 の信号は MAIN プロセッサ側に接続されている。
 constexpr int8_t kBnoSdaPin = 4;
 constexpr int8_t kBnoSclPin = 5;
 constexpr uint32_t kBnoI2cClockHz = 50000;
 constexpr uint8_t kBnoAddress = 0x28;
-constexpr bool kBnoOffsetsVerified = true; // Offsets from the user-reported working BNO055 test code.
+constexpr bool kBnoOffsetsVerified = true; // ユーザー報告の動作BNO055テストコード由来のオフセット。
 constexpr bool kAttackHeadingConfigured = false;
-constexpr float kAttackHeadingDeg = 0.0f; // Relative to the first settled heading; ignored until configured.
+constexpr float kAttackHeadingDeg = 0.0f; // 最初に安定した方位を基準とする。設定されるまで無視。
 
-constexpr bool kLineDebounceConfigured = false; // Candidate filter stays off until sensor edge timing is measured.
+constexpr bool kLineDebounceConfigured = false; // 候補フィルタ。センサーエッジタイミング実測まで無効。
 constexpr uint8_t kLineDebounceSamples = 2;
 constexpr bool kLinePolarityConfigured = false;
-constexpr bool kLineDetectHigh = true; // Candidate only; ignored until polarity is measured.
+constexpr bool kLineDetectHigh = true; // 候補値のみ。極性実測まで無視される。
 // 添付soccer.zipのsoccer/line2/line2.kicad_pcbにあるQ1..Q24の座標から算出した基板基準角度[1/100度]。中心(100,100)、基板上方向0°、時計回りで1°単位に丸めた値。
 // PCBリビジョン、Q番号と実配線chの対応、機体前方オフセット、入力極性は未確認。故障6ch(1,5,8,9,11,21)は kLineSensorEnabled により制御には使われない。
 constexpr int32_t kLineBoardAngleCdeg[24] = {
@@ -1662,10 +1662,10 @@ constexpr const int16_t (&kLineSensorAngleCdeg)[24] = kLineAngleTable.v;
 constexpr bool kLineAnglesConfigured = false; // 前方オフセット実測後に kLineFrontOffsetConfigured と同時に true にする。
 constexpr uint32_t kLineSensorAngleValidMask = kLineSensorEnabledMask;
 static_assert(!kLineAnglesConfigured || kLineFrontOffsetConfigured, "LINE angles need a measured front offset");
-constexpr bool kMotorHardwareConfigured = true; // Uses the user's four-wheel tested TB67H450 pin map.
+constexpr bool kMotorHardwareConfigured = true; // ユーザーが4輪で動作確認したTB67H450ピン配置を使用。
 constexpr bool kCompetitionArmed = false;
 constexpr uint32_t kMotorPwmFrequencyHz = kTb67h450PwmFrequencyHz;
-// Compile-time setup gates; runtime sensor freshness and the physical ARM/E-stop path are still required.
+// コンパイル時の設定ゲート。実行時のセンサー鮮度と物理ARM/非常停止の経路も別途必要。
 constexpr bool kAutoWheelLiftReady = kCompetitionArmed && kMotorWheelConfigConfigured &&
                                      kMainSafetyInputBiasVerified && kMotorSafetyInputBiasVerified &&
                                      kLinePolarityConfigured;
@@ -1674,15 +1674,15 @@ constexpr bool kAutoFloorReady = kAutoWheelLiftReady &&
                                  kLineAnglesConfigured && kLineDebounceConfigured &&
                                  kBnoOffsetsVerified && kAttackHeadingConfigured;
 static_assert(!kAutoFloorReady || kAutoWheelLiftReady, "floor AUTO needs wheel-lift AUTO prerequisites");
-// Firmware gates enabled for the reported MAIN GPIO11 kicker connection.
-// The high-voltage charge/discharge circuit still needs its separate hardware review.
+// 報告された MAIN GPIO11 のキッカー配線に合わせてファームウェア側ゲートを有効化。
+// 高電圧の充放電回路は別途ハードウェアレビューが必要。
 constexpr bool kKickerHardwareConfigured = true;
 constexpr bool kKickerRequestPolicyConfigured = true;
-constexpr bool kKickerHeadingWindowConfigured = false; // BNO055 unverified; use IR bearing instead.
+constexpr bool kKickerHeadingWindowConfigured = false; // BNO055は未検証のため、代わりにIR方位を使う。
 constexpr float kKickerHeadingToleranceDeg = 0.0f;
-// Kick timing: the IR ball bearing must stay inside this front window while approaching.
+// キック判定: 接近中はIRボール方位がこの正面範囲内に留まる必要がある。
 constexpr float kKickerBallAngleToleranceDeg = 30.0f;
-// Conservative unverified pulse width; cooldown removed at the operator's request (fire as fast as pulses allow).
+// 安全側に倒した未検証のパルス幅。クールダウンは運用者要望で削除済み（パルス間隔だけが制限）。
 constexpr uint32_t kKickerPulseMs = 30;
 constexpr uint32_t kKickerCooldownMs = 0;
 constexpr bool kDribblerHardwareConfigured = false;
@@ -1705,9 +1705,9 @@ struct Bno055Io {
 
 struct Bno055Sample {
     bool connected = false;
-    bool headingValid = false; // Requires a finite 0..360 reading and SYS calibration==3.
+    bool headingValid = false; // 有限な0..360の読値と SYS calibration==3 が必要。
     float headingDeg = 0.0f;
-    uint8_t calibration[4]{}; // SYS, gyro, accelerometer, magnetometer.
+    uint8_t calibration[4]{}; // SYS、ジャイロ、加速度計、磁力計。
     uint8_t address = 0;
 };
 
@@ -1741,8 +1741,8 @@ public:
         }
         sample.connected = true;
         sample.headingDeg = heading;
-        // Keep the working test's criterion: a finite 0..360 heading is usable in IMUPLUS.
-        // The working test never required SYS calibration==3.
+        // 実機動作テストの判定を維持: 有限な0..360の方位ならIMUPLUSで使用可能。
+        // 動作テストでは SYS calibration==3 は要求していなかった。
         sample.headingValid = isfinite(heading) && heading >= 0.0f && heading < 360.0f;
         return sample.headingValid;
     }
@@ -1757,7 +1757,7 @@ private:
     uint32_t lastAttemptMs_ = 0;
 };
 
-// Host simulation only; never use these values as physical kicker timing.
+// ホスト側シミュレーション専用。実機キッカーのタイミングには絶対に使わない。
 constexpr uint32_t kKickerMockPulseMs = 60;
 constexpr uint32_t kKickerMockCooldownMs = 1000;
 
@@ -1780,7 +1780,7 @@ struct KickerInput {
     bool headingValid = false;
     bool headingAligned = false;
     bool lineClear = false;
-    bool ballAligned = false; // IR ball bearing is inside the front kick window.
+    bool ballAligned = false; // IRボール方位が正面キック範囲内かどうか。
 };
 
 inline bool kickerRequestAllowed(bool policyConfigured, bool approachingBall, const KickerInput& in) {
@@ -1799,7 +1799,7 @@ struct KickerOutput {
     KickerState state = kKickerDisarmed;
     bool mockPulseActive = false;
     KickerEvent event = kKickerNoEvent;
-    bool pulseActive() const { return mockPulseActive; } // Physical GPIO adapter reads this.
+    bool pulseActive() const { return mockPulseActive; } // 物理GPIOアダプタはこれを読む。
 };
 
 class KickerController {
@@ -1847,7 +1847,7 @@ public:
 
     KickerState state() const { return state_; }
     bool mockPulseActive() const { return mockPulseActive_; }
-    bool pulseActive() const { return mockPulseActive_; } // Name used by the physical GPIO adapter.
+    bool pulseActive() const { return mockPulseActive_; } // 物理GPIOアダプタが使う名前。
     uint8_t eventHistoryCount() const { return eventCount_; }
 
     bool eventHistoryAt(uint8_t oldestFirstIndex, KickerEventRecord& record) const {
@@ -1903,15 +1903,15 @@ public:
 
 namespace soccer {
 
-constexpr uint32_t kRs485QuietUs = 100; // One 115200-baud character time before the master starts another frame.
+constexpr uint32_t kRs485QuietUs = 100; // 親局が次のフレームを送る前に1文字分(115200bps)の静穏時間を置く。
 
 struct Rs485Io {
     void* context = nullptr;
     int (*available)(void*) = nullptr;
     int (*read)(void*) = nullptr;
-    void (*setTransmit)(void*, bool) = nullptr; // true=DE high, false=receive (/RE low when tied to DE).
+    void (*setTransmit)(void*, bool) = nullptr; // true=DE High、false=受信（DEと共通接続時は/RE Low）。
     size_t (*write)(void*, const uint8_t*, size_t) = nullptr;
-    void (*flush)(void*) = nullptr; // Must wait for the UART shift register, not only the software queue.
+    void (*flush)(void*) = nullptr; // ソフトウェアキューだけでなくUARTシフトレジスタの完了まで待つ必要がある。
     void (*delayMicros)(void*, uint32_t) = nullptr;
 };
 
@@ -2034,7 +2034,7 @@ private:
 using namespace soccer;
 
 // ========================================
-// IR SENSOR SUB - ADVANCED TRACKING
+// IRセンサーボード - 高度追跡処理
 // RP2354A / TSSP58038 x 12
 //
 // RS485:
@@ -2042,8 +2042,8 @@ using namespace soccer;
 // RX = GPIO1
 // DE = GPIO2
 //
-// Request: 0x01
-// Response:
+// 要求: 0x01
+// 応答:
 // AA PRED_H PRED_L DIST_H DIST_L 55
 // ========================================
 
@@ -2089,7 +2089,7 @@ const int16_t sinTable[SENSOR_COUNT] = {
 };
 
 // ========================================
-// Sensor history
+// センサー履歴
 // ========================================
 
 uint16_t detectCount[SENSOR_COUNT] = {};
@@ -2103,7 +2103,7 @@ uint8_t sensorHead = 0;
 uint8_t sensorHistoryCount = 0;
 
 // ========================================
-// Relative-signal history
+// 相対信号の履歴
 // ========================================
 
 uint32_t relativeSignalHistory[RELATIVE_SIGNAL_HISTORY_SIZE] = {};
@@ -2112,7 +2112,7 @@ uint8_t relativeSignalHead = 0;
 uint8_t relativeSignalCount = 0;
 
 // ========================================
-// Prediction history
+// 予測履歴
 // ========================================
 
 float angleHistory[PRED_HISTORY_SIZE] = {};
@@ -2123,7 +2123,7 @@ uint8_t predHead = 0;
 uint8_t predCount = 0;
 
 // ========================================
-// Output values
+// 出力値
 // ========================================
 
 float rawAngle = 0;
@@ -2133,7 +2133,7 @@ float predictedRelativeSignal = 0;
 
 uint32_t rawRelativeSignal = 0;
 uint32_t totalDetect = 0;
-float directionCoherence = 0.0f; // Geometric sensor agreement, not a probability.
+float directionCoherence = 0.0f; // センサー幾何学的一致度。確率ではない。
 uint32_t lastSensorSampleMs = 0;
 bool sensorSampled = false;
 
@@ -2142,7 +2142,7 @@ bool ballFound = false;
 uint32_t lastDebugTime = 0;
 
 // ========================================
-// Reset tracking
+// 追跡状態のリセット
 // ========================================
 
 void resetTracking() {
@@ -2173,7 +2173,7 @@ void resetTracking() {
 }
 
 // ========================================
-// Sensor sampling
+// センサーサンプリング
 // ========================================
 
 void sampleSensors() {
@@ -2195,7 +2195,7 @@ void sampleSensors() {
 }
 
 // ========================================
-// Update sensor history
+// センサー履歴の更新
 // ========================================
 
 void updateSensorHistory() {
@@ -2219,7 +2219,7 @@ void updateSensorHistory() {
 }
 
 // ========================================
-// Direction calculation
+// 方向計算
 // ========================================
 
 void calculateDirection() {
@@ -2232,7 +2232,7 @@ void calculateDirection() {
 }
 
 // ========================================
-// Top 6 relative-signal indicator
+// 相対信号が上位6個のインジケータ
 // ========================================
 
 uint32_t calculateRawRelativeSignal() {
@@ -2259,12 +2259,12 @@ uint32_t calculateRawRelativeSignal() {
 
   uint32_t avg = (uint32_t)(sumTop6 / 6);
 
-  // Relative detector indicator only; no physical distance without calibration
+  // 相対的な検出指標のみ。較正なしでは物理距離にならない。
   return avg;
 }
 
 // ========================================
-// Relative-signal history
+// 相対信号の履歴
 // ========================================
 
 void pushRelativeSignal(uint32_t value) {
@@ -2279,7 +2279,7 @@ void pushRelativeSignal(uint32_t value) {
 }
 
 // ========================================
-// Weighted relative-signal average
+// 相対信号の重み付き平均
 // ========================================
 
 float getWeightedRelativeSignal() {
@@ -2338,7 +2338,7 @@ float getWeightedRelativeSignal() {
 }
 
 // ========================================
-// Prediction history
+// 予測履歴
 // ========================================
 
 void pushPrediction(
@@ -2358,7 +2358,7 @@ void pushPrediction(
 }
 
 // ========================================
-// Future bearing and relative-signal trend prediction
+// 将来方位と相対信号の推移予測
 // ========================================
 
 void calculatePrediction() {
@@ -2370,7 +2370,7 @@ void calculatePrediction() {
 }
 
 // ========================================
-// Full IR processing
+// IR処理まとめ
 // ========================================
 
 void updateIR() {
@@ -2401,7 +2401,7 @@ void updateIR() {
 }
 
 // ========================================
-// RS485 response
+// RS485応答
 // ========================================
 
 void sendIRResponse() {
@@ -2412,7 +2412,7 @@ void sendIRResponse() {
     direction =
       (uint16_t)(predictedAngle + 0.5f) % 360;
 
-    // A non-finite value must not reach the integer cast below; normal values are unchanged.
+    // 非有限値が下の整数変換に渡らないようにする。通常値はそのまま。
     const float signal = isfinite(filteredRelativeSignal) ? filteredRelativeSignal : 0.0f;
     float limited = constrain(
       signal,
@@ -2429,7 +2429,7 @@ void sendIRResponse() {
 }
 
 // ========================================
-// RS485 request handler
+// RS485要求処理
 // ========================================
 
 void handleRS485() {
@@ -2442,7 +2442,7 @@ void handleRS485() {
 }
 
 // ========================================
-// Debug
+// デバッグ出力
 // ========================================
 
 void printDebug() {
@@ -2508,7 +2508,7 @@ void setup() {
 }
 
 // ========================================
-// LOOP
+// ループ処理
 // ========================================
 
 void loop() {

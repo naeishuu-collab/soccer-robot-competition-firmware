@@ -16,9 +16,9 @@ struct Bno055Io {
 
 struct Bno055Sample {
     bool connected = false;
-    bool headingValid = false; // Requires a finite 0..360 reading and SYS calibration==3.
+    bool headingValid = false; // 有限な0..360の読値と SYS calibration==3 が必要。
     float headingDeg = 0.0f;
-    uint8_t calibration[4]{}; // SYS, gyro, accelerometer, magnetometer.
+    uint8_t calibration[4]{}; // SYS、ジャイロ、加速度計、磁力計。
     uint8_t address = 0;
 };
 
@@ -52,8 +52,8 @@ public:
         }
         sample.connected = true;
         sample.headingDeg = heading;
-        // Keep the working test's criterion: a finite 0..360 heading is usable in IMUPLUS.
-        // The working test never required SYS calibration==3.
+        // 実機動作テストの判定を維持: 有限な0..360の方位ならIMUPLUSで使用可能。
+        // 動作テストでは SYS calibration==3 は要求していなかった。
         sample.headingValid = isfinite(heading) && heading >= 0.0f && heading < 360.0f;
         return sample.headingValid;
     }
@@ -68,7 +68,7 @@ private:
     uint32_t lastAttemptMs_ = 0;
 };
 
-// Host simulation only; never use these values as physical kicker timing.
+// ホスト側シミュレーション専用。実機キッカーのタイミングには絶対に使わない。
 constexpr uint32_t kKickerMockPulseMs = 60;
 constexpr uint32_t kKickerMockCooldownMs = 1000;
 
@@ -91,7 +91,7 @@ struct KickerInput {
     bool headingValid = false;
     bool headingAligned = false;
     bool lineClear = false;
-    bool ballAligned = false; // IR ball bearing is inside the front kick window.
+    bool ballAligned = false; // IRボール方位が正面キック範囲内かどうか。
 };
 
 inline bool kickerRequestAllowed(bool policyConfigured, bool approachingBall, const KickerInput& in) {
@@ -110,7 +110,7 @@ struct KickerOutput {
     KickerState state = kKickerDisarmed;
     bool mockPulseActive = false;
     KickerEvent event = kKickerNoEvent;
-    bool pulseActive() const { return mockPulseActive; } // Physical GPIO adapter reads this.
+    bool pulseActive() const { return mockPulseActive; } // 物理GPIOアダプタはこれを読む。
 };
 
 class KickerController {
@@ -158,7 +158,7 @@ public:
 
     KickerState state() const { return state_; }
     bool mockPulseActive() const { return mockPulseActive_; }
-    bool pulseActive() const { return mockPulseActive_; } // Name used by the physical GPIO adapter.
+    bool pulseActive() const { return mockPulseActive_; } // 物理GPIOアダプタが使う名前。
     uint8_t eventHistoryCount() const { return eventCount_; }
 
     bool eventHistoryAt(uint8_t oldestFirstIndex, KickerEventRecord& record) const {

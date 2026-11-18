@@ -13,15 +13,15 @@ constexpr uint8_t kLineFlagPolarityValid = 0x08;
 constexpr uint8_t kLineFlagActiveHigh = 0x10;
 
 struct LineObservation {
-    uint32_t rawLevels = 0; // Reportable 24-bit input levels after configured filtering and disabled-sensor masking.
-    uint32_t bits = 0;      // Active white-line mask, populated only after polarity is configured.
+    uint32_t rawLevels = 0; // 設定済みフィルタと無効センサーマスク適用後の報告用24ビット入力。
+    uint32_t bits = 0;      // 有効な白線マスク。極性設定後にのみ値が入る。
     uint8_t count = 0;
     bool detected = false;
     bool ambiguous = false;
     bool polarityValid = false;
     bool activeHigh = false;
     bool directionValid = false;
-    int16_t angleCdeg = kNoLineAngle;  // Direction of detected white line, clockwise-positive from front.
+    int16_t angleCdeg = kNoLineAngle;  // 検出した白線の方向。機体前方から時計回りが正。
 };
 
 class LineDebouncer {
@@ -74,7 +74,7 @@ private:
 
 struct IrDirectionEstimate {
     float angleDeg = 0.0f;
-    float coherence = 0.0f; // Geometric sensor agreement, not a calibrated probability.
+    float coherence = 0.0f; // センサー幾何学的一致度。較正済み確率ではない。
     uint32_t totalWeight = 0;
     bool valid = false;
 };
@@ -118,7 +118,7 @@ constexpr uint32_t makeLineSensorEnabledMask(const bool enabled[24]) {
     return mask;
 }
 
-// Angles are per-sensor centidegrees, measured clockwise from robot-front; validMask marks surveyed entries.
+// 角度はセンサーごとの1/100度で、機体前方から時計回りに計測。validMask は実測済みエントリを示す。
 inline LineObservation calculateLine(uint32_t rawLevels, bool polarityValid, bool activeHigh,
                                      const int16_t angleCdeg[24], uint32_t validAngleMask,
                                      uint32_t enabledSensorMask = 0x00FFFFFFu) {
@@ -128,7 +128,7 @@ inline LineObservation calculateLine(uint32_t rawLevels, bool polarityValid, boo
     result.polarityValid = polarityValid;
     result.activeHigh = polarityValid && activeHigh;
     if (!polarityValid) {
-        result.count = countBits24(result.rawLevels & enabledSensorMask); // Diagnostic count of enabled HIGH levels only.
+        result.count = countBits24(result.rawLevels & enabledSensorMask); // 診断用。有効センサーのHIGHレベルのみ数える。
         return result;
     }
     result.bits = (activeHigh ? result.rawLevels : (~result.rawLevels & 0x00FFFFFFu)) & enabledSensorMask;
@@ -226,14 +226,14 @@ inline bool decodeLinePacket(const Packet& p, LineObservation& line,
 }
 
 struct Motion {
-    float x = 0.0f;    // Right, normalized -1..1.
-    float y = 0.0f;    // Forward, normalized -1..1.
-    float turn = 0.0f; // Counter-clockwise, normalized -1..1.
+    float x = 0.0f;    // 右方向、正規化 -1..1。
+    float y = 0.0f;    // 前方向、正規化 -1..1。
+    float turn = 0.0f; // 反時計回り、正規化 -1..1。
 };
 
 constexpr uint8_t kIrTestPwmCap = 16;
 
-// shortcut: wheel geometry is provisional; replace after a four-wheel direction check.
+// 暫定: 車輪ジオメトリは仮値。4輪の方向確認後に差し替える。
 inline bool irTestMotionForBearing(uint16_t directionDeg, Motion& motion) {
     motion = {};
     if (directionDeg >= 360) return false;
@@ -371,7 +371,7 @@ inline bool tb67h450RequiresNeutralDwell(Tb67h450Mode appliedMode, Tb67h450Mode 
 }
 
 inline bool validMotorPwmSettings(uint32_t frequencyHz, uint16_t range, uint32_t clockHz) {
-    // The Arduino-Pico core reduces timer range when one PWM period has fewer source-clock ticks.
+    // Arduino-Picoコアは、1PWM周期のソースクロック刻みが少ないとタイマー範囲を縮める。
     return frequencyHz >= 100 && frequencyHz <= 1000000 && range == kMotorPwmRange &&
            static_cast<uint64_t>(frequencyHz) * range <= clockHz;
 }
@@ -389,7 +389,7 @@ inline bool validMotorPinMap(const Tb67h450ChannelConfig driver[4], uint64_t pwm
     for (uint8_t i = 0; i < 4; ++i) {
         if (driver[i].maxDuty == 0 || driver[i].maxDuty > kTb67h450MaxDuty) return false;
         const int8_t pins[2] = {driver[i].pinIn1, driver[i].pinIn2};
-        // The paired brake transition uses one atomic SIO-bank write.
+        // ブレーキへの同時遷移はSIOバンクへの1回のアトミック書き込みで行う。
         if ((pins[0] < 32) != (pins[1] < 32)) return false;
         for (uint8_t j = 0; j < 2; ++j) {
             if (pins[j] < 0 || pins[j] >= gpioCount) return false;
@@ -737,7 +737,7 @@ inline float shortestAngleError(float target, float current) {
     return error;
 }
 
-// Uses at most the newest three valid sample intervals and wraps the bearing across 0 degrees.
+// 最新3件の有効なサンプリング間隔のみを使い、方位は0度をまたいで処理する。
 struct IrPrediction {
     float angleDeg = 0.0f;
     float relativeSignal = 0.0f;
@@ -945,7 +945,7 @@ public:
             if (ballAngleInitialized_) filtered = normalizeDegrees(ballAngle_ + shortestAngleError(angle, ballAngle_) * 0.25f);
             ballAngle_ = filtered;
             ballAngleInitialized_ = true;
-            // shortcut: 200-count midpoint is provisional; tune from sensor logs before arming.
+            // 暫定: 200カウントを中点として使用。ARM前にセンサーログで調整する。
             const float magnitude = 0.2f + 0.35f * (in.relativeSignal / (in.relativeSignal + 200.0f));
             out.motion.x = sinf(filtered * 0.01745329252f) * magnitude;
             out.motion.y = cosf(filtered * 0.01745329252f) * magnitude;

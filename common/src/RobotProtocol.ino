@@ -269,7 +269,7 @@ public:
             return kMotorFrameInvalid;
         }
 
-        // shortcut: skip LINE by header/length, not CRC; add CRC checks if MOTOR must own LINE integrity.
+        // 暫定: LINEはヘッダ/長さで読み飛ばし（CRCは検査しない）。MOTOR側で完全性を担保するならCRC検査を追加。
         if (lineFrameUsed_) {
             if (lineFrameUsed_ == 1 && byte != kFrameStart1) {
                 resetLineFrame();
@@ -380,7 +380,7 @@ private:
     uint32_t lineFrameLastByteMs_ = 0;
 };
 
-// The legacy IR request is a single 0x01 byte; skip framed bus traffic so 0x01 inside a frame is not a request.
+// 従来のIR要求は1バイトの0x01。フレーム内の0x01を要求と誤認しないよう、フレーム形式の通信は読み飛ばす。
 class SharedBusIrRequestParser {
 public:
     bool feed(uint8_t byte, uint32_t nowMs) {
@@ -483,7 +483,7 @@ public:
         last_ = sequence;
         return true;
     }
-    // Start a new peer baseline after a communication outage; keep lifetime diagnostics.
+    // 通信途切れ後は相手側の連番基準をリセットする。累計診断値は維持する。
     void resetPeer() { seen_ = false; }
     uint16_t gaps() const { return gaps_; }
     uint16_t rejected() const { return rejected_; }

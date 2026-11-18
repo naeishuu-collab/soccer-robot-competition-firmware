@@ -5,12 +5,12 @@
 
 namespace soccer { namespace board {
 
-// MAIN, IR, and LINE pin maps follow the current project configuration; verify physical continuity on the board.
-// MOTOR routes below use the user's reference code; RS485 and safety wiring remain physically unverified.
+// MAIN/IR/LINEのピン配置は現行プロジェクト設定に従う。基板の物理導通は要確認。
+// 以下のMOTOR配線はユーザーの参考コード準拠。RS485と安全回路の実配線は未検証。
 constexpr int8_t kMainRs485TxPin = 0;
 constexpr int8_t kMainRs485RxPin = 1;
 constexpr int8_t kMainRs485DePin = 8;
-constexpr int8_t kKickerPin = 11; // User-reported MAIN wiring; circuit review is still pending.
+constexpr int8_t kKickerPin = 11; // ユーザー報告のMAIN配線。回路レビューは未完。
 
 constexpr int8_t kIrRs485TxPin = 0;
 constexpr int8_t kIrRs485RxPin = 1;
@@ -37,14 +37,14 @@ constexpr int8_t kMotorRs485TxPin = 0;
 constexpr int8_t kMotorRs485RxPin = 1;
 constexpr int8_t kMotorRs485DePin = 2;
 constexpr int8_t kMotorRs485SharedDePin = -1;
-// Matches the user-reported working MOTOR test code (RP2354B + TB67H450 x4).
+// ユーザー報告の動作MOTORテストコードに一致 (RP2354B + TB67H450 x4)。
 constexpr int8_t kMotorIn1Pins[4] = {6, 12, 11, 9};
 constexpr int8_t kMotorIn2Pins[4] = {7, 13, 10, 8};
-// The user-reported J2 left-front pins are retained for test provenance.
+// ユーザー報告のJ2左前ピンは、テストの来歴として残している。
 constexpr int8_t kMotorTestIn1CandidatePin = 12;
 constexpr int8_t kMotorTestIn2CandidatePin = 13;
-constexpr uint8_t kMotorGpioCount = 30; // The final ZIP's MOTOR parent-board BOM specifies RP2354A.
-constexpr bool kMotorRs485PinsConfigured = true; // From the reference code, not a hardware test.
+constexpr uint8_t kMotorGpioCount = 30; // 最終ZIPのMOTOR親基板BOMはRP2354Aを指定。
+constexpr bool kMotorRs485PinsConfigured = true; // 参考コード由来。ハードウェア試験済みではない。
 constexpr uint64_t kMotorPwmPinMask = (1u << 6) | (1u << 7) | (1u << 8) | (1u << 9) |
                                       (1u << 10) | (1u << 11) | (1u << 12) | (1u << 13);
 constexpr uint64_t kMotorReservedPinMask = (1u << 0) | (1u << 1) | (1u << 2);
@@ -52,13 +52,13 @@ constexpr uint64_t kMotorSafetyReservedPinMask = kMotorPwmPinMask | kMotorReserv
 
 constexpr float kMotorWheelRadiusMm = 30.0f;
 constexpr float kMotorCenterToWheelMm = 94.762f;
-// Candidate mapping used by the host integration model; polarity and roller directions need a four-wheel test.
+// ホスト統合モデルで使う候補マッピング。極性とローラー方向は4輪実機試験で要確認。
 constexpr WheelConfig kMotorWheelConfig[4] = {
     {1, -1, 45, 1}, {-1, 1, 225, 1}, {1, 1, 135, 1}, {-1, -1, 315, 1}
 };
 constexpr bool kMotorWheelConfigConfigured = false;
 
-// No MOTOR safety input pins or electrical bias have been confirmed on the manufactured board.
+// 量産基板ではMOTORの安全入力ピンも電気的バイアスも未確認。
 constexpr int8_t kMotorArmPin = -1;
 constexpr int8_t kMotorEStopPin = -1;
 constexpr int8_t kMotorClearFaultPin = -1;
@@ -67,7 +67,7 @@ constexpr int8_t kMotorEStopActiveLevel = -1;
 constexpr int8_t kMotorClearFaultActiveLevel = -1;
 constexpr bool kMotorSafetyInputBiasVerified = false;
 
-// MAIN has no physical E-stop; keep its safety GPIOs unassigned and competition AUTO fail-closed.
+// MAINには物理E-stopがない。安全GPIOは未割当てのままにし、競技用AUTOは不成立時に停止する fail-close とする。
 constexpr int8_t kMainArmPin = -1;
 constexpr int8_t kMainEStopPin = -1;
 constexpr int8_t kMainClearFaultPin = -1;
@@ -78,19 +78,19 @@ constexpr bool kMainSafetyInputBiasVerified = false;
 constexpr uint32_t kMainSafetyReservedPinMask = (1u << 0) | (1u << 1) | (1u << 4) |
                                                 (1u << 5) | (1u << 8) | (1u << 11);
 
-// BNO055 signals are on the MAIN processor in the ir&main schematic.
+// ir&main 回路図では BNO055 の信号は MAIN プロセッサ側に接続されている。
 constexpr int8_t kBnoSdaPin = 4;
 constexpr int8_t kBnoSclPin = 5;
 constexpr uint32_t kBnoI2cClockHz = 50000;
 constexpr uint8_t kBnoAddress = 0x28;
-constexpr bool kBnoOffsetsVerified = true; // Offsets from the user-reported working BNO055 test code.
+constexpr bool kBnoOffsetsVerified = true; // ユーザー報告の動作BNO055テストコード由来のオフセット。
 constexpr bool kAttackHeadingConfigured = false;
-constexpr float kAttackHeadingDeg = 0.0f; // Relative to the first settled heading; ignored until configured.
+constexpr float kAttackHeadingDeg = 0.0f; // 最初に安定した方位を基準とする。設定されるまで無視。
 
-constexpr bool kLineDebounceConfigured = false; // Candidate filter stays off until sensor edge timing is measured.
+constexpr bool kLineDebounceConfigured = false; // 候補フィルタ。センサーエッジタイミング実測まで無効。
 constexpr uint8_t kLineDebounceSamples = 2;
 constexpr bool kLinePolarityConfigured = false;
-constexpr bool kLineDetectHigh = true; // Candidate only; ignored until polarity is measured.
+constexpr bool kLineDetectHigh = true; // 候補値のみ。極性実測まで無視される。
 // 添付soccer.zipのsoccer/line2/line2.kicad_pcbにあるQ1..Q24の座標から算出した基板基準角度[1/100度]。中心(100,100)、基板上方向0°、時計回りで1°単位に丸めた値。
 // PCBリビジョン、Q番号と実配線chの対応、機体前方オフセット、入力極性は未確認。故障6ch(1,5,8,9,11,21)は kLineSensorEnabled により制御には使われない。
 constexpr int32_t kLineBoardAngleCdeg[24] = {
@@ -117,10 +117,10 @@ constexpr const int16_t (&kLineSensorAngleCdeg)[24] = kLineAngleTable.v;
 constexpr bool kLineAnglesConfigured = false; // 前方オフセット実測後に kLineFrontOffsetConfigured と同時に true にする。
 constexpr uint32_t kLineSensorAngleValidMask = kLineSensorEnabledMask;
 static_assert(!kLineAnglesConfigured || kLineFrontOffsetConfigured, "LINE angles need a measured front offset");
-constexpr bool kMotorHardwareConfigured = true; // Uses the user's four-wheel tested TB67H450 pin map.
+constexpr bool kMotorHardwareConfigured = true; // ユーザーが4輪で動作確認したTB67H450ピン配置を使用。
 constexpr bool kCompetitionArmed = false;
 constexpr uint32_t kMotorPwmFrequencyHz = kTb67h450PwmFrequencyHz;
-// Compile-time setup gates; runtime sensor freshness and the physical ARM/E-stop path are still required.
+// コンパイル時の設定ゲート。実行時のセンサー鮮度と物理ARM/非常停止の経路も別途必要。
 constexpr bool kAutoWheelLiftReady = kCompetitionArmed && kMotorWheelConfigConfigured &&
                                      kMainSafetyInputBiasVerified && kMotorSafetyInputBiasVerified &&
                                      kLinePolarityConfigured;
@@ -129,15 +129,15 @@ constexpr bool kAutoFloorReady = kAutoWheelLiftReady &&
                                  kLineAnglesConfigured && kLineDebounceConfigured &&
                                  kBnoOffsetsVerified && kAttackHeadingConfigured;
 static_assert(!kAutoFloorReady || kAutoWheelLiftReady, "floor AUTO needs wheel-lift AUTO prerequisites");
-// Firmware gates enabled for the reported MAIN GPIO11 kicker connection.
-// The high-voltage charge/discharge circuit still needs its separate hardware review.
+// 報告された MAIN GPIO11 のキッカー配線に合わせてファームウェア側ゲートを有効化。
+// 高電圧の充放電回路は別途ハードウェアレビューが必要。
 constexpr bool kKickerHardwareConfigured = true;
 constexpr bool kKickerRequestPolicyConfigured = true;
-constexpr bool kKickerHeadingWindowConfigured = false; // BNO055 unverified; use IR bearing instead.
+constexpr bool kKickerHeadingWindowConfigured = false; // BNO055は未検証のため、代わりにIR方位を使う。
 constexpr float kKickerHeadingToleranceDeg = 0.0f;
-// Kick timing: the IR ball bearing must stay inside this front window while approaching.
+// キック判定: 接近中はIRボール方位がこの正面範囲内に留まる必要がある。
 constexpr float kKickerBallAngleToleranceDeg = 30.0f;
-// Conservative unverified pulse width; cooldown removed at the operator's request (fire as fast as pulses allow).
+// 安全側に倒した未検証のパルス幅。クールダウンは運用者要望で削除済み（パルス間隔だけが制限）。
 constexpr uint32_t kKickerPulseMs = 30;
 constexpr uint32_t kKickerCooldownMs = 0;
 constexpr bool kDribblerHardwareConfigured = false;

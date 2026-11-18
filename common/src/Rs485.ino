@@ -5,15 +5,15 @@
 
 namespace soccer {
 
-constexpr uint32_t kRs485QuietUs = 100; // One 115200-baud character time before the master starts another frame.
+constexpr uint32_t kRs485QuietUs = 100; // 親局が次のフレームを送る前に1文字分(115200bps)の静穏時間を置く。
 
 struct Rs485Io {
     void* context = nullptr;
     int (*available)(void*) = nullptr;
     int (*read)(void*) = nullptr;
-    void (*setTransmit)(void*, bool) = nullptr; // true=DE high, false=receive (/RE low when tied to DE).
+    void (*setTransmit)(void*, bool) = nullptr; // true=DE High、false=受信（DEと共通接続時は/RE Low）。
     size_t (*write)(void*, const uint8_t*, size_t) = nullptr;
-    void (*flush)(void*) = nullptr; // Must wait for the UART shift register, not only the software queue.
+    void (*flush)(void*) = nullptr; // ソフトウェアキューだけでなくUARTシフトレジスタの完了まで待つ必要がある。
     void (*delayMicros)(void*, uint32_t) = nullptr;
 };
 
