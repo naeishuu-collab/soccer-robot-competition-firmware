@@ -68,7 +68,8 @@ LINE極性と角度が未設定なら生レベルだけを記録します。MOTO
 
 - キッカーはMAIN GPIO11へ出力します。接近中（kApproachBall）にIRボール方位が正面±30°、ラインクリア、ARM済み、FAULT/E-stopなしのときだけ短いパルスを出します。要求は立ち上がりのみで、保持しても再発射しません。BNO055は未較正のためキック判定には使いません。
 - パルス30ms/クールダウン2000msは未測定の暫定値です。キッカー回路の耐圧・充電禁止・残留放電は未確認で、[回路レビュー](KICKER_CIRCUIT_REVIEW_JA.md)のNO-GOは継続します。
-- `openmv/goal_wall_navigation.py` は壁回避とゴールシュート判定のOpenMVスクリプトです。既存`main.py`の0x02/0x14に加え、ナビゲーション指令0x20（vx/vy/turn/kick/mode/XOR）を送ります。MAIN側の受信実装はまだありません。ボール有無の最終ゲートはMAIN/IR側が担当します。
+- `openmv/goal_wall_navigation.py` は壁回避とゴールシュート判定のOpenMVスクリプトです。既存`main.py`の0x02/0x14に加え、ナビゲーション指令0x20（vx/vy/turn/kick/mode/XOR）を送ります。MAINはUART2（TX=GP16、RX=GP17、9600bps）で受信し、AUTO IR中はカメラ指令が走行とキックを上書きします。
+- LINE故障中は`AUTO IR`が唯一の動作モードです。このモードではLINE鮮度・ラインクリア・MAIN E-stopのソフトゲートを外し、IR方位またはOpenMV指令でキックします。Motor基板の物理電源スイッチを常に手元に置いてください。
 
 ## 実機確認の順序
 

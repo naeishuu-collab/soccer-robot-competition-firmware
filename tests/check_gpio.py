@@ -213,6 +213,10 @@ def verify_active_sources():
         errors.append("kicker pulse and cooldown timing must be explicit constants")
     if "kickerInput.ballAligned" not in main_source or "kickerOutput.pulseActive()" not in main_source:
         errors.append("MAIN must gate a kick on the IR ball bearing and drive GPIO11 from the pulse state")
+    if "Serial2.begin(kOpenMvBaud)" not in main_source or "void receiveOpenMv(" not in main_source:
+        errors.append("MAIN must receive the OpenMV 0x20 navigation packet")
+    if "openMvKick" not in main_source or "motorMotion = openMvMotion" not in main_source:
+        errors.append("AUTO IR must accept OpenMV motion and kick commands without LINE")
     try:
         if not valid_motor_legacy_reference(LEGACY_MOTOR):
             errors.append("older MOTOR driver design must remain explicitly classified LEGACY_REFERENCE")

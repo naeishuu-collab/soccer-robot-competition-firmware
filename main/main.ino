@@ -2127,6 +2127,21 @@ uint32_t maxControlUs = 0;
 uint16_t controlOverruns = 0;
 uint8_t diagnosticPhase = 0;
 
+// OpenMV navigation link: UART2 at 9600 baud (assumed wiring TX=GP16, RX=GP17).
+// 0x20 [vx][vy][turn][kick][mode][xor] - signed /100 maps to Motion -1..1.
+constexpr int8_t kOpenMvTxPin = 16;
+constexpr int8_t kOpenMvRxPin = 17;
+constexpr uint32_t kOpenMvBaud = 9600;
+constexpr uint8_t kOpenMvNavHeader = 0x20;
+constexpr uint8_t kOpenMvNavFrameSize = 7;
+constexpr uint32_t kOpenMvFreshTimeoutMs = 500;
+uint8_t openMvFrame[kOpenMvNavFrameSize]{};
+uint8_t openMvUsed = 0;
+Motion openMvMotion{};
+bool openMvKick = false;
+bool openMvFresh = false;
+uint32_t lastOpenMvMs = 0;
+
 Adafruit_BNO055 bnoSensor(kBnoSensorId, board::kBnoAddress, &Wire);
 struct ArduinoBnoDevices {
     Adafruit_BNO055* sensor;
@@ -2589,6 +2604,39 @@ void printLineLevels() {
     for (uint8_t i = 0; i < 24; ++i) Serial.print((lineData.rawLevels & (1u << i)) ? 'H' : 'L');
 }
 
+// Receive the assumed 0x20 navigation packet from OpenMV (no LINE involvement).
+void receiveOpenMv(uint32_t nowMs) {
+    while (Serial2.available()) {
+        const int readValue = Serial2.read();
+        if (readValue < 0) break;
+        const uint8_t byte = static_cast<uint8_t>(readValue);
+        if (openMvUsed == 0) {
+            if (byte == kOpenMvNavHeader) openMvFrame[openMvUsed++] = byte;
+            continue;
+        }
+        openMvFrame[openMvUsed++] = byte;
+        if (openMvUsed < kOpenMvNavFrameSize) continue;
+        uint8_t checksum = 0;
+        for (uint8_t i = 0; i < kOpenMvNavFrameSize - 1; ++i) checksum ^= openMvFrame[i];
+        openMvUsed = 0;
+        if (checksum != openMvFrame[kOpenMvNavFrameSize - 1]) continue;
+        const auto decode = [](uint8_t raw) {
+            return static_cast<float>(static_cast<int8_t>(raw)) / 100.0f;
+        };
+        const Motion motion{decode(openMvFrame[1]), decode(openMvFrame[2]), decode(openMvFrame[3])};
+        if (!validMotion(motion)) continue;
+        openMvMotion = motion;
+        openMvKick = (openMvFrame[4] & 0x01) != 0;
+        openMvFresh = true;
+        lastOpenMvMs = nowMs;
+    }
+    if (openMvFresh && static_cast<uint32_t>(nowMs - lastOpenMvMs) > kOpenMvFreshTimeoutMs) {
+        openMvFresh = false;
+        openMvMotion = {};
+        openMvKick = false;
+    }
+}
+
 void setup() {
     Serial.begin(115200);
     if (Serial && Serial.availableForWrite() >= 48)
@@ -2609,6 +2657,9 @@ void setup() {
     Serial1.setTX(board::kMainRs485TxPin);
     Serial1.setRX(board::kMainRs485RxPin);
     Serial1.begin(115200);
+    Serial2.setTX(kOpenMvTxPin);
+    Serial2.setRX(kOpenMvRxPin);
+    Serial2.begin(kOpenMvBaud);
 
     Wire.setSDA(board::kBnoSdaPin);
     Wire.setSCL(board::kBnoSclPin);
@@ -2622,6 +2673,7 @@ void loop() {
     pollMotorConsole(nowMs);
     pollSharedBus(nowMs);
     pollHeading(nowMs);
+    receiveOpenMv(nowMs);
     if (static_cast<uint32_t>(nowUs - lastControlUs) < kControlPeriodUs) return;
 
     const uint32_t startedUs = micros();
@@ -2683,6 +2735,21 @@ void loop() {
             board::kKickerBallAngleToleranceDeg;
     kickerInput.request = kickerRequestAllowed(board::kKickerRequestPolicyConfigured,
                                                 output.state == kApproachBall, kickerInput);
+    // LINE is faulty: AUTO IR runs without LINE. IR bearing and the OpenMV command own the kick gate.
+    if (autoMode == kAutoIrTest) {
+        kickerInput.commandFresh = input.irFresh || openMvFresh;
+        kickerInput.armed = irTestController.armed() || openMvFresh;
+        kickerInput.emergencyStop = false;
+        kickerInput.fault = false;
+        kickerInput.lineClear = true;
+        if (openMvKick) {
+            kickerInput.ballFresh = true;
+            kickerInput.ballDetected = true;
+            kickerInput.ballAligned = true;
+        }
+        kickerInput.request = openMvKick ||
+            (irTestController.armed() && input.ballFound && kickerInput.ballAligned);
+    }
     const KickerOutput kickerOutput = kickerController.update(kickerInput, nowMs,
                                                               board::kKickerPulseMs,
                                                               board::kKickerCooldownMs);
@@ -2697,6 +2764,11 @@ void loop() {
         irTestController.armOnFirstFreshBall(input.irFresh, input.ballFound, irDirection);
         const bool wasArmed = irTestController.armed();
         motorEnabled = irTestController.update(input.irFresh, input.ballFound, irDirection, motorMotion);
+        if (openMvFresh) {
+            // Camera command takes over when LINE is unavailable.
+            motorMotion = openMvMotion;
+            motorEnabled = true;
+        }
         if (wasArmed && !motorEnabled) motorStopPending = true;
     }
 
