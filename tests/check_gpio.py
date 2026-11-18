@@ -157,8 +157,10 @@ def verify_active_sources():
         errors.append("LINE input scan/calculation must use the shared pin map and failed-sensor mask")
     if "board::kLineSensorEnabledMask" not in main_source:
         errors.append("MAIN must validate LINE packets with the same failed-sensor mask")
-    if "kBnoOffsetsVerified = false" not in source or not re.search(r"if\s*\(\s*board::kBnoOffsetsVerified\s*\)\s*devices->sensor->setSensorOffsets\(offsets\);", main_source):
-        errors.append("unverified BNO055 offsets must remain disabled until calibrated")
+    if "kBnoOffsetsVerified = true" not in source or not re.search(r"if\s*\(\s*board::kBnoOffsetsVerified\s*\)\s*devices->sensor->setSensorOffsets\(offsets\);", main_source):
+        errors.append("BNO055 offsets from the working test must be applied")
+    if "gyroLockValid" not in main_source or "gyroLockHeading" not in main_source:
+        errors.append("camera-locked gyro heading hold must be present")
     constants = {
         "kMainRs485TxPin": expected["MAIN"]["UART_TX"], "kMainRs485RxPin": expected["MAIN"]["UART_RX"],
         "kMainRs485DePin": expected["MAIN"]["RS485_DE"], "kIrRs485TxPin": expected["IR"]["UART_TX"],

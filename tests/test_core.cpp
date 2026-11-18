@@ -908,8 +908,9 @@ static void testBnoInitFailureDisconnectInvalidDataAndRecovery() {
     CHECK(sample.connected && !sample.headingValid);
     mock.heading = 90;
     mock.calibration[0] = 2;
-    CHECK(!monitor.poll(io, kBnoAddressAuto, 2060, sample)); // Unverified calibration is not valid heading.
-    CHECK(sample.connected && !sample.headingValid);
+    // Working-test criterion: a finite 0..360 heading is valid regardless of SYS calibration.
+    CHECK(monitor.poll(io, kBnoAddressAuto, 2060, sample));
+    CHECK(sample.connected && sample.headingValid);
     mock.calibration[0] = 3;
     CHECK(monitor.poll(io, 0x29, 2080, sample)); // Explicit address override is supported.
 }
@@ -985,7 +986,7 @@ static void testKickerFrontBearingTimingAndPulseOverride() {
 static void testKickerAndDribblerOutputGates() {
     KickerController kicker;
     CHECK(board::kKickerHardwareConfigured);
-    CHECK(!board::kBnoOffsetsVerified);
+    CHECK(board::kBnoOffsetsVerified); // Offsets from the working BNO055 test are applied.
     KickerInput input = readyKickerInput();
     input.hardwareConfigured = false;
     input.request = true;

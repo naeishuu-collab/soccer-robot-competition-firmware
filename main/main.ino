@@ -1628,7 +1628,7 @@ constexpr int8_t kBnoSdaPin = 4;
 constexpr int8_t kBnoSclPin = 5;
 constexpr uint32_t kBnoI2cClockHz = 50000;
 constexpr uint8_t kBnoAddress = 0x28;
-constexpr bool kBnoOffsetsVerified = false; // Legacy offsets remain inactive until a measured calibration is recorded.
+constexpr bool kBnoOffsetsVerified = true; // Offsets from the user-reported working BNO055 test code.
 constexpr bool kAttackHeadingConfigured = false;
 constexpr float kAttackHeadingDeg = 0.0f; // Relative to the first settled heading; ignored until configured.
 
@@ -1741,8 +1741,9 @@ public:
         }
         sample.connected = true;
         sample.headingDeg = heading;
-        sample.headingValid = isfinite(heading) && heading >= 0.0f && heading < 360.0f &&
-                              sample.calibration[0] == 3;
+        // Keep the working test's criterion: a finite 0..360 heading is usable in IMUPLUS.
+        // The working test never required SYS calibration==3.
+        sample.headingValid = isfinite(heading) && heading >= 0.0f && heading < 360.0f;
         return sample.headingValid;
     }
 
@@ -2143,6 +2144,9 @@ bool openMvKick = false;
 bool openMvVirtualLine = false;
 bool openMvPenaltyArea = false;
 bool openMvFresh = false;
+uint8_t openMvMode = 0;
+float gyroLockHeading = 0.0f;
+bool gyroLockValid = false;
 uint32_t lastOpenMvMs = 0;
 
 Adafruit_BNO055 bnoSensor(kBnoSensorId, board::kBnoAddress, &Wire);
@@ -2621,6 +2625,7 @@ void receiveOpenMv(uint32_t nowMs) {
         const Motion motion{decode(openMvFrame[1]), decode(openMvFrame[2]), decode(openMvFrame[3])};
         if (!validMotion(motion)) continue;
         openMvMotion = motion;
+        openMvMode = openMvFrame[5];
         openMvKick = (openMvFrame[4] & 0x01) != 0;
         openMvVirtualLine = (openMvFrame[6] & 0x01) != 0;
         openMvPenaltyArea = (openMvFrame[6] & 0x02) != 0;
@@ -2631,6 +2636,7 @@ void receiveOpenMv(uint32_t nowMs) {
         openMvFresh = false;
         openMvMotion = {};
         openMvKick = false;
+        openMvMode = 0;
         openMvVirtualLine = false;
         openMvPenaltyArea = false;
     }
@@ -2768,6 +2774,21 @@ void loop() {
         if (openMvFresh) {
             // Camera command takes over when LINE is unavailable.
             motorMotion = openMvMotion;
+            motorEnabled = true;
+        }
+        // Gyro heading-hold (working test's IMUPLUS mode): when the camera decides to SHOOT,
+        // remember the current relative heading. If the goal then disappears for a short while,
+        // keep driving straight toward where the goal was instead of stopping.
+        if (headingSample.headingValid && openMvFresh && openMvMode == 4) {
+            gyroLockHeading = headingSample.headingDeg;
+            gyroLockValid = true;
+        }
+        if (gyroLockValid && headingSample.headingValid &&
+            (!openMvFresh || (openMvMode != 4 && openMvMode != 1))) {
+            const float headingError = shortestAngleError(gyroLockHeading, headingSample.headingDeg);
+            motorMotion.x = 0.0f;
+            motorMotion.y = 0.35f;
+            motorMotion.turn = constrainValue(headingError * 0.01f, -0.3f, 0.3f);
             motorEnabled = true;
         }
         if (wasArmed && !motorEnabled) motorStopPending = true;

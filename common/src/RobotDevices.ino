@@ -52,8 +52,9 @@ public:
         }
         sample.connected = true;
         sample.headingDeg = heading;
-        sample.headingValid = isfinite(heading) && heading >= 0.0f && heading < 360.0f &&
-                              sample.calibration[0] == 3;
+        // Keep the working test's criterion: a finite 0..360 heading is usable in IMUPLUS.
+        // The working test never required SYS calibration==3.
+        sample.headingValid = isfinite(heading) && heading >= 0.0f && heading < 360.0f;
         return sample.headingValid;
     }
 

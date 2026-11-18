@@ -83,7 +83,7 @@ constexpr int8_t kBnoSdaPin = 4;
 constexpr int8_t kBnoSclPin = 5;
 constexpr uint32_t kBnoI2cClockHz = 50000;
 constexpr uint8_t kBnoAddress = 0x28;
-constexpr bool kBnoOffsetsVerified = false; // Legacy offsets remain inactive until a measured calibration is recorded.
+constexpr bool kBnoOffsetsVerified = true; // Offsets from the user-reported working BNO055 test code.
 constexpr bool kAttackHeadingConfigured = false;
 constexpr float kAttackHeadingDeg = 0.0f; // Relative to the first settled heading; ignored until configured.
 
