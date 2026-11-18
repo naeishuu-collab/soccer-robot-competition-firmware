@@ -2642,7 +2642,7 @@ void setup() {
     if (Serial && Serial.availableForWrite() >= 64)
         Serial.println("USB: AUTO [FLOAT] / AUTO FLOOR / AUTO IR; ARM IR; S=stop; M <v0> <v1> <v2> <v3>");
     if (Serial && Serial.availableForWrite() >= 64)
-        Serial.println("MOTOR M range -255..255, 256=brake; M command timeout 300ms");
+        Serial.println("MOTOR M range -255..255, 256=brake; no command timeout (S / power switch only)");
     if (Serial && Serial.availableForWrite() >= 72)
         Serial.println("IR TEST: no LINE; auto-arm; PWM 16; stop on IR loss/S; wheels up");
 
@@ -2746,8 +2746,9 @@ void loop() {
             kickerInput.ballDetected = true;
             kickerInput.ballAligned = true;
         }
-        kickerInput.request = openMvKick ||
-            (irTestController.armed() && input.ballFound && kickerInput.ballAligned);
+        // IR only retrieves the ball; the CAMERA alone decides where/when to kick.
+        // (IR bearing cannot know which goal is in front.)
+        kickerInput.request = openMvKick;
     }
     const KickerOutput kickerOutput = kickerController.update(kickerInput, nowMs,
                                                               board::kKickerPulseMs,

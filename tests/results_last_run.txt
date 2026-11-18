@@ -1,4 +1,4 @@
-Host test record updated: 2026-11-18 20:46:02 +09:00
+Host test record updated: 2026-11-18 21:10:00 +09:00
 MSVC C++17 (/EHsc /utf-8 /std:c++17 /W4); direct compile/run; repository script policy unchanged.
 === test_core.cpp ===
 test_core.cpp

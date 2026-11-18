@@ -222,6 +222,9 @@ def verify_active_sources():
         errors.append("virtual line from camera wall distance must gate the kicker")
     if not re.search(r"constexpr\s+uint32_t\s+kKickerCooldownMs\s*=\s*0", source):
         errors.append("kicker cooldown must remain removed at the operator's request")
+    if "kickerInput.request = openMvKick ||" in main_source or \
+       "kickerInput.request = openMvKick;" not in main_source:
+        errors.append("only the camera may request a kick; IR is for ball retrieval only")
     try:
         if not valid_motor_legacy_reference(LEGACY_MOTOR):
             errors.append("older MOTOR driver design must remain explicitly classified LEGACY_REFERENCE")
