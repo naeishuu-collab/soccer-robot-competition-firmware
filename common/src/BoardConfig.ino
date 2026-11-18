@@ -10,6 +10,7 @@ namespace soccer { namespace board {
 constexpr int8_t kMainRs485TxPin = 0;
 constexpr int8_t kMainRs485RxPin = 1;
 constexpr int8_t kMainRs485DePin = 8;
+constexpr int8_t kKickerPin = 11; // User-reported MAIN wiring; circuit review is still pending.
 
 constexpr int8_t kIrRs485TxPin = 0;
 constexpr int8_t kIrRs485RxPin = 1;
@@ -74,7 +75,7 @@ constexpr int8_t kMainEStopActiveLevel = -1;
 constexpr int8_t kMainClearFaultActiveLevel = -1;
 constexpr bool kMainSafetyInputBiasVerified = false;
 constexpr uint32_t kMainSafetyReservedPinMask = (1u << 0) | (1u << 1) | (1u << 4) |
-                                                (1u << 5) | (1u << 8);
+                                                (1u << 5) | (1u << 8) | (1u << 11);
 
 // BNO055 signals are on the MAIN processor in the ir&main schematic.
 constexpr int8_t kBnoSdaPin = 4;
@@ -127,10 +128,17 @@ constexpr bool kAutoFloorReady = kAutoWheelLiftReady &&
                                  kLineAnglesConfigured && kLineDebounceConfigured &&
                                  kBnoOffsetsVerified && kAttackHeadingConfigured;
 static_assert(!kAutoFloorReady || kAutoWheelLiftReady, "floor AUTO needs wheel-lift AUTO prerequisites");
-constexpr bool kKickerHardwareConfigured = false;
-constexpr bool kKickerRequestPolicyConfigured = false;
-constexpr bool kKickerHeadingWindowConfigured = false;
+// Firmware gates enabled for the reported MAIN GPIO11 kicker connection.
+// The high-voltage charge/discharge circuit still needs its separate hardware review.
+constexpr bool kKickerHardwareConfigured = true;
+constexpr bool kKickerRequestPolicyConfigured = true;
+constexpr bool kKickerHeadingWindowConfigured = false; // BNO055 unverified; use IR bearing instead.
 constexpr float kKickerHeadingToleranceDeg = 0.0f;
+// Kick timing: the IR ball bearing must stay inside this front window while approaching.
+constexpr float kKickerBallAngleToleranceDeg = 30.0f;
+// Conservative unverified starting values for the physical GPIO pulse; measure on the bench.
+constexpr uint32_t kKickerPulseMs = 30;
+constexpr uint32_t kKickerCooldownMs = 2000;
 constexpr bool kDribblerHardwareConfigured = false;
 
 }} // namespace soccer::board

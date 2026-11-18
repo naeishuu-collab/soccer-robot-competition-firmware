@@ -99,7 +99,7 @@ static void testLineCandidateAnglesUseSignedCentidegreesAndStayGated() {
     CHECK(offset.v[0] == 0 && offset.v[23] == -2000);
     CHECK(!board::kLineFrontOffsetConfigured && !board::kLineAnglesConfigured &&
           !board::kLinePolarityConfigured && !board::kCompetitionArmed);
-    CHECK(board::kMotorHardwareConfigured && !board::kKickerHardwareConfigured);
+    CHECK(board::kMotorHardwareConfigured && board::kKickerHardwareConfigured);
 }
 
 static bool parseFrame(const uint8_t* bytes, uint8_t length, PacketParser& parser,
@@ -924,17 +924,22 @@ static KickerInput readyKickerInput() {
     input.ballDetected = true;
     input.headingValid = true;
     input.headingAligned = true;
+    input.ballAligned = true;
     input.lineClear = true;
     return input;
 }
 
 static void testMainKickerRequestPolicyGates() {
-    CHECK(!board::kKickerRequestPolicyConfigured);
-    CHECK(!board::kKickerHeadingWindowConfigured);
+    CHECK(board::kKickerRequestPolicyConfigured);
+    CHECK(!board::kKickerHeadingWindowConfigured); // BNO gate stays closed; IR bearing is used instead.
+    CHECK(board::kKickerPin == 11);
     KickerInput input = readyKickerInput();
     CHECK(!kickerRequestAllowed(false, true, input));
     CHECK(!kickerRequestAllowed(true, false, input));
     CHECK(kickerRequestAllowed(true, true, input));
+    input.ballAligned = false; // Ball off the front axis must not produce a kick request.
+    CHECK(!kickerRequestAllowed(true, true, input));
+    input = readyKickerInput();
     input.emergencyStop = true;
     CHECK(!kickerRequestAllowed(true, true, input));
     input.emergencyStop = false;
@@ -942,9 +947,48 @@ static void testMainKickerRequestPolicyGates() {
     CHECK(!kickerRequestAllowed(true, true, input));
 }
 
+static void testKickerFrontBearingTimingAndPulseOverride() {
+    KickerController kicker;
+    KickerInput input = readyKickerInput();
+    input.ballAligned = false;
+    input.request = true;
+    CHECK(!kicker.update(input, 0, board::kKickerPulseMs, board::kKickerCooldownMs).pulseActive());
+    CHECK(kicker.update(input, 1, board::kKickerPulseMs, board::kKickerCooldownMs).state == kKickerDisarmed);
+    // With the ball aligned and the request released the controller becomes READY.
+    input.ballAligned = true;
+    input.request = false;
+    CHECK(kicker.update(input, 2, board::kKickerPulseMs, board::kKickerCooldownMs).state == kKickerReady);
+    input.request = true;
+    KickerOutput out = kicker.update(input, 3, board::kKickerPulseMs, board::kKickerCooldownMs);
+    CHECK(out.state == kKickerFiring && out.pulseActive());
+    out = kicker.update(input, 3 + board::kKickerPulseMs - 1, board::kKickerPulseMs, board::kKickerCooldownMs);
+    CHECK(out.state == kKickerFiring && out.pulseActive());
+    out = kicker.update(input, 3 + board::kKickerPulseMs, board::kKickerPulseMs, board::kKickerCooldownMs);
+    CHECK(out.state == kKickerCooldown && !out.pulseActive());
+    const uint32_t cooldownStart = 3 + board::kKickerPulseMs;
+    out = kicker.update(input, cooldownStart + board::kKickerCooldownMs - 1,
+                        board::kKickerPulseMs, board::kKickerCooldownMs);
+    CHECK(out.state == kKickerCooldown && !out.pulseActive());
+    out = kicker.update(input, cooldownStart + board::kKickerCooldownMs,
+                        board::kKickerPulseMs, board::kKickerCooldownMs);
+    CHECK(out.state == kKickerReady && !out.pulseActive()); // Held request must not retrigger.
+
+    // Explicit timing overrides are honoured by the controller.
+    KickerController custom;
+    KickerInput ci = readyKickerInput();
+    ci.request = false;
+    CHECK(custom.update(ci, 0, 5, 50).state == kKickerReady);
+    ci.request = true;
+    CHECK(custom.update(ci, 1, 5, 50).pulseActive());
+    CHECK(custom.update(ci, 5, 5, 50).state == kKickerFiring);
+    CHECK(custom.update(ci, 6, 5, 50).state == kKickerCooldown);
+    CHECK(custom.update(ci, 55, 5, 50).state == kKickerCooldown);
+    CHECK(custom.update(ci, 56, 5, 50).state == kKickerReady);
+}
+
 static void testKickerAndDribblerOutputGates() {
     KickerController kicker;
-    CHECK(!board::kKickerHardwareConfigured);
+    CHECK(board::kKickerHardwareConfigured);
     CHECK(!board::kBnoOffsetsVerified);
     KickerInput input = readyKickerInput();
     input.hardwareConfigured = false;
@@ -995,6 +1039,8 @@ static void testKickerAndDribblerOutputGates() {
     input = readyKickerInput(); input.headingValid = false;
     CHECK(!blocked(input).mockPulseActive);
     input = readyKickerInput(); input.headingAligned = false;
+    CHECK(!blocked(input).mockPulseActive);
+    input = readyKickerInput(); input.ballAligned = false;
     CHECK(!blocked(input).mockPulseActive);
     input = readyKickerInput(); input.lineClear = false;
     CHECK(!blocked(input).mockPulseActive);
@@ -1442,6 +1488,7 @@ int main() {
         {"MOTOR STOP command priority", testMotorStopPriority},
         {"Heading boundaries and jump", testHeadingBoundaryAndJumpRejection},
         {"BNO init, disconnect, validation and recovery", testBnoInitFailureDisconnectInvalidDataAndRecovery},
+        {"Kicker front-bearing timing and pulse override", testKickerFrontBearingTimingAndPulseOverride},
         {"Kicker and dribbler gates", testKickerAndDribblerOutputGates},
         {"MAIN kicker request policy gates", testMainKickerRequestPolicyGates},
         {"Disarm, approach and search", testSearchApproachAndDisarmedStates},

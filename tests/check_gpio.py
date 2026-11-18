@@ -177,9 +177,8 @@ def verify_active_sources():
         if not match or int(match.group(1)) != value:
             errors.append(f"{name} must preserve the user-reported test candidate only")
     for setting in ("kLinePolarityConfigured", "kLineFrontOffsetConfigured", "kLineAnglesConfigured",
-                    "kCompetitionArmed", "kKickerHardwareConfigured", "kKickerRequestPolicyConfigured",
-                    "kKickerHeadingWindowConfigured", "kDribblerHardwareConfigured",
-                    "kMotorWheelConfigConfigured"):
+                    "kCompetitionArmed", "kKickerHeadingWindowConfigured",
+                    "kDribblerHardwareConfigured", "kMotorWheelConfigConfigured"):
         if not re.search(rf"constexpr\s+bool\s+{setting}\s*=\s*false", source):
             errors.append(f"safety/configuration gate {setting} must remain false until confirmed")
     if not re.search(r"constexpr\s+bool\s+kAutoWheelLiftReady\s*=\s*kCompetitionArmed\s*&&\s*kMotorWheelConfigConfigured\s*&&\s*kMainSafetyInputBiasVerified\s*&&\s*kMotorSafetyInputBiasVerified\s*&&\s*kLinePolarityConfigured", source):
@@ -202,8 +201,18 @@ def verify_active_sources():
        "constexpr bool kMainSafetyInputBiasVerified = false" not in source:
         errors.append("safety inputs require verified fail-safe electrical bias")
     if "kickerRequestAllowed(board::kKickerRequestPolicyConfigured" not in main_source or \
-       "kickerController.update(kickerInput, nowMs)" not in main_source:
+       "kickerController.update(kickerInput, nowMs," not in main_source:
         errors.append("MAIN must route its gated kick policy through the safe KickerController")
+    if not re.search(r"constexpr\s+int8_t\s+kKickerPin\s*=\s*11", source):
+        errors.append("kicker output must stay on the user-reported MAIN GPIO11")
+    if not re.search(r"constexpr\s+bool\s+kKickerHardwareConfigured\s*=\s*true", source) or \
+       not re.search(r"constexpr\s+bool\s+kKickerRequestPolicyConfigured\s*=\s*true", source):
+        errors.append("kicker firmware gates must be enabled for the reported GPIO11 wiring")
+    if not re.search(r"constexpr\s+uint32_t\s+kKickerPulseMs\s*=\s*\d+", source) or \
+       not re.search(r"constexpr\s+uint32_t\s+kKickerCooldownMs\s*=\s*\d+", source):
+        errors.append("kicker pulse and cooldown timing must be explicit constants")
+    if "kickerInput.ballAligned" not in main_source or "kickerOutput.pulseActive()" not in main_source:
+        errors.append("MAIN must gate a kick on the IR ball bearing and drive GPIO11 from the pulse state")
     try:
         if not valid_motor_legacy_reference(LEGACY_MOTOR):
             errors.append("older MOTOR driver design must remain explicitly classified LEGACY_REFERENCE")

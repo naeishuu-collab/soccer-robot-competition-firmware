@@ -402,12 +402,13 @@ static void testAccessoryCommandsRemainGatedInMockIntegration() {
     input.ballDetected = true;
     input.headingValid = true;
     input.headingAligned = true;
+    input.ballAligned = true;
     input.lineClear = true;
     input.hardwareConfigured = board::kKickerHardwareConfigured;
     KickerOutput output = kicker.update(input, 0);
-    CHECK(!output.mockPulseActive && output.state == kKickerDisarmed);
+    CHECK(!output.mockPulseActive && output.state == kKickerReady); // GPIO11 wiring is enabled now.
     CHECK(dribbler.update(0.8f, true, true, false, false, false) == 0.0f);
-    input.hardwareConfigured = true; // The MCU build still has no physical adapter.
+    // GPIO11 is now driven by MAIN; a request held through DISARMED is still not queued.
     output = kicker.update(input, 1);
     CHECK(!output.mockPulseActive && output.state == kKickerReady); // Held request is not queued.
     input.emergencyStop = true;
@@ -474,7 +475,7 @@ int main() {
         {"Unknown LINE polarity stops integration", testUnknownLinePolarityStopsIntegrationPath},
         {"BNO invalidity, multiple faults and E-stop", testBnoFaultMultipleFaultsAndEmergencyStop},
         {"E-stop clear requires explicit re-arm", testExplicitEmergencyStopAndRearmPath},
-        {"Kicker/dribbler remain gated", testAccessoryCommandsRemainGatedInMockIntegration},
+        {"Kicker interlocks and dribbler gate in mock integration", testAccessoryCommandsRemainGatedInMockIntegration},
         {"Shared bus arbitration prevents overlapping replies", testSharedBusArbitrationPreventsOverlappingReplies},
         {"Thirty-minute four-wheel drive simulation", testThirtyMinuteMotorSimulation}
     };

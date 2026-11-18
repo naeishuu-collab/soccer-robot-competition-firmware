@@ -1,4 +1,4 @@
-Host test record updated: 2026-11-18 16:47:29 +09:00
+Host test record updated: 2026-11-18 17:00:16 +09:00
 MSVC C++17 (/EHsc /utf-8 /std:c++17 /W4); direct compile/run; repository script policy unchanged.
 === test_core.cpp ===
 test_core.cpp
@@ -46,6 +46,7 @@ PASS TB67H450 truth table and PWM limits
 PASS MOTOR STOP command priority
 PASS Heading boundaries and jump
 PASS BNO init, disconnect, validation and recovery
+PASS Kicker front-bearing timing and pulse override
 PASS Kicker and dribbler gates
 PASS MAIN kicker request policy gates
 PASS Disarm, approach and search
@@ -64,7 +65,7 @@ PASS MOTOR safety fault latch and re-arm
 PASS Heading fault recovery and re-arm
 PASS Emergency stop latch
 PASS Unspecified safety inputs fail closed
-UNIT SUMMARY: 61 cases, 3794 checks, 0 failed
+UNIT SUMMARY: 62 cases, 3811 checks, 0 failed
 RUN: PASS
 === test_integration.cpp ===
 test_integration.cpp
@@ -80,9 +81,18 @@ PASS BNO heading and ball motion reach MOTOR
 PASS Unknown LINE polarity stops integration
 PASS BNO invalidity, multiple faults and E-stop
 PASS E-stop clear requires explicit re-arm
-PASS Kicker/dribbler remain gated
+PASS Kicker interlocks and dribbler gate in mock integration
 PASS Shared bus arbitration prevents overlapping replies
 PASS Thirty-minute four-wheel drive simulation
 INTEGRATION SUMMARY: 14 scenarios, 107 checks, 0 failed
+RUN: PASS
+=== test_openmv_logic.py ===
+python -m unittest discover -s tests -p test_openmv_logic.py
+PASS angle conventions and shortest angle error
+PASS front wall avoidance inhibits kick
+PASS front goal shoot / off-axis approach / no-goal search
+PASS target goal selection (YELLOW/BLUE)
+PASS navigation packet checksum and signed values
+OPENMV SUMMARY: 9 tests, 0 failed
 RUN: PASS
 No board power, firmware upload, motor startup, or RS485 hardware test.

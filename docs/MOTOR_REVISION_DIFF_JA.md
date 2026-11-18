@@ -45,7 +45,7 @@ DRC数値はZIP内KiCad設計に対する過去の検査記録で、製造実機
 - BoardConfig.ino: IN1={6,12,11,8}、IN2={7,13,10,9}、PWM周波数20kHz。ZIP親基板のRP2354AとPWM/RS485ネットを反映し、GPIO数30でビルドする。RS485物理通信は未確認。
 - main/motor: MAINは `AA 04 [int16 little-endian ×4] XOR 55` を40ms周期目安で送信。MOTORは値域・チェックサム・終端・部分フレーム期限を検査し、300msで通信期限切れ、5/10ms加速、200ms逆転待機を実装。
 - 車輪位置角・ローラー方向・電気的極性、ARM/E-stop/解除ピンと入力バイアスは未確認。`kMotorWheelConfigConfigured=false` と `kMotorHardwareConfigured=false` のためPWM出力無効。
-- MAINは診断モード、競技ARM=false。Kickerのハードウェア/ポリシーもfalse。
+- MAINは診断モード、競技ARM=false。Kickerのハードウェア/ポリシーはGPIO11に対して有効化済み（回路レビューは未完了）。
 - Arduino-Pico 6.3.2で現行4スケッチを4/4コンパイル。RS485通信、ホストC++アサーション実行、実機出力は未確認。
 
 ## ユーザー提供の実機成功コード

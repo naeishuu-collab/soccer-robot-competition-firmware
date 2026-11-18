@@ -90,12 +90,13 @@ struct KickerInput {
     bool headingValid = false;
     bool headingAligned = false;
     bool lineClear = false;
+    bool ballAligned = false; // IR ball bearing is inside the front kick window.
 };
 
 inline bool kickerRequestAllowed(bool policyConfigured, bool approachingBall, const KickerInput& in) {
     return policyConfigured && approachingBall && in.commandFresh && in.armed && !in.emergencyStop &&
-           !in.fault && in.hardwareConfigured && in.ballFresh && in.ballDetected && in.headingValid &&
-           in.headingAligned && in.lineClear;
+           !in.fault && in.hardwareConfigured && in.ballFresh && in.ballDetected && in.ballAligned &&
+           in.headingValid && in.headingAligned && in.lineClear;
 }
 
 struct KickerEventRecord {
@@ -108,11 +109,14 @@ struct KickerOutput {
     KickerState state = kKickerDisarmed;
     bool mockPulseActive = false;
     KickerEvent event = kKickerNoEvent;
+    bool pulseActive() const { return mockPulseActive; } // Physical GPIO adapter reads this.
 };
 
 class KickerController {
 public:
-    KickerOutput update(const KickerInput& in, uint32_t nowMs) {
+    KickerOutput update(const KickerInput& in, uint32_t nowMs,
+                        uint32_t pulseMs = kKickerMockPulseMs,
+                        uint32_t cooldownMs = kKickerMockCooldownMs) {
         const bool requestRising = in.request && !requestWasHigh_;
         requestWasHigh_ = in.request;
         KickerEvent event = kKickerNoEvent;
@@ -130,13 +134,13 @@ public:
         } else {
             bool enteredReady = false;
             if (state_ == kKickerFiring &&
-                static_cast<uint32_t>(nowMs - pulseStartedMs_) >= kKickerMockPulseMs) {
+                static_cast<uint32_t>(nowMs - pulseStartedMs_) >= pulseMs) {
                 mockPulseActive_ = false;
                 cooldownStartedMs_ = nowMs;
                 event = transition(kKickerCooldown, kKickerPulseCompleted, nowMs);
             }
             if (state_ == kKickerCooldown &&
-                static_cast<uint32_t>(nowMs - cooldownStartedMs_) >= kKickerMockCooldownMs)
+                static_cast<uint32_t>(nowMs - cooldownStartedMs_) >= cooldownMs)
                 event = transition(kKickerReady, kKickerBecameReady, nowMs);
             if (state_ == kKickerDisarmed) {
                 event = transition(kKickerReady, kKickerBecameReady, nowMs);
@@ -153,6 +157,7 @@ public:
 
     KickerState state() const { return state_; }
     bool mockPulseActive() const { return mockPulseActive_; }
+    bool pulseActive() const { return mockPulseActive_; } // Name used by the physical GPIO adapter.
     uint8_t eventHistoryCount() const { return eventCount_; }
 
     bool eventHistoryAt(uint8_t oldestFirstIndex, KickerEventRecord& record) const {
@@ -167,7 +172,7 @@ private:
 
     static bool interlocksReady(const KickerInput& in) {
         return in.commandFresh && in.armed && in.hardwareConfigured && in.ballFresh && in.ballDetected &&
-               in.headingValid && in.headingAligned && in.lineClear;
+               in.ballAligned && in.headingValid && in.headingAligned && in.lineClear;
     }
 
     KickerEvent transition(KickerState state, KickerEvent event, uint32_t nowMs) {
