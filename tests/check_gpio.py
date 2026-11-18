@@ -217,6 +217,8 @@ def verify_active_sources():
         errors.append("MAIN must receive the OpenMV 0x20 navigation packet")
     if "openMvKick" not in main_source or "motorMotion = openMvMotion" not in main_source:
         errors.append("AUTO IR must accept OpenMV motion and kick commands without LINE")
+    if "openMvVirtualLine || openMvPenaltyArea" not in main_source:
+        errors.append("virtual line AND penalty area must suppress the kick")
     if "openMvVirtualLine" not in main_source or "estimate_virtual_line" not in \
        (ROOT / "openmv/goal_wall_navigation.py").read_text(encoding="utf-8"):
         errors.append("virtual line from camera wall distance must gate the kicker")

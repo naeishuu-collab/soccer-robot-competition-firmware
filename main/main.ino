@@ -2739,8 +2739,8 @@ void loop() {
         kickerInput.armed = irTestController.armed() || openMvFresh;
         kickerInput.emergencyStop = false;
         kickerInput.fault = false;
-        // Camera-derived virtual line replaces the faulty LINE sensor for kick suppression.
-        kickerInput.lineClear = !(openMvFresh && openMvVirtualLine);
+        // Camera-derived virtual line and penalty area replace the faulty LINE sensor.
+        kickerInput.lineClear = !(openMvFresh && (openMvVirtualLine || openMvPenaltyArea));
         if (openMvKick) {
             kickerInput.ballFresh = true;
             kickerInput.ballDetected = true;

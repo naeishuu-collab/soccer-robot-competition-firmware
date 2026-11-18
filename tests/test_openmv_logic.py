@@ -78,6 +78,25 @@ class OpenMvNavigationTests(unittest.TestCase):
         self.assertFalse(line)
         self.assertFalse(penalty)
 
+    def test_penalty_area_moves_away_from_wall(self):
+        # 壁は中距離 (60cm) だがペナルティエリア判定が立つ場合は前進して壁から離れる
+        original = nav.PENALTY_DEPTH_CM
+        nav.PENALTY_DEPTH_CM = 100.0
+        try:
+            result = nav.decide_navigation(128, 30, 255, 255, 128, 30, 3000, (500, 0))
+            self.assertEqual(result[5], "AVOID")
+            self.assertGreater(result[1], 0)  # 前進して中央へ戻る
+            self.assertEqual(result[3], 0)    # ペナルティ内ではキックしない
+            self.assertTrue(result[6] & 2)    # flags bit1 = PA
+        finally:
+            nav.PENALTY_DEPTH_CM = original
+
+    def test_rule_compliance_leds_off(self):
+        src = (Path(__file__).resolve().parents[1] / "openmv/goal_wall_navigation.py").read_text(encoding="utf-8")
+        self.assertIn("sensor.set_ir_led(False)", src)
+        self.assertIn("pyb.LED(led_id).off()", src)
+        self.assertIn("wall_roi", src)
+
     def test_nav_packet_checksum_and_signed_values(self):
         pkt = nav.make_nav_packet(-50, 55, -12, 1, nav.MODE_SHOOT, 1)
         self.assertEqual(len(pkt), 8)

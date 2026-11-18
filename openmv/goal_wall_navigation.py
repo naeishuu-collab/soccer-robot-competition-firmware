@@ -146,9 +146,12 @@ def decide_navigation(yx, yy, bx, by, wx, wy, wsize, goal_sizes):
     if wall_angle is not None and wall_dist is not None:
         wall_err = angle_error(wall_angle, 0.0)
         near_wall = abs(wall_err) <= WALL_AVOID_ANGLE_DEG and wall_dist <= WALL_AVOID_DIST_CM
+        away_turn = int(35.0 * (1.0 if wall_err >= 0.0 else -1.0))
         if near_wall or line_hit:
-            turn = int(35.0 * (1.0 if wall_err >= 0.0 else -1.0))
-            return 0, -50, turn, 0, MODE_AVOID, "AVOID", flags
+            return 0, -50, away_turn, 0, MODE_AVOID, "AVOID", flags
+        # 2) ペナルティエリア内/境界なら壁から離れて中央へ戻る (rule 2.6.1)
+        if penalty_hit:
+            return 0, 60, away_turn, 0, MODE_AVOID, "AVOID", flags
 
     # 2) ゴールが見えない -> 探索
     if gx == 255 or gy == 255:
@@ -205,6 +208,18 @@ def init_camera():
         sensor.set_auto_whitebal(False)
     except Exception:
         pass
+    # RCJ 2026 rule 6.2.B: IR emitters are forbidden in the Infrared league.
+    # Turn off the OpenMV H7 auxiliary IR LED and any visible status LEDs so they
+    # cannot interfere with opponents (rule 3.1.3). Guarded for API differences.
+    try:
+        sensor.set_ir_led(False)
+    except Exception:
+        pass
+    try:
+        for led_id in (1, 2, 3):
+            pyb.LED(led_id).off()
+    except Exception:
+        pass
 
 
 def biggest_blob(img, thresholds, roi, pixel_threshold):
@@ -230,7 +245,10 @@ def main_loop():
         img = sensor.snapshot()
         ysize, ycx, ycy = biggest_blob(img, YellowThresholds, GoalRoi, PIXELS_THRESHOLD)
         bsize, bcx, bcy = biggest_blob(img, BlueThresholds, GoalRoi, PIXELS_THRESHOLD)
-        wsize, wcx, wcy = biggest_blob(img, BlackThresholds, None, WALL_PIX_TH)
+        # Rule 3.1.4: ignore colors above the walls (shirts etc.) by limiting the
+        # wall search to the lower two thirds of the image.
+        wall_roi = (0, img.height() // 3, img.width(), img.height() * 2 // 3)
+        wsize, wcx, wcy = biggest_blob(img, BlackThresholds, wall_roi, WALL_PIX_TH)
         yx, yy = norm_coord(ycx, ycy, img)
         bx, by = norm_coord(bcx, bcy, img)
         wx, wy = norm_coord(wcx, wcy, img)

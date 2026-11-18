@@ -1,4 +1,4 @@
-Host test record updated: 2026-11-18 21:10:00 +09:00
+Host test record updated: 2026-11-18 21:40:00 +09:00
 MSVC C++17 (/EHsc /utf-8 /std:c++17 /W4); direct compile/run; repository script policy unchanged.
 === test_core.cpp ===
 test_core.cpp
@@ -94,6 +94,8 @@ PASS front goal shoot / off-axis approach / no-goal search
 PASS target goal selection (YELLOW/BLUE)
 PASS navigation packet checksum and signed values
 PASS wall distance -> virtual line estimation (RCJ field)
-OPENMV SUMMARY: 10 tests, 0 failed
+PASS penalty area moves away from wall (rule 2.6.1)
+PASS rule compliance: IR/visible LEDs off, wall ROI limited (rules 6.2.B/3.1.3/3.1.4)
+OPENMV SUMMARY: 12 tests, 0 failed
 RUN: PASS
 No board power, firmware upload, motor startup, or RS485 hardware test.
