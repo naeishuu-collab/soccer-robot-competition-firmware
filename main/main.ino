@@ -2151,6 +2151,8 @@ Motion openMvMotion{};
 bool openMvKick = false;
 bool openMvVirtualLine = false;
 bool openMvPenaltyArea = false;
+bool openMvBallSeen = false;
+bool openMvBallAligned = false;
 bool openMvFresh = false;
 uint8_t openMvMode = 0;
 float gyroLockHeading = 0.0f;
@@ -2632,6 +2634,8 @@ void receiveOpenMv(uint32_t nowMs) {
         openMvKick = (openMvFrame[4] & 0x01) != 0;
         openMvVirtualLine = (openMvFrame[6] & 0x01) != 0;
         openMvPenaltyArea = (openMvFrame[6] & 0x02) != 0;
+        openMvBallSeen = (openMvFrame[6] & 0x04) != 0;
+        openMvBallAligned = (openMvFrame[6] & 0x08) != 0;
         openMvFresh = true;
         lastOpenMvMs = nowMs;
     }
@@ -2642,6 +2646,8 @@ void receiveOpenMv(uint32_t nowMs) {
         openMvMode = 0;
         openMvVirtualLine = false;
         openMvPenaltyArea = false;
+        openMvBallSeen = false;
+        openMvBallAligned = false;
     }
 }
 
@@ -2744,7 +2750,7 @@ void loop() {
             board::kKickerBallAngleToleranceDeg;
     kickerInput.request = kickerRequestAllowed(board::kKickerRequestPolicyConfigured,
                                                 output.state == kApproachBall, kickerInput);
-    // LINEは故障中: AUTO IRはLINEなしで動作。キック判定はIR方位とOpenMV指令が担当。
+    // LINEは故障中: AUTO IRはLINEなしで動作。キック判定はカメラが行う。
     if (autoMode == kAutoIrTest) {
         kickerInput.commandFresh = input.irFresh || openMvFresh;
         kickerInput.armed = irTestController.armed() || openMvFresh;
@@ -2752,13 +2758,19 @@ void loop() {
         kickerInput.fault = false;
         // 故障したLINEセンサーの代わりに、カメラから推定した仮想白線とペナルティエリアを使う。
         kickerInput.lineClear = !(openMvFresh && (openMvVirtualLine || openMvPenaltyArea));
-        if (openMvKick) {
-            kickerInput.ballFresh = true;
-            kickerInput.ballDetected = true;
-            kickerInput.ballAligned = true;
+        // ボールが無い場所へ蹴らないよう、カメラのボール検出をキック条件に使う。
+        kickerInput.ballFresh = openMvBallSeen || input.irFresh;
+        kickerInput.ballDetected = openMvBallSeen || input.ballFound;
+        kickerInput.ballAligned = (openMvFresh && openMvBallAligned) ||
+            (input.ballFound && input.ballAngleDeg < 360 &&
+             fabsf(shortestAngleError(static_cast<float>(input.ballAngleDeg), 0.0f)) <=
+                 board::kKickerBallAngleToleranceDeg);
+        // カメラがSHOOTと判断した時点でゴール方位は確認済みとして扱い、
+        // 未検証のBNO方位ゲート（常にfalse）でキックが塞がらないようにする。
+        if (openMvFresh && openMvKick) {
+            kickerInput.headingValid = true;
+            kickerInput.headingAligned = true;
         }
-        // IRはボールの回収のみ担当。キックするかどうかはカメラだけが判断する。
-        // （IR方位だけではどのゴールが正面か分からない）
         kickerInput.request = openMvKick;
     }
     const KickerOutput kickerOutput = kickerController.update(kickerInput, nowMs,

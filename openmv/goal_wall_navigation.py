@@ -78,7 +78,22 @@ MODE_SHOOT = 4
 YellowThresholds = [(64, 91, -6, 14, 26, 62)]
 BlueThresholds = [(85, 0, 68, -128, -48, -17)]
 BlackThresholds = [(91, 52, 61, 8, 20, -10)]
+# オレンジのIRボール。実機の色で要調整。
+BallThresholds = [(60, 95, 40, 95, 60, 130)]
+# 相手ロボットのマーカー（赤系）。実機の色で要調整。
+ObstacleThresholds = [(30, 90, 140, 255, 110, 200)]
 GoalRoi = (30, 30, 260, 260)
+
+# 攻撃するゴールの色と守るゴールの色（試合のサイドに合わせて入れ替える）
+TARGET_GOAL = "YELLOW"
+OWN_GOAL = "BLUE"
+BALL_FRONT_ANGLE_DEG = 25.0
+OBSTACLE_PIX_TH = 60
+MODE_DEFEND = 5
+FLAG_VIRTUAL_LINE = 0x01
+FLAG_PENALTY_AREA = 0x02
+FLAG_BALL = 0x04
+FLAG_BALL_ALIGNED = 0x08
 
 
 # ---------- 純粋ロジック ----------
@@ -135,12 +150,26 @@ def estimate_virtual_line(wx, wy, wsize):
     return line_detected, penalty_detected, angle, dist_line
 
 
-def decide_navigation(yx, yy, bx, by, wx, wy, wsize, goal_sizes):
-    """detections -> (vx, vy, turn, want_kick, mode_code, mode_name, flags)"""
+def decide_navigation(yx, yy, bx, by, wx, wy, wsize, goal_sizes,
+                      ball=None, obstacle=None):
+    """detections -> (vx, vy, turn, want_kick, mode_code, mode_name, flags)
+
+    ball: (nx, ny, size) or None  … カメラで見つけたオレンジボール
+    obstacle: (nx, ny, size) or None … 相手ロボットのマーカー
+    """
     gx, gy, gsize = (bx, by, goal_sizes[1]) if TARGET_GOAL == "BLUE" else (yx, yy, goal_sizes[0])
+    ox, oy, osize = (yx, yy, goal_sizes[0]) if TARGET_GOAL == "BLUE" else (bx, by, goal_sizes[1])
 
     line_hit, penalty_hit, wall_angle, wall_dist = estimate_virtual_line(wx, wy, wsize)
     flags = (1 if line_hit else 0) | (2 if penalty_hit else 0)
+
+    ball_seen = ball is not None and ball[0] != 255 and ball[1] != 255 and ball[2] > 0
+    ball_angle = angle_from_normalized(ball[0], ball[1]) if ball_seen else None
+    ball_aligned = ball_angle is not None and abs(angle_error(ball_angle, 0.0)) <= BALL_FRONT_ANGLE_DEG
+    if ball_seen:
+        flags |= FLAG_BALL
+    if ball_aligned:
+        flags |= FLAG_BALL_ALIGNED
 
     # 1) 壁/白線が近ければ最優先で内側へ回避し、キックはしない
     if wall_angle is not None and wall_dist is not None:
@@ -153,20 +182,35 @@ def decide_navigation(yx, yy, bx, by, wx, wy, wsize, goal_sizes):
         if penalty_hit:
             return 0, 60, away_turn, 0, MODE_AVOID, "AVOID", flags
 
-    # 2) ゴールが見えない -> 探索
+    # 3) 相手ロボットが正面にいれば回避し、キックはしない
+    if obstacle is not None and obstacle[0] != 255 and obstacle[2] >= OBSTACLE_PIX_TH:
+        obs_angle = angle_from_normalized(obstacle[0], obstacle[1])
+        if obs_angle is not None:
+            obs_err = angle_error(obs_angle, 0.0)
+            if abs(obs_err) <= 45.0:
+                away_turn = int(-35.0 * (1.0 if obs_err >= 0.0 else -1.0))
+                return 0, -30, away_turn, 0, MODE_AVOID, "AVOID", flags
+
+    # 4) 自ゴールだけが見えている場合は退避（自ゴールには蹴らない）
+    if (ox != 255 and oy != 255) and (gx == 255 or gy == 255):
+        return 0, -20, 25, 0, MODE_DEFEND, "DEFEND", flags
+
+    # 5) 攻撃対象ゴールが見えない -> ボールがあれば回収、なければ探索
     if gx == 255 or gy == 255:
+        if ball_seen:
+            err = angle_error(ball_angle, 0.0)
+            return 0, 40, int(clamp(-err * 0.6, -60.0, 60.0)), 0, MODE_APPROACH, "APPROACH", flags
         return 0, 10, 20, 0, MODE_SEARCH, "SEARCH", flags
 
+    # 6) 攻撃対象ゴールが見えている。シュートはボールが正面にある場合だけ。
     goal_angle = angle_from_normalized(gx, gy)
     err = angle_error(goal_angle, 0.0)
     turn = int(clamp(-err * 0.6, -60.0, 60.0))
     vy = 20 if abs(err) > 45.0 else 55
-    if abs(err) <= GOAL_SHOOT_ANGLE_DEG and gsize >= GOAL_NEAR_PIX and not line_hit:
+    if (abs(err) <= GOAL_SHOOT_ANGLE_DEG and gsize >= GOAL_NEAR_PIX and
+            not line_hit and ball_seen and ball_aligned):
         return 0, vy, turn, 1, MODE_SHOOT, "SHOOT", flags
     return 0, vy, turn, 0, MODE_APPROACH, "APPROACH", flags
-
-
-TARGET_GOAL = "YELLOW"
 
 
 def make_nav_packet(vx, vy, turn, kick, mode, flags=0):
@@ -249,12 +293,17 @@ def main_loop():
         # 壁探索を画像下2/3に制限する。
         wall_roi = (0, img.height() // 3, img.width(), img.height() * 2 // 3)
         wsize, wcx, wcy = biggest_blob(img, BlackThresholds, wall_roi, WALL_PIX_TH)
+        ball_size, ball_cx, ball_cy = biggest_blob(img, BallThresholds, wall_roi, PIXELS_THRESHOLD)
+        obs_size, obs_cx, obs_cy = biggest_blob(img, ObstacleThresholds, wall_roi, PIXELS_THRESHOLD)
         yx, yy = norm_coord(ycx, ycy, img)
         bx, by = norm_coord(bcx, bcy, img)
         wx, wy = norm_coord(wcx, wcy, img)
+        ball_x, ball_y = norm_coord(ball_cx, ball_cy, img)
+        obs_x, obs_y = norm_coord(obs_cx, obs_cy, img)
         now = pyb.millis()
         vx, vy, turn, want_kick, mode, name, flags = decide_navigation(
-            yx, yy, bx, by, wx, wy, wsize, (ysize, bsize))
+            yx, yy, bx, by, wx, wy, wsize, (ysize, bsize),
+            (ball_x, ball_y, ball_size), (obs_x, obs_y, obs_size))
         # クールダウン削除: 要求が立ち上がるたびにキックを送る
         kick = 1 if want_kick else 0
         try:

@@ -20,6 +20,10 @@ STREAM_INTERVAL_MS = 100
 YellowThresholds = [(64, 91, -6, 14, 26, 62)]
 BlueThresholds = [(85, 0, 68, -128, -48, -17)]
 BlackThresholds = [(91, 52, 61, 8, 20, -10)]
+# オレンジのIRボール。実機の色で要調整。
+BallThresholds = [(60, 95, 40, 95, 60, 130)]
+# 相手ロボットのマーカー（赤系）。実機の色で要調整。
+ObstacleThresholds = [(30, 90, 140, 255, 110, 200)]
 
 # ---------- 競技台定数 (cm) ----------
 OUTER_CM = 12.0
@@ -39,12 +43,22 @@ MODE_APPROACH = 3
 MODE_SHOOT = 4
 
 TARGET_GOAL = "YELLOW"
+OWN_GOAL = "BLUE"
+BALL_FRONT_ANGLE_DEG = 25.0
+OBSTACLE_PIX_TH = 60
+MODE_DEFEND = 5
+FLAG_VIRTUAL_LINE = 0x01
+FLAG_PENALTY_AREA = 0x02
+FLAG_BALL = 0x04
+FLAG_BALL_ALIGNED = 0x08
 SEND_UART = True
 
 # ---------- 描画色 (RGB565) ----------
 COLOR_GOAL_YELLOW = (255, 255, 0)
 COLOR_GOAL_BLUE = (0, 255, 255)
 COLOR_WALL = (255, 80, 80)
+COLOR_BALL = (255, 170, 0)
+COLOR_OBSTACLE = (255, 0, 255)
 COLOR_TEXT = (255, 255, 255)
 COLOR_INFO = (0, 255, 0)
 
@@ -87,11 +101,21 @@ def estimate_virtual_line(wx, wy, wsize):
     return line_hit, penalty_hit, angle, dist_line
 
 
-def decide_navigation(yx, yy, bx, by, wx, wy, wsize, goal_sizes):
+def decide_navigation(yx, yy, bx, by, wx, wy, wsize, goal_sizes,
+                      ball=None, obstacle=None):
     """detections -> (vx, vy, turn, want_kick, mode_code, mode_name, flags)"""
     gx, gy, gsize = (bx, by, goal_sizes[1]) if TARGET_GOAL == "BLUE" else (yx, yy, goal_sizes[0])
+    ox, oy, osize = (yx, yy, goal_sizes[0]) if TARGET_GOAL == "BLUE" else (bx, by, goal_sizes[1])
     line_hit, penalty_hit, wall_angle, wall_dist = estimate_virtual_line(wx, wy, wsize)
     flags = (1 if line_hit else 0) | (2 if penalty_hit else 0)
+
+    ball_seen = ball is not None and ball[0] != 255 and ball[1] != 255 and ball[2] > 0
+    ball_angle = angle_from_normalized(ball[0], ball[1]) if ball_seen else None
+    ball_aligned = ball_angle is not None and abs(angle_error(ball_angle, 0.0)) <= BALL_FRONT_ANGLE_DEG
+    if ball_seen:
+        flags |= FLAG_BALL
+    if ball_aligned:
+        flags |= FLAG_BALL_ALIGNED
 
     if wall_angle is not None and wall_dist is not None:
         wall_err = angle_error(wall_angle, 0.0)
@@ -102,31 +126,53 @@ def decide_navigation(yx, yy, bx, by, wx, wy, wsize, goal_sizes):
         if penalty_hit:
             return 0, 60, away_turn, 0, MODE_AVOID, "AVOID", flags
 
+    if obstacle is not None and obstacle[0] != 255 and obstacle[2] >= OBSTACLE_PIX_TH:
+        obs_angle = angle_from_normalized(obstacle[0], obstacle[1])
+        if obs_angle is not None:
+            obs_err = angle_error(obs_angle, 0.0)
+            if abs(obs_err) <= 45.0:
+                away_turn = int(-35.0 * (1.0 if obs_err >= 0.0 else -1.0))
+                return 0, -30, away_turn, 0, MODE_AVOID, "AVOID", flags
+
+    if (ox != 255 and oy != 255) and (gx == 255 or gy == 255):
+        return 0, -20, 25, 0, MODE_DEFEND, "DEFEND", flags
+
     if gx == 255 or gy == 255:
+        if ball_seen:
+            err = angle_error(ball_angle, 0.0)
+            return 0, 40, int(clamp(-err * 0.6, -60.0, 60.0)), 0, MODE_APPROACH, "APPROACH", flags
         return 0, 10, 20, 0, MODE_SEARCH, "SEARCH", flags
 
     goal_angle = angle_from_normalized(gx, gy)
     err = angle_error(goal_angle, 0.0)
     turn = int(clamp(-err * 0.6, -60.0, 60.0))
     vy = 20 if abs(err) > 45.0 else 55
-    if abs(err) <= GOAL_SHOOT_ANGLE_DEG and gsize >= GOAL_NEAR_PIX and not line_hit:
+    if (abs(err) <= GOAL_SHOOT_ANGLE_DEG and gsize >= GOAL_NEAR_PIX and
+            not line_hit and ball_seen and ball_aligned):
         return 0, vy, turn, 1, MODE_SHOOT, "SHOOT", flags
     return 0, vy, turn, 0, MODE_APPROACH, "APPROACH", flags
 
 
-def detected_objects(y_size, ycx, ycy, b_size, bcx, bcy, w_size, wcx, wcy):
+def detected_objects(y_size, ycx, ycy, b_size, bcx, bcy, w_size, wcx, wcy,
+                     ball=None, obstacle=None):
     """検知結果を (英語名, 日本語名, cx, cy, 色, サイズ) のリストにする。"""
     found = []
     if y_size >= PIXELS_THRESHOLD and ycx is not None:
-        found.append(("YELLOW GOAL", "黄色ゴール", ycx, ycy, COLOR_GOAL_YELLOW, y_size))
+        name = "YELLOW GOAL" if TARGET_GOAL == "YELLOW" else "OWN GOAL"
+        found.append((name, "黄色ゴール", ycx, ycy, COLOR_GOAL_YELLOW, y_size))
     if b_size >= PIXELS_THRESHOLD and bcx is not None:
-        found.append(("BLUE GOAL", "青ゴール", bcx, bcy, COLOR_GOAL_BLUE, b_size))
+        name = "BLUE GOAL" if TARGET_GOAL == "BLUE" else "OWN GOAL"
+        found.append((name, "青ゴール", bcx, bcy, COLOR_GOAL_BLUE, b_size))
     if w_size >= WALL_PIX_TH and wcx is not None:
         found.append(("BLACK WALL", "黒い壁", wcx, wcy, COLOR_WALL, w_size))
+    if ball is not None and ball[0] != 255 and ball[2] > 0:
+        found.append(("BALL", "ボール", ball[0], ball[1], COLOR_BALL, ball[2]))
+    if obstacle is not None and obstacle[0] != 255 and obstacle[2] >= OBSTACLE_PIX_TH:
+        found.append(("OBSTACLE", "相手ロボット", obstacle[0], obstacle[1], COLOR_OBSTACLE, obstacle[2]))
     return found
 
 
-def status_lines(objects, mode_name, want_kick, line_hit, penalty_hit, wall_cm):
+def status_lines(objects, mode_name, want_kick, line_hit, penalty_hit, wall_cm, flags=0):
     """画面上部に表示するステータス行。"""
     names = ",".join(obj[0] for obj in objects) if objects else "NONE"
     lines = ["DETECT: " + names, "MODE: " + mode_name, "KICK: " + ("YES" if want_kick else "NO")]
@@ -136,6 +182,10 @@ def status_lines(objects, mode_name, want_kick, line_hit, penalty_hit, wall_cm):
         lines.append("VIRTUAL LINE: DETECTED")
     if penalty_hit:
         lines.append("PENALTY AREA: IN")
+    if flags & FLAG_BALL:
+        lines.append("BALL: SEEN" + (" / FRONT" if flags & FLAG_BALL_ALIGNED else ""))
+    elif mode_name in ("SHOOT", "APPROACH"):
+        lines.append("BALL: NOT SEEN")
     return lines
 
 
@@ -246,26 +296,38 @@ def main_loop():
         y_size, ycx, ycy, y_rect = biggest_blob_info(img, YellowThresholds, goal_roi, PIXELS_THRESHOLD)
         b_size, bcx, bcy, b_rect = biggest_blob_info(img, BlueThresholds, goal_roi, PIXELS_THRESHOLD)
         w_size, wcx, wcy, w_rect = biggest_blob_info(img, BlackThresholds, wall_roi, WALL_PIX_TH)
+        ball_size, ball_cx, ball_cy, ball_rect = biggest_blob_info(
+            img, BallThresholds, wall_roi, PIXELS_THRESHOLD)
+        obs_size, obs_cx, obs_cy, obs_rect = biggest_blob_info(
+            img, ObstacleThresholds, wall_roi, PIXELS_THRESHOLD)
 
         yx, yy = norm_coord(ycx, ycy, img)
         bx, by = norm_coord(bcx, bcy, img)
         wx, wy = norm_coord(wcx, wcy, img)
+        ball_x, ball_y = norm_coord(ball_cx, ball_cy, img)
+        obs_x, obs_y = norm_coord(obs_cx, obs_cy, img)
+        ball = (ball_x, ball_y, ball_size)
+        obstacle = (obs_x, obs_y, obs_size)
 
         vx, vy, turn, want_kick, mode, mode_name, flags = decide_navigation(
-            yx, yy, bx, by, wx, wy, w_size, (y_size, b_size))
+            yx, yy, bx, by, wx, wy, w_size, (y_size, b_size), ball, obstacle)
         line_hit = (flags & 0x01) != 0
         penalty_hit = (flags & 0x02) != 0
         wall_cm = wall_distance_cm(w_size)
 
-        objects = detected_objects(y_size, ycx, ycy, b_size, bcx, bcy, w_size, wcx, wcy)
+        objects = detected_objects(y_size, ycx, ycy, b_size, bcx, bcy, w_size, wcx, wcy, ball, obstacle)
         rects = {}
         if y_rect is not None:
-            rects["YELLOW GOAL"] = y_rect
+            rects["YELLOW GOAL" if TARGET_GOAL == "YELLOW" else "OWN GOAL"] = y_rect
         if b_rect is not None:
-            rects["BLUE GOAL"] = b_rect
+            rects["BLUE GOAL" if TARGET_GOAL == "BLUE" else "OWN GOAL"] = b_rect
         if w_rect is not None:
             rects["BLACK WALL"] = w_rect
-        lines = status_lines(objects, mode_name, want_kick, line_hit, penalty_hit, wall_cm)
+        if ball_rect is not None:
+            rects["BALL"] = ball_rect
+        if obs_rect is not None:
+            rects["OBSTACLE"] = obs_rect
+        lines = status_lines(objects, mode_name, want_kick, line_hit, penalty_hit, wall_cm, flags)
         draw_overlay(img, objects, rects, lines)
 
         names_ja = ", ".join(obj[1] for obj in objects) if objects else "なし"

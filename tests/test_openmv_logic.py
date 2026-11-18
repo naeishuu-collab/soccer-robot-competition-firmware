@@ -33,11 +33,18 @@ class OpenMvNavigationTests(unittest.TestCase):
         self.assertGreater(turn, 0)  # 壁と逆 (CCW) へ旋回
         self.assertEqual(kick, 0)
 
-    def test_front_goal_shoots(self):
-        result = nav.decide_navigation(128, 30, 255, 255, 255, 255, 0, (500, 0))
+    def test_front_goal_shoots_only_with_ball_in_front(self):
+        ball = (128, 30, 100)
+        result = nav.decide_navigation(128, 30, 255, 255, 255, 255, 0, (500, 0), ball)
         self.assertEqual(result[5], "SHOOT")
         self.assertEqual(result[3], 1)
         self.assertEqual(result[2], 0)
+        self.assertTrue(result[6] & nav.FLAG_BALL)
+        self.assertTrue(result[6] & nav.FLAG_BALL_ALIGNED)
+        # ボールが見えていなければ、ゴールが正面でも蹴らない
+        no_ball = nav.decide_navigation(128, 30, 255, 255, 255, 255, 0, (500, 0))
+        self.assertEqual(no_ball[5], "APPROACH")
+        self.assertEqual(no_ball[3], 0)
 
     def test_off_axis_goal_approaches_without_kick(self):
         result = nav.decide_navigation(230, 128, 255, 255, 255, 255, 0, (500, 0))
@@ -54,7 +61,8 @@ class OpenMvNavigationTests(unittest.TestCase):
         original = nav.TARGET_GOAL
         try:
             nav.TARGET_GOAL = "BLUE"
-            result = nav.decide_navigation(255, 255, 128, 30, 255, 255, 0, (0, 500))
+            result = nav.decide_navigation(255, 255, 128, 30, 255, 255, 0, (0, 500),
+                                           (128, 30, 100))
             self.assertEqual(result[5], "SHOOT")
         finally:
             nav.TARGET_GOAL = original
@@ -116,6 +124,47 @@ class OpenMvNavigationTests(unittest.TestCase):
         goal, wall = nav.make_legacy_packets(10, 20, 30, 40, 50, 60, 0x0123)
         self.assertEqual(list(goal), [0x02, 10, 20, 30, 40, 50, 60])
         self.assertEqual(list(wall), [0x14, 50, 60, 0x01, 0x23, 0xFF, 0xFF])
+
+    def test_own_goal_only_defends_without_kick(self):
+        # TARGET_GOAL=YELLOW のとき青ゴールだけ見えても自ゴールへは蹴らない
+        result = nav.decide_navigation(255, 255, 128, 30, 255, 255, 0, (0, 500),
+                                       (128, 30, 100))
+        self.assertEqual(result[5], "DEFEND")
+        self.assertEqual(result[3], 0)
+        self.assertEqual(result[1], -20)
+
+    def test_obstacle_in_front_avoids_without_kick(self):
+        result = nav.decide_navigation(128, 30, 255, 255, 255, 255, 0, (500, 0),
+                                       (128, 30, 100), (128, 40, 200))
+        self.assertEqual(result[5], "AVOID")
+        self.assertEqual(result[3], 0)
+
+    def test_ball_without_goal_approaches_ball(self):
+        result = nav.decide_navigation(255, 255, 255, 255, 255, 255, 0, (0, 0),
+                                       (180, 128, 100))
+        self.assertEqual(result[5], "APPROACH")
+        self.assertEqual(result[3], 0)
+        self.assertTrue(result[6] & nav.FLAG_BALL)
+
+    def test_rules_detectors_present(self):
+        src = (Path(__file__).resolve().parents[1] / "openmv/goal_wall_navigation.py").read_text(encoding="utf-8")
+        self.assertIn("BallThresholds", src)
+        self.assertIn("ObstacleThresholds", src)
+        self.assertIn("OWN_GOAL", src)
+
+    def test_camera_only_display_detects_ball_and_obstacle(self):
+        spec = importlib.util.spec_from_file_location(
+            "camera_only_display", Path(__file__).resolve().parents[1] / "openmv/camera_only_display.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        objects = module.detected_objects(500, 120, 60, 0, None, None, 0, None, None,
+                                          (128, 100, 80), (128, 110, 120))
+        names = [obj[0] for obj in objects]
+        self.assertIn("BALL", names)
+        self.assertIn("OBSTACLE", names)
+        lines = module.status_lines(objects, "SHOOT", 1, False, False, 30.0,
+                                    module.FLAG_BALL | module.FLAG_BALL_ALIGNED)
+        self.assertTrue(any("BALL: SEEN" in line for line in lines))
 
 
 if __name__ == "__main__":

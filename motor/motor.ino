@@ -2040,6 +2040,8 @@ private:
 using namespace soccer;
 
 constexpr uint32_t kCommandTimeoutMs = 300;
+// MAINが停止/故障したときの暴走防止。false にすれば旧挙動（物理スイッチのみ）に戻せる。
+constexpr bool kSoftwareWatchdogEnabled = true;
 constexpr uint32_t kMotorPeriodUs = 5000;
 constexpr uint8_t kRampStep = 5;
 constexpr uint32_t kRampIntervalMs = 10;
@@ -2207,9 +2209,14 @@ void rejectMotorFrame() {
 }
 
 void receiveCommands(uint32_t nowMs) {
-    // 注意: 300msコマンド・ウォッチドッグは運用者要望で意図的に削除した。
-    // 最後の有効な車輪指令は、新しいフレームか'S'停止フレームが来るまで保持し続ける。
-    // 確実な停止はMOTOR基板の物理電源スイッチのみ。
+    // MAINからの指令が途切れたら安全停止する（競技中の暴走防止）。
+    // kSoftwareWatchdogEnabled=false で旧挙動に戻せるが、その場合は物理スイッチが唯一の停止手段。
+    if (kSoftwareWatchdogEnabled && hasCommand &&
+        static_cast<uint32_t>(nowMs - lastCommandMs) > kCommandTimeoutMs) {
+        ++commandTimeouts;
+        rejectMotorFrame();
+        return;
+    }
     uint8_t byte = 0;
     uint8_t consumed = 0;
     while (consumed++ < 64 && rs485.receiveByte(byte, micros())) {
