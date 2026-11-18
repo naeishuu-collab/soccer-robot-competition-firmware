@@ -2153,6 +2153,7 @@ bool openMvVirtualLine = false;
 bool openMvPenaltyArea = false;
 bool openMvBallSeen = false;
 bool openMvBallAligned = false;
+bool openMvBallInKicker = false;
 bool openMvFresh = false;
 uint8_t openMvMode = 0;
 float gyroLockHeading = 0.0f;
@@ -2636,6 +2637,7 @@ void receiveOpenMv(uint32_t nowMs) {
         openMvPenaltyArea = (openMvFrame[6] & 0x02) != 0;
         openMvBallSeen = (openMvFrame[6] & 0x04) != 0;
         openMvBallAligned = (openMvFrame[6] & 0x08) != 0;
+        openMvBallInKicker = (openMvFrame[6] & 0x10) != 0;
         openMvFresh = true;
         lastOpenMvMs = nowMs;
     }
@@ -2648,6 +2650,7 @@ void receiveOpenMv(uint32_t nowMs) {
         openMvPenaltyArea = false;
         openMvBallSeen = false;
         openMvBallAligned = false;
+        openMvBallInKicker = false;
     }
 }
 
@@ -2758,10 +2761,13 @@ void loop() {
         kickerInput.fault = false;
         // 故障したLINEセンサーの代わりに、カメラから推定した仮想白線とペナルティエリアを使う。
         kickerInput.lineClear = !(openMvFresh && (openMvVirtualLine || openMvPenaltyArea));
-        // ボールが無い場所へ蹴らないよう、カメラのボール検出をキック条件に使う。
-        kickerInput.ballFresh = openMvBallSeen || input.irFresh;
-        kickerInput.ballDetected = openMvBallSeen || input.ballFound;
-        kickerInput.ballAligned = (openMvFresh && openMvBallAligned) ||
+        // ボールが無い場所／キッカーに入っていない場所へ蹴らないよう、
+        // カメラの「ボール有＋正面＋キッカー内」をすべてキック条件に使う。
+        const bool cameraBallReady = openMvFresh && openMvBallSeen &&
+                                     openMvBallAligned && openMvBallInKicker;
+        kickerInput.ballFresh = cameraBallReady || input.irFresh;
+        kickerInput.ballDetected = cameraBallReady || input.ballFound;
+        kickerInput.ballAligned = cameraBallReady ||
             (input.ballFound && input.ballAngleDeg < 360 &&
              fabsf(shortestAngleError(static_cast<float>(input.ballAngleDeg), 0.0f)) <=
                  board::kKickerBallAngleToleranceDeg);
