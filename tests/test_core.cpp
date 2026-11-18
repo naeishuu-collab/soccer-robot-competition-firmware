@@ -343,7 +343,10 @@ static void testIrTestContinuousTrackingAndCoarseSteering() {
     CHECK(!bootController.armOnFirstFreshBall(true, true, 0));
     for (uint16_t i = 0; i < 600; ++i) CHECK(bootController.update(true, true, 0, motion));
     CHECK(bootController.armed());
-    CHECK(!bootController.update(false, true, 0, motion));
+    CHECK(bootController.update(false, true, 0, motion));
+    CHECK(bootController.searching() && bootController.armed() && motion.turn > 0);
+    CHECK(bootController.update(true, true, 0, motion));
+    CHECK(!bootController.searching());
     CHECK(!bootController.armOnFirstFreshBall(true, true, 0));
     IrTestController cancelledBootController;
     cancelledBootController.disableAutoStart();
@@ -362,22 +365,23 @@ static void testIrTestContinuousTrackingAndCoarseSteering() {
     CHECK(motion.x == 0 && motion.y == 0 && motion.turn < 0);
     CHECK(controller.update(true, true, 330, motion));
     CHECK(motion.x == 0 && motion.y == 0 && motion.turn > 0);
-    CHECK(!controller.update(false, true, 30, motion));
-    CHECK(!controller.armed() && motion.x == 0 && motion.y == 0 && motion.turn == 0);
-    CHECK(!controller.update(true, true, 30, motion));
+    CHECK(controller.update(false, true, 30, motion));
+    CHECK(controller.armed() && controller.searching() && motion.x == 0 && motion.y == 0 && motion.turn > 0);
+    CHECK(controller.update(true, true, 30, motion));
+    CHECK(!controller.searching() && motion.turn < 0);
 
     CHECK(controller.arm(true, true, 0));
-    CHECK(!controller.update(true, false, 0, motion));
-    CHECK(!controller.armed());
+    CHECK(controller.update(true, false, 0, motion));
+    CHECK(controller.armed() && controller.searching() && motion.turn > 0);
     CHECK(controller.arm(true, true, 0));
     for (uint16_t i = 0; i < 600; ++i) CHECK(controller.update(true, true, 0, motion));
-    CHECK(controller.armed());
-    CHECK(!controller.update(true, false, 0, motion));
-    CHECK(!controller.armed());
+    CHECK(controller.armed() && !controller.searching());
+    CHECK(controller.update(true, false, 0, motion));
+    CHECK(controller.armed() && controller.searching());
 
     CHECK(controller.arm(true, true, 30));
-    CHECK(!controller.update(true, true, 360, motion));
-    CHECK(!controller.armed());
+    CHECK(controller.update(true, true, 360, motion));
+    CHECK(controller.armed() && controller.searching());
     CHECK(!irTestMotionForBearing(360, motion));
     CHECK(motion.x == 0 && motion.y == 0 && motion.turn == 0);
 }

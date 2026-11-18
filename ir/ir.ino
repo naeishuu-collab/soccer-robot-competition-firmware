@@ -789,6 +789,7 @@ struct Motion {
 };
 
 constexpr uint8_t kIrTestPwmCap = 16;
+constexpr float kIrTestSearchTurn = 0.12f;
 
 // 暫定: 車輪ジオメトリは仮値。4輪の方向確認後に差し替える。
 inline bool irTestMotionForBearing(uint16_t directionDeg, Motion& motion) {
@@ -821,21 +822,28 @@ public:
 
     bool update(bool irFresh, bool ballFound, uint16_t directionDeg, Motion& motion) {
         motion = {};
-        if (!armed_) return false;
-        if (!irFresh || !ballFound || !irTestMotionForBearing(directionDeg, motion)) {
-            disarm();
-            motion = {};
+        if (!armed_) {
+            searching_ = false;
             return false;
         }
+        if (irFresh && ballFound && irTestMotionForBearing(directionDeg, motion)) {
+            searching_ = false;
+            return true;
+        }
+        // IRロストでもARMを維持し、その場でゆっくり旋回してボールを探す。
+        searching_ = true;
+        motion.turn = kIrTestSearchTurn;
         return true;
     }
 
-    void disarm() { armed_ = false; }
+    void disarm() { armed_ = false; searching_ = false; }
     bool armed() const { return armed_; }
+    bool searching() const { return searching_; }
 
 private:
     bool autoStartPending_ = true;
     bool armed_ = false;
+    bool searching_ = false;
 };
 
 enum AutoMode : uint8_t { kAutoStopped, kAutoWheelLift, kAutoFloor, kAutoIrTest };

@@ -789,6 +789,7 @@ struct Motion {
 };
 
 constexpr uint8_t kIrTestPwmCap = 16;
+constexpr float kIrTestSearchTurn = 0.12f;
 
 // 暫定: 車輪ジオメトリは仮値。4輪の方向確認後に差し替える。
 inline bool irTestMotionForBearing(uint16_t directionDeg, Motion& motion) {
@@ -821,21 +822,28 @@ public:
 
     bool update(bool irFresh, bool ballFound, uint16_t directionDeg, Motion& motion) {
         motion = {};
-        if (!armed_) return false;
-        if (!irFresh || !ballFound || !irTestMotionForBearing(directionDeg, motion)) {
-            disarm();
-            motion = {};
+        if (!armed_) {
+            searching_ = false;
             return false;
         }
+        if (irFresh && ballFound && irTestMotionForBearing(directionDeg, motion)) {
+            searching_ = false;
+            return true;
+        }
+        // IRロストでもARMを維持し、その場でゆっくり旋回してボールを探す。
+        searching_ = true;
+        motion.turn = kIrTestSearchTurn;
         return true;
     }
 
-    void disarm() { armed_ = false; }
+    void disarm() { armed_ = false; searching_ = false; }
     bool armed() const { return armed_; }
+    bool searching() const { return searching_; }
 
 private:
     bool autoStartPending_ = true;
     bool armed_ = false;
+    bool searching_ = false;
 };
 
 enum AutoMode : uint8_t { kAutoStopped, kAutoWheelLift, kAutoFloor, kAutoIrTest };
@@ -2148,6 +2156,9 @@ uint8_t openMvMode = 0;
 float gyroLockHeading = 0.0f;
 bool gyroLockValid = false;
 uint32_t lastOpenMvMs = 0;
+uint32_t lastSensorContactMs = 0;
+bool sensorBlackout = false;
+constexpr uint32_t kSensorBlackoutStopMs = 500;
 
 Adafruit_BNO055 bnoSensor(kBnoSensorId, board::kBnoAddress, &Wire);
 struct ArduinoBnoDevices {
@@ -2400,12 +2411,9 @@ void receiveSharedBus(uint32_t nowMs) {
     uint8_t byte = 0;
     uint8_t consumed = 0;
     while (consumed++ < 64 && rs485.receiveByte(byte, micros())) {
-        const uint16_t irErrors = irParser.errors();
-        const uint16_t irTimeouts = irParser.timeouts();
         uint16_t direction = 0, strength = 0;
+        // IRの解析エラー／応答欠落は累計診断に残すだけとし、停止やARM解除はしない。
         if (irParser.feed(byte, nowMs, direction, strength)) acceptIrResponse(direction, strength, nowMs);
-        if (autoMode == kAutoIrTest && irTestController.armed() &&
-            (irParser.errors() != irErrors || irParser.timeouts() != irTimeouts)) stopIrTest();
 
         Packet packet{};
         const ParserStats before = lineParser.stats();
@@ -2415,11 +2423,7 @@ void receiveSharedBus(uint32_t nowMs) {
             after.timeouts != before.timeouts) ++lineRejectedPackets;
         if (ready) acceptLineResponse(packet, nowMs);
     }
-    const uint16_t irErrors = irParser.errors();
-    const uint16_t irTimeouts = irParser.timeouts();
     irParser.poll(nowMs);
-    if (autoMode == kAutoIrTest && irTestController.armed() &&
-        (irParser.errors() != irErrors || irParser.timeouts() != irTimeouts)) stopIrTest();
     if (lineParser.poll(nowMs)) ++lineRejectedPackets;
 }
 
@@ -2429,7 +2433,6 @@ bool sendIrPoll(uint32_t nowUs) {
     if (!rs485.send(&request, 1, nowUs)) {
         busArbiter.complete(kIrRs485Peer);
         ++irTxErrors;
-        if (autoMode == kAutoIrTest && irTestController.armed()) stopIrTest();
         return false;
     }
     ++irRequests;
@@ -2532,7 +2535,7 @@ void pollMotorConsole(uint32_t nowMs) {
             if (autoMode == kAutoIrTest &&
                 irTestController.arm(irFresh, irBallFound, irDirection)) {
                 if (Serial && Serial.availableForWrite() >= 72)
-                    Serial.println("IR TEST armed; IR loss/fault or S stops");
+                    Serial.println("IR TEST armed; IR loss -> search; S stops");
             } else {
                 autoMode = kAutoStopped;
                 motorConsoleCommandSeen = false;
@@ -2568,7 +2571,7 @@ void pollSharedBus(uint32_t nowMs) {
         busArbiter.complete(kIrRs485Peer);
         irPending = false;
         ++irResponseTimeouts;
-        if (autoMode == kAutoIrTest && irTestController.armed()) stopIrTest();
+        // 単発の応答欠落では停止しない。探索モードへ移行して競技を継続する。
         finishIrCycle(nowMs);
     } else if (busArbiter.activePeer() == kLineRs485Peer &&
                static_cast<uint32_t>(nowUs - busRequestStartedUs) >= kLineReplyTimeoutUs) {
@@ -2650,8 +2653,8 @@ void setup() {
         Serial.println("USB: AUTO [FLOAT] / AUTO FLOOR / AUTO IR; ARM IR; S=stop; M <v0> <v1> <v2> <v3>");
     if (Serial && Serial.availableForWrite() >= 64)
         Serial.println("MOTOR M range -255..255, 256=brake; no command timeout (S / power switch only)");
-    if (Serial && Serial.availableForWrite() >= 72)
-        Serial.println("IR TEST: no LINE; auto-arm; PWM 16; stop on IR loss/S; wheels up");
+    if (Serial && Serial.availableForWrite() >= 96)
+        Serial.println("IR TEST: no LINE; auto-arm; PWM 16; IR loss -> search; S stops; wheels up");
 
     pinMode(board::kMainRs485DePin, OUTPUT);
     digitalWrite(board::kMainRs485DePin, LOW);
@@ -2670,6 +2673,7 @@ void setup() {
     Wire.setSCL(board::kBnoSclPin);
     Wire.begin();
     Wire.setClock(board::kBnoI2cClockHz);
+    lastSensorContactMs = millis();
 }
 
 void loop() {
@@ -2775,21 +2779,30 @@ void loop() {
             // LINEが使えないときはカメラ指令が運動制御を引き継ぐ。
             motorMotion = openMvMotion;
             motorEnabled = true;
-        }
-        // ジャイロ方位ホールド（実機動作テストのIMUPLUSモード）: カメラがSHOOTと判断した瞬間の
-        // 現在の相対方位を記憶する。ゴールが短時間見えなくなっても、
-        // 停止せず、ゴールがあった方向へ直進し続ける。
-        if (headingSample.headingValid && openMvFresh && openMvMode == 4) {
-            gyroLockHeading = headingSample.headingDeg;
-            gyroLockValid = true;
-        }
-        if (gyroLockValid && headingSample.headingValid &&
-            (!openMvFresh || (openMvMode != 4 && openMvMode != 1))) {
+            // カメラが見えている間は方位を記憶し、ロスト後に方位ホールドへ切り替える。
+            if (headingSample.headingValid) {
+                gyroLockHeading = headingSample.headingDeg;
+                gyroLockValid = true;
+            }
+        } else if (gyroLockValid && headingSample.headingValid && !input.ballFound) {
+            // カメラもIRボールも見えない場合は停止せず、直進してゴール側へ戻る。
             const float headingError = shortestAngleError(gyroLockHeading, headingSample.headingDeg);
             motorMotion.x = 0.0f;
             motorMotion.y = 0.35f;
             motorMotion.turn = constrainValue(headingError * 0.01f, -0.3f, 0.3f);
             motorEnabled = true;
+        }
+        // 全センサーが同時に無効になった場合は短い猶予の後に停止し、回復すれば自動再開する。
+        if (input.irFresh || openMvFresh || input.headingValid) {
+            sensorBlackout = false;
+            lastSensorContactMs = nowMs;
+        } else if (!sensorBlackout &&
+                   static_cast<uint32_t>(nowMs - lastSensorContactMs) >= kSensorBlackoutStopMs) {
+            sensorBlackout = true;
+        }
+        if (sensorBlackout) {
+            motorMotion = {};
+            motorEnabled = false;
         }
         if (wasArmed && !motorEnabled) motorStopPending = true;
     }
