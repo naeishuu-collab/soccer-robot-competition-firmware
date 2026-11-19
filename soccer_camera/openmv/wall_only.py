@@ -20,7 +20,7 @@ HDR_GOALWALL = 0x02
 HDR_WALL = 0x14
 
 # 実測 L11/A-7/B5 を中心に、旧 L31-33 もカバー（緑フィールドは L40以上なので除外）
-BlackThresholds = [(5, 30, -12, 0, -2, 10)]
+BlackThresholds = [(5, 32, -20, 5, -5, 15)]
 
 uart = UART(3, 9600, timeout_char=1000)
 uart.init(9600, bits=8, parity=None, stop=1, timeout_char=1000)
@@ -148,7 +148,7 @@ while True:
     img = sensor.snapshot()
 
     # 壁は画面下2/3だけを探す（ルール3.1.4: 壁より上の色を無視）
-    wall_roi = (0, img.height() // 3, img.width(), img.height() * 2 // 3)
+    wall_roi = (0, img.height() // 4, img.width(), img.height() * 3 // 4)
     best_size = 0
     best_cx = None
     best_cy = None
@@ -166,7 +166,10 @@ while True:
             continue
         w, h = rect[2], rect[3]
         # 壁は横長の帯。四角い黒領域（PCや影）は除外する。
-        if w < 30 or h < 4 or h > 150 or w < 2.0 * h:
+        if w < 30 or h < 4 or h > 150 or w < 1.5 * h:
+            continue
+        # 床の黒い物体を壁と誤検出しない（壁は床より上）。
+        if rect[1] > wall_roi[1] + wall_roi[3] // 2:
             if len(rejected) < 3:
                 rejected.append(rect)
             continue

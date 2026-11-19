@@ -38,8 +38,9 @@ YellowThresholds = [(79, 86, -3, 7, 57, 70)]
 # 青ゴール: 最新サンプル L40-41 / A4-5 / B-43 を主とし、旧サンプルも予備で保持
 BlueThresholds = [(39, 42, 3, 7, -45, -41), (19, 25, 13, 20, -46, -40)]
 # 黒い壁: 最新実測 L53-54/A-5--4/B-1-1 に合わせる（緑のフィールドを拾わない）
-BlackThresholds = [(5, 30, -12, 0, -2, 10)]
+BlackThresholds = [(5, 32, -20, 5, -5, 15)]
 # 壁領域を画像上の4点（正規化座標 nx,ny）で定义する。None なら従来のblob検出。
+WALL_MAX_Y = None
 WALL_QUAD = None
 GoalRoi = (30, 30, 260, 260)
 # オレンジボール: 実機計測 L55-76 / A13-42 / B42-78（2026ルールで直径4.2cm）
@@ -419,7 +420,10 @@ def valid_wall_blob(blob):
     w, h = rect[2], rect[3]
     if w < 30 or h < 4 or h > 150:
         return False
-    return w >= 2.0 * h
+    # 床の黒い物体（ケーブル・服・PC）を壁と誤検出しない。
+    if WALL_MAX_Y is not None and rect[1] > WALL_MAX_Y:
+        return False
+    return w >= 1.5 * h
 
 
 def biggest_blob_info(img, thresholds, roi, pixel_threshold, quad=None, shape_filter=None):
@@ -585,6 +589,7 @@ def collect_wall_blobs(img, thresholds, roi, pixel_threshold, quad=None, shape_f
 
 
 def main_loop():
+    global WALL_MAX_Y
     init_camera()
 
     uart = None
@@ -601,7 +606,8 @@ def main_loop():
         img = sensor.snapshot()
         width, height = img.width(), img.height()
         goal_roi = GoalRoi
-        wall_roi = (0, height // 3, width, height * 2 // 3)
+        wall_roi = (0, height // 4, width, height * 3 // 4)
+        WALL_MAX_Y = wall_roi[1] + wall_roi[3] // 2
 
         y_size, ycx, ycy, y_rect, y_blob = biggest_blob_info(
             img, YellowThresholds, goal_roi, GOAL_MIN_PIX)

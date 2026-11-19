@@ -88,9 +88,11 @@ YellowThresholds = [(79, 86, -3, 7, 57, 70)]
 # 青ゴール: 最新サンプル L40-41 / A4-5 / B-43 を主とし、旧サンプルも予備で保持
 BlueThresholds = [(39, 42, 3, 7, -45, -41), (19, 25, 13, 20, -46, -40)]
 # 黒い壁: 最新実測 L53-54/A-5--4/B-1-1 に合わせる（緑のフィールドを拾わない）
-BlackThresholds = [(5, 30, -12, 0, -2, 10)]
+BlackThresholds = [(5, 32, -20, 5, -5, 15)]
 # 壁領域を画像上の4点（正規化座標 nx,ny）で定义する。None なら従来のblob検出。
-# 例: WALL_QUAD = [(0, 0), (255, 0), (255, 30), (0, 30)]
+# 例: WALL_MAX_Y = None
+WALL_MAX_Y = None
+WALL_QUAD = [(0, 0), (255, 0), (255, 30), (0, 30)]
 WALL_QUAD = None
 # オレンジボール: 実機計測 L55-76 / A13-42 / B42-78（2026ルールで直径4.2cm）
 BallThresholds = [(53, 78, 11, 45, 40, 82)]
@@ -518,7 +520,10 @@ def valid_wall_blob(blob):
     w, h = rect[2], rect[3]
     if w < 30 or h < 4 or h > 150:
         return False
-    return w >= 2.0 * h
+    # 床の黒い物体（ケーブル・服・PC）を壁と誤検出しない。
+    if WALL_MAX_Y is not None and rect[1] > WALL_MAX_Y:
+        return False
+    return w >= 1.5 * h
 
 
 def biggest_blob(img, thresholds, roi, pixel_threshold, quad=None, shape_filter=None):
@@ -632,6 +637,7 @@ def collect_wall_blobs(img, thresholds, roi, pixel_threshold, quad=None, shape_f
 
 
 def main_loop():
+    global WALL_MAX_Y
     init_camera()
     uart = UART(3, 9600, timeout_char=1000)
     uart.init(9600, bits=8, parity=None, stop=1, timeout_char=1000)
@@ -646,7 +652,8 @@ def main_loop():
         bsize, bcx, bcy, b_rect, b_blob = biggest_blob(img, BlueThresholds, GoalRoi, GOAL_MIN_PIX)
         # ルール3.1.4: 壁の上の色（服など）を無視するため、
         # 壁探索を画像下2/3に制限する。
-        wall_roi = (0, img.height() // 3, img.width(), img.height() * 2 // 3)
+        wall_roi = (0, img.height() // 4, img.width(), img.height() * 3 // 4)
+        WALL_MAX_Y = wall_roi[1] + wall_roi[3] // 2
         wsize, wcx, wcy, w_rect, w_blob = biggest_blob(
             img, BlackThresholds, wall_roi, WALL_PIX_TH, WALL_QUAD, valid_wall_blob)
         # 人などに遮られて壁が分断されても、すべての断片を描画対象にする。
