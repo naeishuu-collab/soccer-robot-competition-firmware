@@ -23,7 +23,7 @@ TH = {
     "BALL":   [(53, 78, 11, 45, 40, 82)],
     "YELLOW": [(68, 80, -5, 6, 58, 72)],
     "BLUE":   [(39, 42, 3, 7, -45, -41), (19, 25, 13, 20, -46, -40)],
-    "BLACK":  [(48, 60, -8, -2, -3, 3)],
+    "BLACK":  [(27, 60, -12, 0, -5, 5)],
     "RED":    [(30, 90, 140, 255, 110, 200)],
 }
 
@@ -37,16 +37,25 @@ COLORS = {
 
 
 def draw_blob_outline(img, blob, color):
-    """blob の輪郭（凸包）を描く。中心点は描かない。"""
+    """blob の輪郭（凸包）を描く。取れない場合は rect を描く。中心点は描かない。"""
+    hull = None
     try:
         hull = blob_value(blob, "convex_hull")
-        if hull and len(hull) >= 3:
-            for i in range(len(hull)):
-                p1 = hull[i]
-                p2 = hull[(i + 1) % len(hull)]
-                img.draw_line(p1[0], p1[1], p2[0], p2[1], color, 2)
     except Exception:
         pass
+    if hull and len(hull) >= 3:
+        for i in range(len(hull)):
+            p1 = hull[i]
+            p2 = hull[(i + 1) % len(hull)]
+            try:
+                img.draw_line(p1[0], p1[1], p2[0], p2[1], color, 2)
+            except Exception:
+                pass
+    else:
+        try:
+            img.draw_rectangle(blob_value(blob, "rect"), color, 2)
+        except Exception:
+            pass
 
 
 def blob_value(blob, name):
@@ -129,14 +138,14 @@ def main():
         for name, thresholds in TH.items():
             count = 0
             roi = wall_roi if name == "BLACK" else None
-            min_px = 200 if name == "BLACK" else 20
+            min_px = 120 if name == "BLACK" else 20
             for blob in img.find_blobs(thresholds, roi=roi,
                                        pixels_threshold=min_px,
                                        area_threshold=min_px, merge=True, margin=6):
                 rect = blob_value(blob, "rect")
                 # 壁は横長の帯だけを表示（PCや影の黒領域を除外）
                 if name == "BLACK" and rect is not None and len(rect) >= 4:
-                    if rect[2] < 30 or rect[3] < 4 or rect[3] > 150 or rect[2] < 1.5 * rect[3]:
+                    if rect[2] < 25 or rect[3] < 3 or rect[3] > 150 or rect[2] < 1.3 * rect[3]:
                         continue
                 count += 1
                 px = blob_value(blob, "pixels")

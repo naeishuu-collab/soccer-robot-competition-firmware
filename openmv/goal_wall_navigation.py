@@ -60,7 +60,7 @@ GOAL_REF_DIST_CM = 100.0
 
 # ---------- 検出設定 ----------
 PIXELS_THRESHOLD = 20
-WALL_PIX_TH = 200
+WALL_PIX_TH = 120
 STREAM_INTERVAL_MS = 200
 
 WALL_AVOID_ANGLE_DEG = 60.0
@@ -88,7 +88,7 @@ YellowThresholds = [(79, 86, -3, 7, 57, 70)]
 # 青ゴール: 最新サンプル L40-41 / A4-5 / B-43 を主とし、旧サンプルも予備で保持
 BlueThresholds = [(39, 42, 3, 7, -45, -41), (19, 25, 13, 20, -46, -40)]
 # 黒い壁: 最新実測 L53-54/A-5--4/B-1-1 に合わせる（緑のフィールドを拾わない）
-BlackThresholds = [(48, 60, -8, -2, -3, 3)]
+BlackThresholds = [(27, 60, -12, 0, -5, 5)]
 # 壁領域を画像上の4点（正規化座標 nx,ny）で定义する。None なら従来のblob検出。
 # 例: WALL_QUAD = [(0, 0), (255, 0), (255, 30), (0, 30)]
 WALL_QUAD = None
@@ -516,9 +516,9 @@ def valid_wall_blob(blob):
     if rect is None or len(rect) < 4:
         return False
     w, h = rect[2], rect[3]
-    if w < 30 or h < 4 or h > 150:
+    if w < 25 or h < 3 or h > 150:
         return False
-    return w >= 1.5 * h
+    return w >= 1.3 * h
 
 
 def biggest_blob(img, thresholds, roi, pixel_threshold, quad=None, shape_filter=None):
@@ -548,18 +548,29 @@ def biggest_blob(img, thresholds, roi, pixel_threshold, quad=None, shape_filter=
 
 
 def draw_blob_outline(img, blob, color):
-    """blob の輪郭（凸包）を正確に描く。中心点は描かない。"""
+    """blob の輪郭（凸包）を正確に描く。中心点は描かない。
+    凸包が取れないファームウェアでは rect を4点として描く。"""
     if blob is None:
         return
+    hull = None
     try:
         hull = blob_value(blob, "convex_hull")
-        if hull and len(hull) >= 3:
-            for i in range(len(hull)):
-                p1 = hull[i]
-                p2 = hull[(i + 1) % len(hull)]
-                img.draw_line(p1[0], p1[1], p2[0], p2[1], color, 2)
     except Exception:
         pass
+    if hull and len(hull) >= 3:
+        for i in range(len(hull)):
+            p1 = hull[i]
+            p2 = hull[(i + 1) % len(hull)]
+            try:
+                img.draw_line(p1[0], p1[1], p2[0], p2[1], color, 2)
+            except Exception:
+                pass
+    else:
+        # 凸包が空でも何も出ないよりは確実に枠を見せる。
+        try:
+            img.draw_rectangle(blob_value(blob, "rect"), color, 2)
+        except Exception:
+            pass
 
 
 def main_loop():

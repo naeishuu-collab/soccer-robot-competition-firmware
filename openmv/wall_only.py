@@ -14,13 +14,13 @@ from pyb import UART
 
 # ---------- 設定 ----------
 STREAM_INTERVAL_MS = 200
-WALL_PIX_TH = 200
+WALL_PIX_TH = 120
 
 HDR_GOALWALL = 0x02
 HDR_WALL = 0x14
 
 # 最新実測 L53-54/A-5--4/B-1-1（緑のフィールドを拾わない）
-BlackThresholds = [(48, 60, -8, -2, -3, 3)]
+BlackThresholds = [(27, 60, -12, 0, -5, 5)]
 
 uart = UART(3, 9600, timeout_char=1000)
 uart.init(9600, bits=8, parity=None, stop=1, timeout_char=1000)
@@ -51,16 +51,27 @@ def uart_write(pkt):
 
 
 def draw_wall_outline(img, blob):
-    """壁の輪郭（凸包）を青い線で描く。中心点は描かない。"""
+    """壁の輪郭（凸包）を青い線で描く。中心点は描かない。
+    凸包が取れないファームウェアでは rect を4点として描く。"""
+    hull = None
     try:
-        hull = blob_value(blob, "convex_hull")  # v5/旧版どちらでも座標リストが返る
-        if hull and len(hull) >= 3:
-            for i in range(len(hull)):
-                p1 = hull[i]
-                p2 = hull[(i + 1) % len(hull)]
-                img.draw_line(p1[0], p1[1], p2[0], p2[1], (0, 0, 255), 2)
+        hull = blob_value(blob, "convex_hull")
     except Exception:
         pass
+    if hull and len(hull) >= 3:
+        for i in range(len(hull)):
+            p1 = hull[i]
+            p2 = hull[(i + 1) % len(hull)]
+            try:
+                img.draw_line(p1[0], p1[1], p2[0], p2[1], (0, 0, 255), 2)
+            except Exception:
+                pass
+    else:
+        # 凸包が空でも何も出ないよりは確実に枠を見せる。
+        try:
+            img.draw_rectangle(blob_value(blob, "rect"), (0, 0, 255), 2)
+        except Exception:
+            pass
 
 
 # ---------- 初期化 ----------
@@ -102,16 +113,20 @@ while True:
     best_cy = None
     best_rect = None
     best_blob = None
-    for blob in img.find_blobs(BlackThresholds, roi=wall_roi,
-                               pixels_threshold=WALL_PIX_TH,
-                               area_threshold=WALL_PIX_TH,
-                               merge=True, margin=6):
+    raw_blobs = list(img.find_blobs(BlackThresholds, roi=wall_roi,
+                                    pixels_threshold=WALL_PIX_TH,
+                                    area_threshold=WALL_PIX_TH,
+                                    merge=True, margin=6))
+    rejected = []
+    for blob in raw_blobs:
         rect = blob_value(blob, "rect")
         if rect is None or len(rect) < 4:
             continue
         w, h = rect[2], rect[3]
         # 壁は横長の帯。四角い黒領域（PCや影）は除外する。
-        if w < 30 or h < 4 or h > 150 or w < 1.5 * h:
+        if w < 25 or h < 3 or h > 150 or w < 1.3 * h:
+            if len(rejected) < 3:
+                rejected.append(rect)
             continue
         size = blob_value(blob, "pixels")
         if size > best_size:
@@ -124,7 +139,7 @@ while True:
     if best_size > 0 and best_cx is not None:
         wx, wy = norm_coord(best_cx, best_cy, img)
         wsize = best_size
-        # 白い矩形ではなく、壁の形に沿った青い輪郭＋中心点を描く。
+        # 壁の形に沿った青い輪郭を描く（中心点は描かない）。
         if best_blob is not None:
             draw_wall_outline(img, best_blob)
     else:
@@ -132,7 +147,9 @@ while True:
         wsize = 0
 
     try:
-        print("Wsize:{} rect:{} wx:{} wy:{}".format(wsize, best_rect, wx, wy))
+        # raw=色閾値で拾った数 / rej=形状で弾いた rect / Wsize=採用した壁
+        print("raw:{} rej:{} Wsize:{} rect:{} wx:{} wy:{}".format(
+            len(raw_blobs), rejected, wsize, best_rect, wx, wy))
     except Exception:
         pass
 
