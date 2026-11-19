@@ -19,7 +19,7 @@ WALL_PIX_TH = 120
 HDR_GOALWALL = 0x02
 HDR_WALL = 0x14
 
-# 最新実測 L53-54/A-5--4/B-1-1（緑のフィールドを拾わない）
+# 実測 L11/A-7/B5 を中心に、旧 L31-33 もカバー（緑フィールドは L40以上なので除外）
 BlackThresholds = [(5, 30, -12, 0, -2, 10)]
 
 uart = UART(3, 9600, timeout_char=1000)
@@ -94,3 +94,90 @@ def draw_wall_outline(img, blob):
         img.draw_rectangle(blob_value(blob, "rect"), (0, 0, 255), 2)
     except Exception:
         pass
+
+
+# ---------- 初期化 ----------
+sensor.reset()
+sensor.set_pixformat(sensor.RGB565)
+try:
+    sensor.set_framesize(sensor.B320X320)
+except Exception:
+    sensor.set_framesize(sensor.QVGA)
+sensor.skip_frames(time=300)
+try:
+    sensor.set_auto_exposure(True)
+    sensor.set_auto_gain(True)
+    sensor.set_auto_whitebal(False)
+except Exception:
+    pass
+# 競技ルール: IR発光器と可視LEDはOFF
+try:
+    sensor.set_ir_led(False)
+except Exception:
+    pass
+try:
+    for led_id in (1, 2, 3):
+        pyb.LED(led_id).off()
+except Exception:
+    pass
+
+clock = time.clock()
+last_stream_ms = pyb.millis()
+
+while True:
+    clock.tick()
+    img = sensor.snapshot()
+
+    # 壁は画面下2/3だけを探す（ルール3.1.4: 壁より上の色を無視）
+    wall_roi = (0, img.height() // 3, img.width(), img.height() * 2 // 3)
+    best_size = 0
+    best_cx = None
+    best_cy = None
+    best_rect = None
+    best_blob = None
+    raw_blobs = list(img.find_blobs(BlackThresholds, roi=wall_roi,
+                                    pixels_threshold=WALL_PIX_TH,
+                                    area_threshold=WALL_PIX_TH,
+                                    merge=True, margin=6))
+    rejected = []
+    for blob in raw_blobs:
+        rect = blob_value(blob, "rect")
+        if rect is None or len(rect) < 4:
+            continue
+        w, h = rect[2], rect[3]
+        # 壁は横長の帯。四角い黒領域（PCや影）は除外する。
+        if w < 25 or h < 3 or h > 150 or w < 1.3 * h:
+            if len(rejected) < 3:
+                rejected.append(rect)
+            continue
+        size = blob_value(blob, "pixels")
+        if size > best_size:
+            best_size = size
+            best_cx = blob_value(blob, "cx")
+            best_cy = blob_value(blob, "cy")
+            best_rect = rect
+            best_blob = blob
+
+    if best_size > 0 and best_cx is not None:
+        wx, wy = norm_coord(best_cx, best_cy, img)
+        wsize = best_size
+        # 壁の形に沿った青い輪郭を描く（中心点は描かない）。
+        if best_blob is not None:
+            draw_wall_outline(img, best_blob)
+    else:
+        wx = wy = 255
+        wsize = 0
+
+    try:
+        # raw=色閾値で拾った数 / rej=形状で弾いた rect / Wsize=採用した壁
+        print("raw:{} rej:{} Wsize:{} rect:{} wx:{} wy:{}".format(
+            len(raw_blobs), rejected, wsize, best_rect, wx, wy))
+    except Exception:
+        pass
+
+    now = pyb.millis()
+    if (now - last_stream_ms) >= STREAM_INTERVAL_MS:
+        last_stream_ms = now
+        uart_write(make_packet(HDR_GOALWALL, 255, 255, 255, 255, wx, wy))
+        uart_write(make_packet(HDR_WALL, wx, wy,
+                               (wsize >> 8) & 0xFF, wsize & 0xFF, 0xFF, 0xFF))
