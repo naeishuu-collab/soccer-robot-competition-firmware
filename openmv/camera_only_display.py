@@ -423,8 +423,8 @@ def valid_wall_blob(blob):
 
 
 def biggest_blob_info(img, thresholds, roi, pixel_threshold, quad=None, shape_filter=None):
-    """(size, cx, cy, rect) を返す。未検出なら (0, None, None, None)。"""
-    best, cx, cy, rect = 0, None, None, None
+    """(size, cx, cy, rect, blob) を返す。未検出なら (0, None, None, None, None)。"""
+    best, cx, cy, rect, best_blob = 0, None, None, None, None
     for blob in img.find_blobs(thresholds, roi=roi,
                                pixels_threshold=pixel_threshold,
                                area_threshold=pixel_threshold,
@@ -442,7 +442,23 @@ def biggest_blob_info(img, thresholds, roi, pixel_threshold, quad=None, shape_fi
             cx = blob_value(blob, "cx")
             cy = blob_value(blob, "cy")
             rect = blob_value(blob, "rect")
-    return best, cx, cy, rect
+            best_blob = blob
+    return best, cx, cy, rect, best_blob
+
+
+def draw_blob_outline(img, blob, color):
+    """blob の輪郭（凸包）を正確に描く。中心点は描かない。"""
+    if blob is None:
+        return
+    try:
+        hull = blob_value(blob, "convex_hull")  # v5/旧版どちらでも座標リストが返る
+        if hull and len(hull) >= 3:
+            for i in range(len(hull)):
+                p1 = hull[i]
+                p2 = hull[(i + 1) % len(hull)]
+                img.draw_line(p1[0], p1[1], p2[0], p2[1], color, 2)
+    except Exception:
+        pass
 
 
 def norm_coord(cx, cy, img):
@@ -487,12 +503,11 @@ def safe_draw_rectangle(img, rect, color):
             pass
 
 
-def draw_overlay(img, objects, rects, lines):
+def draw_overlay(img, objects, blobs, lines):
     # (英語名, 日本語名, cx, cy, 色, サイズ) の6要素で展開する。
+    # 矩形ではなく blob の輪郭（凸包）を描く。中心点は描かない。
     for name, _name_ja, cx, cy, color, _size in objects:
-        rect = rects.get(name)
-        if rect is not None:
-            safe_draw_rectangle(img, rect, color)
+        draw_blob_outline(img, blobs.get(name), color)
         safe_draw_string(img, cx - 20, cy - 14, name, color)
     y = 2
     for line in lines:
@@ -519,28 +534,30 @@ def main_loop():
         goal_roi = GoalRoi
         wall_roi = (0, height // 3, width, height * 2 // 3)
 
-        y_size, ycx, ycy, y_rect = biggest_blob_info(img, YellowThresholds, goal_roi, GOAL_MIN_PIX)
-        b_size, bcx, bcy, b_rect = biggest_blob_info(img, BlueThresholds, goal_roi, GOAL_MIN_PIX)
-        w_size, wcx, wcy, w_rect = biggest_blob_info(
+        y_size, ycx, ycy, y_rect, y_blob = biggest_blob_info(
+            img, YellowThresholds, goal_roi, GOAL_MIN_PIX)
+        b_size, bcx, bcy, b_rect, b_blob = biggest_blob_info(
+            img, BlueThresholds, goal_roi, GOAL_MIN_PIX)
+        w_size, wcx, wcy, w_rect, w_blob = biggest_blob_info(
             img, BlackThresholds, wall_roi, WALL_PIX_TH, WALL_QUAD, valid_wall_blob)
-        ball_size, ball_cx, ball_cy, ball_rect = biggest_blob_info(
+        ball_size, ball_cx, ball_cy, ball_rect, ball_blob = biggest_blob_info(
             img, BallThresholds, wall_roi, PIXELS_THRESHOLD, shape_filter=valid_ball_blob)
-        obs_size, obs_cx, obs_cy, obs_rect = biggest_blob_info(
+        obs_size, obs_cx, obs_cy, obs_rect, obs_blob = biggest_blob_info(
             img, ObstacleThresholds, wall_roi, PIXELS_THRESHOLD)
         # 黄ゴールの一部をボールと誤検出した場合はボールを捨てる（形＋重なりで判定）。
         if ball_size > 0 and ball_rect is not None:
             if overlap_ratio(ball_rect, y_rect) > 0.4 or overlap_ratio(ball_rect, b_rect) > 0.4:
-                ball_size, ball_cx, ball_cy, ball_rect = 0, None, None, None
+                ball_size, ball_cx, ball_cy, ball_rect, ball_blob = 0, None, None, None, None
         # ボールと重なったゴール検出は破棄（オレンジは黄ゴール閾値にも入るため）。
         if ball_size > 0 and ball_cx is not None:
             if rect_center_inside(ball_rect, ycx, ycy):
-                y_size, ycx, ycy, y_rect = 0, None, None, None
+                y_size, ycx, ycy, y_rect, y_blob = 0, None, None, None, None
             if rect_center_inside(ball_rect, bcx, bcy):
-                b_size, bcx, bcy, b_rect = 0, None, None, None
+                b_size, bcx, bcy, b_rect, b_blob = 0, None, None, None, None
         # ボールのロック: 連続 BALL_LOCK_FRAMES フレーム見えて初めて採用する。
         ball_seen_count = ball_seen_count + 1 if ball_size > 0 else 0
         if ball_seen_count < BALL_LOCK_FRAMES:
-            ball_size, ball_cx, ball_cy, ball_rect = 0, None, None, None
+            ball_size, ball_cx, ball_cy, ball_rect, ball_blob = 0, None, None, None, None
 
         yx, yy = norm_coord(ycx, ycy, img)
         bx, by = norm_coord(bcx, bcy, img)
@@ -562,20 +579,20 @@ def main_loop():
         wall_cm = wall_distance_cm(w_size)
 
         objects = detected_objects(y_size, ycx, ycy, b_size, bcx, bcy, w_size, wcx, wcy, ball, obstacle)
-        rects = {}
-        if y_rect is not None:
-            rects["YELLOW GOAL" if TARGET_GOAL == "YELLOW" else "OWN GOAL"] = y_rect
-        if b_rect is not None:
-            rects["BLUE GOAL" if TARGET_GOAL == "BLUE" else "OWN GOAL"] = b_rect
-        if w_rect is not None:
-            rects["BLACK WALL"] = w_rect
-        if ball_rect is not None:
-            rects["BALL"] = ball_rect
-        if obs_rect is not None:
-            rects["OBSTACLE"] = obs_rect
+        blobs = {}
+        if y_blob is not None:
+            blobs["YELLOW GOAL" if TARGET_GOAL == "YELLOW" else "OWN GOAL"] = y_blob
+        if b_blob is not None:
+            blobs["BLUE GOAL" if TARGET_GOAL == "BLUE" else "OWN GOAL"] = b_blob
+        if w_blob is not None:
+            blobs["BLACK WALL"] = w_blob
+        if ball_blob is not None:
+            blobs["BALL"] = ball_blob
+        if obs_blob is not None:
+            blobs["OBSTACLE"] = obs_blob
         lines = status_lines(objects, mode_name, want_kick, line_hit, penalty_hit, wall_cm, flags)
         lines.append("FOCAL: " + ("N/A" if focal_px <= 0 else "%d" % int(focal_px)))
-        draw_overlay(img, objects, rects, lines)
+        draw_overlay(img, objects, blobs, lines)
 
         names_ja = ", ".join(obj[1] for obj in objects) if objects else "なし"
         print("DETECT: " + names_ja + " | MODE: " + mode_name)

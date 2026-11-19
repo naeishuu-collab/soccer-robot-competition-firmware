@@ -50,6 +50,19 @@ def uart_write(pkt):
         pass
 
 
+def draw_wall_outline(img, blob):
+    """壁の輪郭（凸包）を青い線で描く。中心点は描かない。"""
+    try:
+        hull = blob_value(blob, "convex_hull")  # v5/旧版どちらでも座標リストが返る
+        if hull and len(hull) >= 3:
+            for i in range(len(hull)):
+                p1 = hull[i]
+                p2 = hull[(i + 1) % len(hull)]
+                img.draw_line(p1[0], p1[1], p2[0], p2[1], (0, 0, 255), 2)
+    except Exception:
+        pass
+
+
 # ---------- 初期化 ----------
 sensor.reset()
 sensor.set_pixformat(sensor.RGB565)
@@ -88,6 +101,7 @@ while True:
     best_cx = None
     best_cy = None
     best_rect = None
+    best_blob = None
     for blob in img.find_blobs(BlackThresholds, roi=wall_roi,
                                pixels_threshold=WALL_PIX_TH,
                                area_threshold=WALL_PIX_TH,
@@ -105,14 +119,14 @@ while True:
             best_cx = blob_value(blob, "cx")
             best_cy = blob_value(blob, "cy")
             best_rect = rect
+            best_blob = blob
 
     if best_size > 0 and best_cx is not None:
         wx, wy = norm_coord(best_cx, best_cy, img)
         wsize = best_size
-        try:
-            img.draw_rectangle(best_rect, (255, 255, 255), 1)
-        except Exception:
-            pass
+        # 白い矩形ではなく、壁の形に沿った青い輪郭＋中心点を描く。
+        if best_blob is not None:
+            draw_wall_outline(img, best_blob)
     else:
         wx = wy = 255
         wsize = 0

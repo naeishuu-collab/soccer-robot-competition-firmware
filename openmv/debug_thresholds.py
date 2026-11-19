@@ -36,6 +36,19 @@ COLORS = {
 }
 
 
+def draw_blob_outline(img, blob, color):
+    """blob の輪郭（凸包）を描く。中心点は描かない。"""
+    try:
+        hull = blob_value(blob, "convex_hull")
+        if hull and len(hull) >= 3:
+            for i in range(len(hull)):
+                p1 = hull[i]
+                p2 = hull[(i + 1) % len(hull)]
+                img.draw_line(p1[0], p1[1], p2[0], p2[1], color, 2)
+    except Exception:
+        pass
+
+
 def blob_value(blob, name):
     """OpenMV v5 はプロパティ、旧版はメソッド。両対応。"""
     value = getattr(blob, name)
@@ -132,10 +145,7 @@ def main():
                 mean = lab_mean(img, rect)
                 lines.append("{} px={} rect={} cxcy=({},{}) lab={}".format(
                     name, px, rect, cx, cy, mean))
-                try:
-                    img.draw_rectangle(rect, COLORS[name], 1)
-                except Exception:
-                    pass
+                draw_blob_outline(img, blob, COLORS[name])
                 safe_text(img, cx, cy, name, COLORS[name])
             if count == 0:
                 lines.append("{}: NONE".format(name))
