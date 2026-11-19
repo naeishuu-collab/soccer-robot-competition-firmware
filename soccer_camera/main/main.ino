@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <Adafruit_BNO055.h>
+#include "OpenMvNavigation.h"
 
 // 暫定: 共通モジュールは4スケッチに複製している。差が出たら同期を自動化する。
 // BEGIN INTEGRATED COMMON CODE
@@ -2137,36 +2138,24 @@ uint16_t controlOverruns = 0;
 uint8_t diagnosticPhase = 0;
 
 // OpenMVナビゲーション回線: UART2 / 9600bps (TX=GP2, RX=GP3)。
-// 0x20 [vx][vy][turn][kick][mode][xor] - 符号付き値/100 を Motion の -1..1 に変換。
+// 0x20 [vx][vy][turn][aimed][mode][flags][xor]。
 constexpr int8_t kOpenMvTxPin = 2;
 constexpr int8_t kOpenMvRxPin = 3;
 constexpr uint32_t kOpenMvBaud = 9600;
-constexpr uint8_t kOpenMvNavHeader = 0x20;
-constexpr uint8_t kOpenMvNavFrameSize = 8;
-constexpr uint32_t kOpenMvFreshTimeoutMs = 500;
+constexpr uint32_t kOpenMvFreshTimeoutMs = 200;
+constexpr uint32_t kOpenMvPartialTimeoutMs = 20;
+// 大会用IRボールでキック位置を実測して設定。0の間はカメラ走行もキックも待機。
+constexpr uint16_t kOpenMvCloseIrSignal = 0;
 uint8_t openMvFrame[kOpenMvNavFrameSize]{};
 uint8_t openMvUsed = 0;
 Motion openMvMotion{};
-bool openMvKick = false;
-bool openMvVirtualLine = false;
-bool openMvPenaltyArea = false;
-bool openMvBallSeen = false;
-bool openMvBallAligned = false;
-bool openMvBallInKicker = false;
+bool openMvAimed = false;
 bool openMvFresh = false;
-uint8_t openMvMode = 0;
-// 方位ホールド探索時の旋回量制限（クラス外からも使うためグローバルに定義）。
-static float constrainValue(float v, float lo, float hi) {
-    return v < lo ? lo : (v > hi ? hi : v);
-}
-
-float gyroLockHeading = 0.0f;
-bool gyroLockValid = false;
-// キック判断はカメラに委ねるため、MAIN側のIR／ジャイロ方位ゲートは使用しない。
+bool openMvKickedForBall = false;
+OpenMvMode openMvMode = kOpenMvWait;
 uint32_t lastOpenMvMs = 0;
-uint32_t lastSensorContactMs = 0;
-bool sensorBlackout = false;
-constexpr uint32_t kSensorBlackoutStopMs = 500;
+uint32_t lastOpenMvByteMs = 0;
+uint32_t openMvPeriodMs = 0;
 
 Adafruit_BNO055 bnoSensor(kBnoSensorId, board::kBnoAddress, &Wire);
 struct ArduinoBnoDevices {
@@ -2543,7 +2532,7 @@ void pollMotorConsole(uint32_t nowMs) {
             if (autoMode == kAutoIrTest &&
                 irTestController.arm(irFresh, irBallFound, irDirection)) {
                 if (Serial && Serial.availableForWrite() >= 72)
-                    Serial.println("IR TEST armed; IR loss -> search; S stops");
+                    Serial.println("IR TEST armed; calibrated OpenMV required; S stops");
             } else {
                 autoMode = kAutoStopped;
                 motorConsoleCommandSeen = false;
@@ -2616,46 +2605,40 @@ void printLineLevels() {
 
 // OpenMVから想定形式の0x20ナビゲーションパケットを受信（LINEは使わない）。
 void receiveOpenMv(uint32_t nowMs) {
+    if (openMvUsed && static_cast<uint32_t>(nowMs - lastOpenMvByteMs) >= kOpenMvPartialTimeoutMs)
+        openMvUsed = 0;
     while (Serial2.available()) {
         const int readValue = Serial2.read();
         if (readValue < 0) break;
         const uint8_t byte = static_cast<uint8_t>(readValue);
-        if (openMvUsed == 0) {
-            if (byte == kOpenMvNavHeader) openMvFrame[openMvUsed++] = byte;
-            continue;
-        }
+        if (openMvUsed == 0 && byte != kOpenMvNavHeader) continue;
+        lastOpenMvByteMs = nowMs;
         openMvFrame[openMvUsed++] = byte;
         if (openMvUsed < kOpenMvNavFrameSize) continue;
-        uint8_t checksum = 0;
-        for (uint8_t i = 0; i < kOpenMvNavFrameSize - 1; ++i) checksum ^= openMvFrame[i];
+        if (!validOpenMvFrame(openMvFrame)) {
+            uint8_t next = 1;
+            while (next < kOpenMvNavFrameSize && openMvFrame[next] != kOpenMvNavHeader) ++next;
+            openMvUsed = kOpenMvNavFrameSize - next;
+            for (uint8_t i = 0; i < openMvUsed; ++i) openMvFrame[i] = openMvFrame[next + i];
+            continue;
+        }
         openMvUsed = 0;
-        if (checksum != openMvFrame[kOpenMvNavFrameSize - 1]) continue;
         const auto decode = [](uint8_t raw) {
             return static_cast<float>(static_cast<int8_t>(raw)) / 100.0f;
         };
         const Motion motion{decode(openMvFrame[1]), decode(openMvFrame[2]), decode(openMvFrame[3])};
-        if (!validMotion(motion)) continue;
         openMvMotion = motion;
-        openMvMode = openMvFrame[5];
-        openMvKick = (openMvFrame[4] & 0x01) != 0;
-        openMvVirtualLine = (openMvFrame[6] & 0x01) != 0;
-        openMvPenaltyArea = (openMvFrame[6] & 0x02) != 0;
-        openMvBallSeen = (openMvFrame[6] & 0x04) != 0;
-        openMvBallAligned = (openMvFrame[6] & 0x08) != 0;
-        openMvBallInKicker = (openMvFrame[6] & 0x10) != 0;
+        openMvMode = static_cast<OpenMvMode>(openMvFrame[5]);
+        openMvAimed = openMvFrame[4] != 0;
+        openMvPeriodMs = openMvFresh ? nowMs - lastOpenMvMs : 0;
         openMvFresh = true;
         lastOpenMvMs = nowMs;
     }
     if (openMvFresh && static_cast<uint32_t>(nowMs - lastOpenMvMs) > kOpenMvFreshTimeoutMs) {
         openMvFresh = false;
         openMvMotion = {};
-        openMvKick = false;
-        openMvMode = 0;
-        openMvVirtualLine = false;
-        openMvPenaltyArea = false;
-        openMvBallSeen = false;
-        openMvBallAligned = false;
-        openMvBallInKicker = false;
+        openMvAimed = false;
+        openMvMode = kOpenMvWait;
     }
 }
 
@@ -2687,7 +2670,6 @@ void setup() {
     Wire.setSCL(board::kBnoSclPin);
     Wire.begin();
     Wire.setClock(board::kBnoI2cClockHz);
-    lastSensorContactMs = millis();
 }
 
 void loop() {
@@ -2739,11 +2721,10 @@ void loop() {
     previousControllerState = output.state;
 
     KickerInput kickerInput{};
-    // LINE基板は故障中のため使用しない。
     kickerInput.commandFresh = input.irFresh && (!input.headingRequired || input.headingValid);
     kickerInput.armed = input.armed;
-    kickerInput.emergencyStop = input.emergencyStop;
-    kickerInput.fault = input.fault || output.state == kFault;
+    kickerInput.emergencyStop = autoMode != kAutoStopped && input.emergencyStop;
+    kickerInput.fault = autoMode != kAutoStopped && (input.fault || output.state == kFault);
     kickerInput.clearFault = input.clearFault;
     kickerInput.hardwareConfigured = board::kKickerHardwareConfigured;
     kickerInput.ballFresh = input.irFresh;
@@ -2752,77 +2733,60 @@ void loop() {
     kickerInput.headingAligned = board::kKickerHeadingWindowConfigured && board::kAttackHeadingConfigured &&
         isfinite(board::kKickerHeadingToleranceDeg) && board::kKickerHeadingToleranceDeg > 0.0f &&
         fabsf(shortestAngleError(input.headingDeg, board::kAttackHeadingDeg)) <= board::kKickerHeadingToleranceDeg;
-    // LINE基板を使用しないので、白線ガードは常にクリア。
-    kickerInput.lineClear = true;
-    // キック判定は未検証のBNO055ではなくIR方位から行う。ボールが正面にあること。
+    kickerInput.lineClear = input.lineFresh && input.line.polarityValid && !input.line.detected;
     kickerInput.ballAligned = input.ballFound && input.ballAngleDeg < 360 &&
         fabsf(shortestAngleError(static_cast<float>(input.ballAngleDeg), 0.0f)) <=
             board::kKickerBallAngleToleranceDeg;
     kickerInput.request = kickerRequestAllowed(board::kKickerRequestPolicyConfigured,
                                                 output.state == kApproachBall, kickerInput);
-    // LINEは故障中: AUTO IRはLINEなしで動作。キック判定はカメラが行う。
+    OpenMvDecision cameraDecision{kCameraStop, false};
     if (autoMode == kAutoIrTest) {
-        kickerInput.commandFresh = input.irFresh || openMvFresh;
-        kickerInput.armed = irTestController.armed() || openMvFresh;
-        kickerInput.emergencyStop = false;
-        kickerInput.fault = false;
-        // 故障したLINEセンサーの代わりに、カメラから推定した仮想白線とペナルティエリアを使う。
-        kickerInput.lineClear = !(openMvFresh && (openMvVirtualLine || openMvPenaltyArea));
-        // ボール判断はIRに任せる。カメラはゴール／壁の検出のみに使用する
-        // （ゴールをボールと誤検出する問題があるため、カメラのボール情報は使わない）。
-        const bool irBallFront = input.irFresh && input.ballFound && input.ballAngleDeg < 360 &&
+        const bool cameraReady = openMvFresh && kOpenMvCloseIrSignal != 0;
+        if (cameraReady && openMvMode != kOpenMvWait)
+            irTestController.armOnFirstFreshBall(input.irFresh, input.ballFound, irDirection);
+        const bool emergency = safetyInputsReady && emergencyStopActive;
+        if (emergency) irTestController.disarm();
+        const bool irBallCloseAndFront = kOpenMvCloseIrSignal != 0 && input.ballFound &&
+            input.relativeSignal >= kOpenMvCloseIrSignal && input.ballAngleDeg < 360 &&
             fabsf(shortestAngleError(static_cast<float>(input.ballAngleDeg), 0.0f)) <= 5.0f;
-        kickerInput.ballFresh = input.irFresh;
-        kickerInput.ballDetected = input.ballFound;
-        kickerInput.ballAligned = irBallFront;
-        kickerInput.headingValid = true;
-        kickerInput.headingAligned = true;
-        kickerInput.request = irBallFront;
+        if (input.irFresh && (!input.ballFound ||
+            static_cast<uint32_t>(input.relativeSignal) * 5 < static_cast<uint32_t>(kOpenMvCloseIrSignal) * 4))
+            openMvKickedForBall = false;
+        cameraDecision = decideOpenMvControl(irTestController.armed(), cameraReady, input.irFresh,
+                                            openMvMode, irBallCloseAndFront, openMvAimed);
+        kickerInput.commandFresh = input.irFresh && cameraReady;
+        kickerInput.armed = irTestController.armed();
+        kickerInput.emergencyStop = emergency;
+        kickerInput.fault = false;
+        kickerInput.lineClear = cameraReady && openMvMode != kOpenMvWait && openMvMode != kOpenMvAvoid;
+        kickerInput.ballAligned = irBallCloseAndFront;
+        kickerInput.headingValid = cameraReady;
+        kickerInput.headingAligned = openMvAimed;
+        // The kicker requires one Ready cycle before accepting a rising request.
+        kickerInput.request = cameraDecision.kick && !openMvKickedForBall &&
+            (kickerController.state() == kKickerReady || kickerController.state() == kKickerFiring);
     }
     const KickerOutput kickerOutput = kickerController.update(kickerInput, nowMs,
                                                               board::kKickerPulseMs,
                                                               board::kKickerCooldownMs);
+    if (autoMode == kAutoIrTest && kickerOutput.event == kKickerPulseStarted) openMvKickedForBall = true;
     digitalWrite(board::kKickerPin, kickerOutput.pulseActive() ? HIGH : LOW);
 
     if (output.state == kFault) operatorArm.reset();
     else clearFaultAction.reset();
+    const bool wasMotorEnabled = motorEnabled;
     motorMotion = output.motion;
     motorEnabled = autoConfigured && input.armed && output.state != kFault;
     if (autoMode == kAutoIrTest) {
-        // 台上試験専用の例外。LINEガードもMAIN非常停止も使わない。MOTORの電源遮断には手が届く状態を保つ。
-        irTestController.armOnFirstFreshBall(input.irFresh, input.ballFound, irDirection);
-        const bool wasArmed = irTestController.armed();
-        motorEnabled = irTestController.update(input.irFresh, input.ballFound, irDirection, motorMotion);
-        if (openMvFresh) {
-            // LINEが使えないときはカメラ指令が運動制御を引き継ぐ。
+        motorMotion = {};
+        motorEnabled = cameraDecision.control != kCameraStop;
+        if (cameraDecision.control == kIrFollow)
+            motorEnabled = irTestController.update(input.irFresh, input.ballFound, irDirection, motorMotion);
+        if (cameraDecision.control == kCameraAvoid || cameraDecision.control == kCameraAim)
             motorMotion = openMvMotion;
-            motorEnabled = true;
-            // カメラが見えている間は方位を記憶し、ロスト後に方位ホールドへ切り替える。
-            if (headingSample.headingValid) {
-                gyroLockHeading = headingSample.headingDeg;
-                gyroLockValid = true;
-            }
-        } else if (gyroLockValid && headingSample.headingValid && !input.ballFound) {
-            // カメラもIRボールも見えない場合は停止せず、直進してゴール側へ戻る。
-            const float headingError = shortestAngleError(gyroLockHeading, headingSample.headingDeg);
-            motorMotion.x = 0.0f;
-            motorMotion.y = 0.35f;
-            motorMotion.turn = constrainValue(headingError * 0.01f, -0.3f, 0.3f);
-            motorEnabled = true;
-        }
-        // 全センサーが同時に無効になった場合は短い猶予の後に停止し、回復すれば自動再開する。
-        if (input.irFresh || openMvFresh || input.headingValid) {
-            sensorBlackout = false;
-            lastSensorContactMs = nowMs;
-        } else if (!sensorBlackout &&
-                   static_cast<uint32_t>(nowMs - lastSensorContactMs) >= kSensorBlackoutStopMs) {
-            sensorBlackout = true;
-        }
-        if (sensorBlackout) {
-            motorMotion = {};
-            motorEnabled = false;
-        }
-        if (wasArmed && !motorEnabled) motorStopPending = true;
+        if (cameraDecision.control == kSearchGoal)
+            motorMotion.turn = kIrTestSearchTurn;
+        if (wasMotorEnabled && !motorEnabled) motorStopPending = true;
     }
 
     const uint32_t elapsed = micros() - startedUs;
@@ -2862,7 +2826,7 @@ void loop() {
                 Serial.print(headingSample.calibration[1]); Serial.print('/'); Serial.print(headingSample.calibration[2]);
                 Serial.print('/'); Serial.print(headingSample.calibration[3]);
                 Serial.print(" heading_rel="); Serial.println(headingSample.headingDeg);
-            } else {
+            } else if (diagnosticPhase == 3) {
                 Serial.print("DIAG auto/state=");
                 Serial.print(autoMode == kAutoIrTest ? "IR_TEST" :
                              autoMode == kAutoWheelLift ? "FLOAT" : autoMode == kAutoFloor ? "FLOOR" : "OFF");
@@ -2879,8 +2843,15 @@ void loop() {
                 Serial.print(static_cast<uint8_t>(kickerOutput.state)); Serial.print('/');
                 Serial.print(kickerOutput.mockPulseActive); Serial.print('/');
                 Serial.println(static_cast<uint8_t>(kickerOutput.event));
+            } else {
+                Serial.print("DIAG OpenMV fresh/mode/period_ms/aimed/IR_close_threshold=");
+                Serial.print(openMvFresh); Serial.print('/');
+                Serial.print(static_cast<uint8_t>(openMvMode)); Serial.print('/');
+                Serial.print(openMvPeriodMs); Serial.print('/');
+                Serial.print(openMvAimed); Serial.print('/');
+                Serial.println(kOpenMvCloseIrSignal);
             }
-            diagnosticPhase = static_cast<uint8_t>((diagnosticPhase + 1) & 0x03u);
+            diagnosticPhase = static_cast<uint8_t>((diagnosticPhase + 1) % 5u);
         }
     }
 }

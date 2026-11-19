@@ -159,8 +159,6 @@ def verify_active_sources():
         errors.append("MAIN must validate LINE packets with the same failed-sensor mask")
     if "kBnoOffsetsVerified = true" not in source or not re.search(r"if\s*\(\s*board::kBnoOffsetsVerified\s*\)\s*devices->sensor->setSensorOffsets\(offsets\);", main_source):
         errors.append("BNO055 offsets from the working test must be applied")
-    if "gyroLockValid" not in main_source or "gyroLockHeading" not in main_source:
-        errors.append("camera-locked gyro heading hold must be present")
     constants = {
         "kMainRs485TxPin": expected["MAIN"]["UART_TX"], "kMainRs485RxPin": expected["MAIN"]["UART_RX"],
         "kMainRs485DePin": expected["MAIN"]["RS485_DE"], "kIrRs485TxPin": expected["IR"]["UART_TX"],
@@ -217,18 +215,12 @@ def verify_active_sources():
         errors.append("MAIN must gate a kick on the IR ball bearing and drive GPIO11 from the pulse state")
     if "Serial2.begin(kOpenMvBaud)" not in main_source or "void receiveOpenMv(" not in main_source:
         errors.append("MAIN must receive the OpenMV 0x20 navigation packet")
-    if "openMvKick" not in main_source or "motorMotion = openMvMotion" not in main_source:
-        errors.append("AUTO IR must accept OpenMV motion and kick commands without LINE")
-    if "openMvVirtualLine || openMvPenaltyArea" not in main_source:
-        errors.append("virtual line AND penalty area must suppress the kick")
-    if "openMvVirtualLine" not in main_source or "estimate_virtual_line" not in \
-       (ROOT / "openmv/goal_wall_navigation.py").read_text(encoding="utf-8"):
-        errors.append("virtual line from camera wall distance must gate the kicker")
+    if "decideOpenMvControl(" not in main_source or "motorMotion = openMvMotion" not in main_source:
+        errors.append("AUTO IR must arbitrate calibrated OpenMV and IR commands")
     if not re.search(r"constexpr\s+uint32_t\s+kKickerCooldownMs\s*=\s*0", source):
         errors.append("kicker cooldown must remain removed at the operator's request")
-    if "kickerInput.request = openMvKick ||" in main_source or \
-       "kickerInput.request = openMvKick;" not in main_source:
-        errors.append("only the camera may request a kick; IR is for ball retrieval only")
+    if "kickerInput.request = cameraDecision.kick &&" not in main_source:
+        errors.append("AUTO IR must gate the kick on the joint camera and IR decision")
     try:
         if not valid_motor_legacy_reference(LEGACY_MOTOR):
             errors.append("older MOTOR driver design must remain explicitly classified LEGACY_REFERENCE")

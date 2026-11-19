@@ -1,744 +1,313 @@
-# OpenMV H7: 壁距離 → 仮想白線 + ゴールシュート
-# ------------------------------------------------------------
-# 大会: RCJ 関東ブロック / サッカーインフラレッド (2026ルール適用)
-# 競技台 (Appendix A):
-#   プレイングフィールド 158cm x 219cm (白線含む)
-#   外エリア 12cm / 全体 182cm x 243cm
-#   壁 高さ22cm マットブラック
-#   ゴール 幅60cm 高さ10cm 奥行7.4cm (黄/青)
-#   ペナルティエリア 25cm(奥行) x 80cm(幅)
-#   センターサークル 直径60cm / ボール 42mm IRオレンジ
-#
-# 重要ルール 6.2.B.1 (赤外線リーグ):
-#   ToF / LiDAR / IR距離センサー等 IRを発する距離計は禁止。
-#   本スクリプトは OpenMV (可視光) の黒い壁blobサイズから距離を推定するため合法。
-#
-# MAIN との通信: UART3 (OpenMV) <-> MAIN Serial2 (GP16/17, 9600bps)
-#   0x02: [0x02, yx, yy, bx, by, wx, wy]           既存互換
-#   0x14: [0x14, wx, wy, size_hi, size_lo, FF, FF] 既存互換
-#   0x20: [0x20, vx, vy, turn, kick, mode, flags, xor]
-#         vx/vy/turn = -100..100 符号付き (MAIN は /100 して Motion -1..1)
-#         kick  = 0/1
-#         mode  = 1:AVOID 2:SEARCH 3:APPROACH 4:SHOOT
-#         flags = bit0: 仮想ライン(白線)接近, bit1: ペナルティエリア接近
-#         xor   = 先頭7バイトの排他的論理和
-# ------------------------------------------------------------
+"""H7 Plus competition camera. Copy camera_calibration.py alongside main.py."""
+import math
+
+import camera_calibration as cfg
 
 try:
     import sensor
     import image
     import time
     import pyb
-    from pyb import UART
-    OPENMV = True
 except ImportError:
-    OPENMV = False
-    sensor = None
-    image = None
-    time = None
-    pyb = None
-    UART = None
+    sensor = image = time = pyb = None
 
-import math
+OUTER_CM = 12
+LINE_CLEARANCE_CM = 18
+LOOKAHEAD_CM = 50
+RAY_COUNT = 24
+GOAL_STABLE_FRAMES = 3
+GOAL_MAX_JUMP_DEG = 20
+GOAL_MAX_AIM_DEG = 7
+GOAL_EDGE_MARGIN_DEG = 2
+STREAM_INTERVAL_MS = 50
+MAX_FRAME_AGE_MS = 100
 
-# ---------- 競技台定数 (cm) ----------
-FIELD_W_CM = 158.0           # 短辺 (白線含む)
-FIELD_L_CM = 219.0           # 長辺
-OUTER_CM = 12.0              # 白線外のアウトエリア
-WALL_H_CM = 22.0
-PENALTY_DEPTH_CM = 25.0
-PENALTY_WIDTH_CM = 80.0
-GOAL_W_CM = 60.0
-CENTER_CIRCLE_CM = 60.0
-VIRTUAL_LINE_MARGIN_CM = 8.0  # 白線からこの距離以内で「ライン上」とみなす
-# カメラは絶対位置を持たないため、cm定数は「距離推定の較正と妥当性チェック」に使う。
-# WALL_H_CM / PENALTY_WIDTH_CM / CENTER_CIRCLE_CM は資料用の参照値で判定には使わない。
-MAX_FIELD_CM = max(FIELD_W_CM, FIELD_L_CM)
-GOAL_SHOOT_MAX_DIST_CM = FIELD_L_CM * 0.6
-GOAL_REF_PIX = 500.0
-GOAL_REF_DIST_CM = 100.0
-
-# ---------- 検出設定 ----------
-PIXELS_THRESHOLD = 20
-WALL_PIX_TH = 150
-STREAM_INTERVAL_MS = 200
-
-WALL_AVOID_ANGLE_DEG = 60.0
-WALL_AVOID_DIST_CM = 35.0     # 壁がこの距離より近ければ回避
-GOAL_SHOOT_ANGLE_DEG = 15.0
-GOAL_NEAR_PIX = 60
-# 人物の服などの小さな誤検出をゴールと扱わないための最小面積。
-GOAL_MIN_PIX = 200
-
-# 壁blobサイズ -> 距離の較正 (OpenMV H7 + 標準レンズ用の初期値)
-# 実機で 30cm と 60cm の壁を撮って WALL_REF_PIX@30CM を調整すること。
-WALL_REF_PIX = 6000
-WALL_REF_DIST_CM = 30.0
-
-HDR_GOALWALL = 0x02
-HDR_WALL = 0x14
-HDR_NAV = 0x20
+MODE_WAIT = 0
 MODE_AVOID = 1
-MODE_SEARCH = 2
-MODE_APPROACH = 3
-MODE_SHOOT = 4
-
-# 黄ゴール: 実機計測 L82-83 / A1-3 / B61-66。ボール(L<=78, A>=13)と分離する。
-YellowThresholds = [(79, 86, -3, 7, 57, 70)]
-# 青ゴール: 最新サンプル L40-41 / A4-5 / B-43 を主とし、旧サンプルも予備で保持
-BlueThresholds = [(39, 42, 3, 7, -45, -41), (19, 25, 13, 20, -46, -40)]
-# 黒い壁: 最新実測 L53-54/A-5--4/B-1-1 に合わせる（緑のフィールドを拾わない）
-BlackThresholds = [(5, 32, -20, 5, -5, 15)]
-# 壁領域を画像上の4点（正規化座標 nx,ny）で定义する。None なら従来のblob検出。
-# 例: WALL_MAX_Y = None
-WALL_MAX_Y = None
-WALL_QUAD = [(0, 0), (255, 0), (255, 30), (0, 30)]
-WALL_QUAD = None
-# オレンジボール: 実機計測 L55-76 / A13-42 / B42-78（2026ルールで直径4.2cm）
-BallThresholds = [(53, 78, 11, 45, 40, 82)]
-# カメラはボール検知に使わない（IRに任せる）。誤検出を完全に止める。
-BALL_DETECTION_ENABLED = False
-# 相手ロボットのマーカー（赤系）。実機の色で要調整。
-ObstacleThresholds = [(30, 90, 140, 255, 110, 200)]
-GoalRoi = (30, 30, 260, 260)
-
-# 攻撃するゴールの色と守るゴールの色（試合のサイドに合わせて入れ替える）
-TARGET_GOAL = "YELLOW"
-OWN_GOAL = "BLUE"
-# 起動後に最初に安定して見えたゴールの色を相手ゴールとしてロックする。
-# コイントス／後半のエンド入れ替えに合わせて自動で決まるが、最初に自ゴールを
-# 見た場合は誤るため、必要なら AUTO_TARGET_COLOR=False にして定数で固定する。
-AUTO_TARGET_COLOR = True
-TARGET_LOCK_FRAMES = 8
-# ボールも単発の誤検出で採用しないため、連続検出フレーム数を要求する。
-BALL_LOCK_FRAMES = 3
-# セット時の正面(0°)に最も近いゴールを相手ゴールとする。それより後ろのゴールは候補にしない。
-TARGET_LOCK_MAX_ANGLE_DEG = 90.0
-target_locked = not AUTO_TARGET_COLOR
-target_candidate = None
-target_candidate_count = 0
-BALL_FRONT_ANGLE_DEG = 25.0
-# ボールがキッカーのポケットにある場合は正面から外れて見えることがあるため広めに取る。
-BALL_IN_KICKER_ANGLE_TOL_DEG = 60.0
-# シュートはボールとゴールが同じ方向に並んでいないと外れるため、両者の方位差も見る。
-BALL_GOAL_ALIGN_TOL_DEG = 12.0
-OBSTACLE_PIX_TH = 60
-MODE_DEFEND = 5
+MODE_TRACK_IR = 2
+MODE_ALIGN = 3
+MODE_AIMED = 4
 FLAG_VIRTUAL_LINE = 0x01
-FLAG_PENALTY_AREA = 0x02
-FLAG_BALL = 0x04
-FLAG_BALL_ALIGNED = 0x08
-FLAG_BALL_IN_KICKER = 0x10
-# ボールのblob面積→距離（逆比例モデル）。実機のカメラ/レンズで要較正。
-BALL_REF_PIX = 4000.0
-BALL_REF_DIST_CM = 10.0
-# キッカーのポケットに入っているとみなす距離[cm]（ロボット半径約11cm＋捕獲ゾーン3cm）。
-BALL_KICK_MIN_CM = 5.0
-BALL_KICK_MAX_CM = 16.0
-# ② 自己較正: キッカー内のボール(実径4.2cm)が何ピクセルかで焦点距離を求める。
-BALL_DIAMETER_CM = 4.2   # 2026ルールで 74mm→42mm（資料で確認済み）
-BALL_AT_KICKER_CM = 10.0
-WALL_HEIGHT_CM = 22.0    # 既存資料の壁高（付録Aの図版のためPDFテキスト確認不可）
-GOAL_HEIGHT_CM = 10.0    # 同上
-focal_px = 0.0
+FLAG_OMNI = 0x20  # Distinguishes the calibrated camera protocol from legacy 0x20 senders.
+
+GOAL_COLORS = {"YELLOW": (255, 255, 0), "BLUE": (0, 110, 255)}
+MODES = ("WAIT", "AVOID", "TRACK IR", "ALIGN", "AIMED")
 
 
-# ---------- 純粋ロジック ----------
-def clamp(v, lo, hi):
-    if v < lo:
-        return lo
-    if v > hi:
-        return hi
-    return v
+def angle_error(angle, reference=0):
+    return (angle - reference + 180) % 360 - 180
 
 
-def norm_coord(cx, cy, img):
-    if cx is None or cy is None:
-        return 255, 255
-    return int((cx * 255) // img.width()), int((cy * 255) // img.height())
-
-
-def angle_from_normalized(nx, ny):
-    if nx == 255 or ny == 255:
-        return None
-    dx = float(nx) - 128.0
-    dy = float(ny) - 128.0
-    rad = math.atan2(dy, dx) + math.pi / 2.0
-    return (rad * 180.0 / math.pi) % 360.0
-
-
-def angle_error(target_deg, current_deg):
-    return (target_deg - current_deg + 540.0) % 360.0 - 180.0
-
-
-def wall_distance_cm(wsize):
-    """黒い壁のblob.pixels()から距離[cm]を推定する (逆比例モデル)。"""
-    if wsize is None or wsize <= 0:
-        return None
-    return min(MAX_FIELD_CM, WALL_REF_DIST_CM * float(WALL_REF_PIX) / float(wsize))
-
-
-def goal_distance_cm(goal_size):
-    """ゴールのblob面積から距離[cm]を推定（要較正）。"""
-    if goal_size is None or goal_size <= 0:
-        return None
-    return min(MAX_FIELD_CM, GOAL_REF_DIST_CM * float(GOAL_REF_PIX) / float(goal_size))
-
-
-def ball_distance_cm(ball_size):
-    """ボールのblob面積から距離[cm]を推定（逆比例モデル・要較正）。"""
-    if ball_size is None or ball_size <= 0:
-        return None
-    return BALL_REF_DIST_CM * float(BALL_REF_PIX) / float(ball_size)
-
-
-def calibrate_focal_from_ball(ball_rect):
-    """② キッカー内のボールのピクセル高さから焦点距離[px]を推定・平滑更新する。"""
-    global focal_px
-    if ball_rect is None or len(ball_rect) < 4:
-        return
-    h = ball_rect[3]
-    if h <= 0:
-        return
-    estimated = BALL_AT_KICKER_CM * float(h) / BALL_DIAMETER_CM
-    focal_px = estimated if focal_px <= 0 else focal_px * 0.7 + estimated * 0.3
-
-
-def height_distance_cm(real_height_cm, rect):
-    """実高さとピクセル高さから距離を算出（焦点距離既知の場合のみ）。"""
-    if focal_px <= 0 or rect is None or len(rect) < 4 or rect[3] <= 0:
-        return None
-    return min(MAX_FIELD_CM, real_height_cm * focal_px / float(rect[3]))
-
-
-def estimate_virtual_line(wx, wy, wsize, wall_rect=None):
-    """壁距離から白線(プレイングフィールド境界)とペナルティエリア線を推定する。
-       戻り値: (line_detected, penalty_detected, line_angle_deg, dist_cm)
-       line_angle は白線の方向 (中心から見た壁方向)。"""
-    if wx == 255 or wy == 255 or (wsize <= 0 and wall_rect is None):
-        return False, False, None, None
-    angle = angle_from_normalized(wx, wy)
-    if angle is None:
-        return False, False, None, None
-    dist_wall = height_distance_cm(WALL_HEIGHT_CM, wall_rect)
-    if dist_wall is None:
-        dist_wall = wall_distance_cm(wsize)
-    if dist_wall is None:
-        return False, False, None, None
-    # 白線は壁から OUTER_CM 内側にある
-    dist_line = dist_wall - OUTER_CM
-    line_detected = dist_line <= VIRTUAL_LINE_MARGIN_CM
-    penalty_detected = dist_wall <= (OUTER_CM + PENALTY_DEPTH_CM)
-    return line_detected, penalty_detected, angle, dist_line
-
-
-def lock_target_from_goals(ysize, bsize, yx=255, yy=255, bx=255, by=255):
-    """起動時に正面(0°)へ最も近いゴールの色を相手ゴールとしてロックする。
-
-    カメラが広範囲に見えて両方のゴールが同時に映っても、方位误差が小さい
-    （＝セッティングで正面に向かっている）ほうを選ぶ。
-    """
-    global TARGET_GOAL, OWN_GOAL, target_locked, target_candidate, target_candidate_count
-    if target_locked or not AUTO_TARGET_COLOR:
-        return
-    candidates = []
-    for size, nx, ny, color in ((ysize, yx, yy, "YELLOW"), (bsize, bx, by, "BLUE")):
-        if size < GOAL_MIN_PIX:
-            continue
-        angle = angle_from_normalized(nx, ny)
-        if angle is None:
-            continue
-        err = abs(angle_error(angle, 0.0))
-        if err <= TARGET_LOCK_MAX_ANGLE_DEG:
-            candidates.append((err, color))
-    if not candidates:
-        target_candidate = None
-        target_candidate_count = 0
-        return
-    candidates.sort()
-    color = candidates[0][1]
-    if color == target_candidate:
-        target_candidate_count += 1
-    else:
-        target_candidate = color
-        target_candidate_count = 1
-    if target_candidate_count >= TARGET_LOCK_FRAMES:
-        TARGET_GOAL = color
-        OWN_GOAL = "BLUE" if color == "YELLOW" else "YELLOW"
-        target_locked = True
-        print("TARGET LOCKED: " + TARGET_GOAL)
-
-
-def decide_navigation(yx, yy, bx, by, wx, wy, wsize, goal_sizes,
-                      ball=None, obstacle=None, wall_rect=None, goal_rects=None):
-    """detections -> (vx, vy, turn, want_kick, mode_code, mode_name, flags)
-
-    ball: (nx, ny, size) or None  … カメラで見つけたオレンジボール
-    obstacle: (nx, ny, size) or None … 相手ロボットのマーカー
-    """
-    if target_locked:
-        gx, gy, gsize = (bx, by, goal_sizes[1]) if TARGET_GOAL == "BLUE" else (yx, yy, goal_sizes[0])
-        ox, oy, osize = (yx, yy, goal_sizes[0]) if TARGET_GOAL == "BLUE" else (bx, by, goal_sizes[1])
-    else:
-        # 攻撃対象が未確定の間は自ゴール判定も行わず、シュートも禁止する。
-        gx = gy = ox = oy = 255
-        gsize = osize = 0
-
-    line_hit, penalty_hit, wall_angle, wall_dist = estimate_virtual_line(wx, wy, wsize, wall_rect)
-    flags = (1 if line_hit else 0) | (2 if penalty_hit else 0)
-
-    ball_seen = ball is not None and ball[0] != 255 and ball[1] != 255 and ball[2] > 0
-    ball_angle = angle_from_normalized(ball[0], ball[1]) if ball_seen else None
-    ball_aligned = ball_angle is not None and abs(angle_error(ball_angle, 0.0)) <= BALL_FRONT_ANGLE_DEG
-    if ball_seen:
-        flags |= FLAG_BALL
-    if ball_aligned:
-        flags |= FLAG_BALL_ALIGNED
-    ball_dist = ball_distance_cm(ball[2]) if ball_seen else None
-    ball_kicker_angle_ok = (ball_angle is not None and
-                            abs(angle_error(ball_angle, 0.0)) <= BALL_IN_KICKER_ANGLE_TOL_DEG)
-    ball_in_kicker = (ball_kicker_angle_ok and ball_dist is not None and
-                      BALL_KICK_MIN_CM <= ball_dist <= BALL_KICK_MAX_CM)
-    if ball_in_kicker:
-        flags |= FLAG_BALL_IN_KICKER
-
-    # 1) 壁/白線が近ければ最優先で内側へ回避し、キックはしない
-    if wall_angle is not None and wall_dist is not None:
-        wall_err = angle_error(wall_angle, 0.0)
-        near_wall = abs(wall_err) <= WALL_AVOID_ANGLE_DEG and wall_dist <= WALL_AVOID_DIST_CM
-        away_turn = int(35.0 * (1.0 if wall_err >= 0.0 else -1.0))
-        if near_wall or line_hit:
-            return 0, -50, away_turn, 0, MODE_AVOID, "AVOID", flags
-        # 2) ペナルティエリア内/境界なら壁から離れて中央へ戻る (rule 2.6.1)
-        if penalty_hit:
-            return 0, 60, away_turn, 0, MODE_AVOID, "AVOID", flags
-
-    # 3) 相手ロボットが正面にいれば回避し、キックはしない
-    if obstacle is not None and obstacle[0] != 255 and obstacle[2] >= OBSTACLE_PIX_TH:
-        obs_angle = angle_from_normalized(obstacle[0], obstacle[1])
-        if obs_angle is not None:
-            obs_err = angle_error(obs_angle, 0.0)
-            if abs(obs_err) <= 45.0:
-                away_turn = int(-35.0 * (1.0 if obs_err >= 0.0 else -1.0))
-                return 0, -30, away_turn, 0, MODE_AVOID, "AVOID", flags
-
-    # 4) 自ゴールだけが見えている場合は退避（自ゴールには蹴らない）
-    if (ox != 255 and oy != 255) and (gx == 255 or gy == 255):
-        return 0, -20, 25, 0, MODE_DEFEND, "DEFEND", flags
-
-    # 5) 攻撃対象ゴールが見えない -> ボールがあれば回収、なければ探索
-    if gx == 255 or gy == 255:
-        if ball_seen:
-            err = angle_error(ball_angle, 0.0)
-            return 0, 40, int(clamp(-err * 0.6, -60.0, 60.0)), 0, MODE_APPROACH, "APPROACH", flags
-        return 0, 10, 20, 0, MODE_SEARCH, "SEARCH", flags
-
-    # 6) 攻撃対象ゴールが見えている。シュートは「ボールがキッカーに入っており、
-    #    かつボールとゴールが同じ方向に並んでいる」場合だけ。
-    goal_angle = angle_from_normalized(gx, gy)
-    err = angle_error(goal_angle, 0.0)
-    turn = int(clamp(-err * 0.6, -60.0, 60.0))
-    vy = 20 if abs(err) > 45.0 else 55
-    goal_rect = None
-    if goal_rects:
-        goal_rect = goal_rects[1] if TARGET_GOAL == "BLUE" else goal_rects[0]
-    goal_dist = height_distance_cm(GOAL_HEIGHT_CM, goal_rect)
-    if goal_dist is None:
-        goal_dist = goal_distance_cm(gsize)
-    if goal_dist is not None and goal_dist > GOAL_SHOOT_MAX_DIST_CM:
-        return 0, vy, turn, 0, MODE_APPROACH, "APPROACH", flags
-    ball_goal_error = abs(angle_error(goal_angle, ball_angle)) if ball_angle is not None else 180.0
-    if (target_locked and abs(err) <= GOAL_SHOOT_ANGLE_DEG and gsize >= GOAL_NEAR_PIX and
-            not line_hit and ball_in_kicker and ball_goal_error <= BALL_GOAL_ALIGN_TOL_DEG):
-        return 0, vy, turn, 1, MODE_SHOOT, "SHOOT", flags
-    return 0, vy, turn, 0, MODE_APPROACH, "APPROACH", flags
-
-
-def make_nav_packet(vx, vy, turn, kick, mode, flags=0):
-    body = [
-        HDR_NAV,
-        int(clamp(vx, -100, 100)) & 0xFF,
-        int(clamp(vy, -100, 100)) & 0xFF,
-        int(clamp(turn, -100, 100)) & 0xFF,
-        kick & 0x01,
-        mode & 0xFF,
-        flags & 0xFF,
-    ]
-    checksum = 0
-    for value in body:
-        checksum ^= value
-    return bytearray(body + [checksum])
-
-
-def make_legacy_packets(yx, yy, bx, by, wx, wy, wsize):
-    return (bytearray([HDR_GOALWALL, yx, yy, bx, by, wx, wy]),
-            bytearray([HDR_WALL, wx, wy, (wsize >> 8) & 0xFF, wsize & 0xFF, 0xFF, 0xFF]))
-
-
-# ---------- OpenMV H7 固有 ----------
-def init_camera():
-    sensor.reset()
-    sensor.set_pixformat(sensor.RGB565)
-    # H7 は B320X320 非対応の場合があるため順に試す
-    for size in ("B320X320", "B640X480", "QVGA", "QQVGA"):
-        try:
-            sensor.set_framesize(getattr(sensor, size))
-            break
-        except Exception:
-            continue
-    sensor.skip_frames(time=300)
-    try:
-        sensor.set_auto_exposure(True)
-        sensor.set_auto_gain(True)
-        sensor.set_auto_whitebal(False)
-    except Exception:
-        pass
-    # RCJ 2026 ルール6.2.B: 赤外線リーグではIR発光器は禁止。
-    # OpenMV H7 の補助IR LEDと可視状態LEDをすべて消灯し、
-    # 相手機体に干渉しないようにする（ルール3.1.3）。API差に備えガード付き。
-    try:
-        sensor.set_ir_led(False)
-    except Exception:
-        pass
-    try:
-        for led_id in (1, 2, 3):
-            pyb.LED(led_id).off()
-    except Exception:
-        pass
-
-
-# ---------- 画面表示用（OpenMV v5 互換） ----------
-COLOR_GOAL_YELLOW = (255, 255, 0)
-COLOR_GOAL_BLUE = (0, 255, 255)
-COLOR_WALL = (0, 0, 255)
-COLOR_BALL = (255, 170, 0)
-COLOR_OBSTACLE = (255, 0, 255)
-COLOR_TEXT = (255, 255, 255)
-COLOR_INFO = (0, 255, 0)
+def image_angle(dx, dy):
+    return math.degrees(math.atan2(dx, -dy)) % 360
 
 
 def blob_value(blob, name):
-    """OpenMV v5 は pixels/cx/cy/rect がプロパティ、旧版はメソッド。両対応する。"""
     value = getattr(blob, name)
     return value() if callable(value) else value
 
 
-def safe_draw_string(img, x, y, text, color):
-    x = int(max(0, x))
-    y = int(max(0, y))
-    text = str(text)
-    for call in (
-        lambda: img.draw_string(x, y, text, color, 1),
-        lambda: img.draw_string((x, y), text, color, 1),
-        lambda: img.draw_string(x, y, text, color),
-        lambda: img.draw_string(x, y, text),
-    ):
-        try:
-            call()
-            return
-        except Exception:
+def in_lab(lab, threshold):
+    l, a, b = lab
+    return (threshold[0] <= l <= threshold[1] and threshold[2] <= a <= threshold[3]
+            and threshold[4] <= b <= threshold[5])
+
+
+def init_camera():
+    for led_id in (1, 2, 3, 4):
+        pyb.LED(led_id).off()
+    sensor.reset()
+    sensor.set_pixformat(sensor.RGB565)
+    sensor.set_framesize(getattr(sensor, cfg.FRAME_SIZE))
+    sensor.set_auto_exposure(True)
+    sensor.set_auto_gain(True)
+    sensor.set_auto_whitebal(True)
+    sensor.skip_frames(time=1500)
+    rgb_gain = sensor.get_rgb_gain_db() if cfg.RGB_GAIN_DB is None else cfg.RGB_GAIN_DB
+    sensor.set_auto_whitebal(False, rgb_gain_db=rgb_gain)
+    if cfg.EXPOSURE_US is not None:
+        sensor.set_auto_exposure(False, exposure_us=cfg.EXPOSURE_US)
+    if cfg.GAIN_DB is not None:
+        sensor.set_auto_gain(False, gain_db=cfg.GAIN_DB)
+    sensor.skip_frames(time=300)
+
+
+class Mirror:
+    def __init__(self, width, height):
+        self.width = width
+        self.height = height
+        self.cx, self.cy = cfg.MIRROR_CENTER or ((width - 1) / 2, (height - 1) / 2)
+        self.inner, self.outer = cfg.MIRROR_RING or (0, 0)
+        self.points = cfg.GROUND_POINTS
+        self.ring_ready = (cfg.IMAGE_SIZE == (width, height) and cfg.MIRROR_CENTER is not None
+                           and 0 <= self.inner < self.outer
+                           <= min(self.cx, self.cy, width - 1 - self.cx, height - 1 - self.cy))
+        self.rays = self.ground_rays() if self.ring_ready and self.ground_ready() else ()
+
+    def ground_ready(self):
+        p = self.points
+        if len(p) < 2 or not (0 <= p[0][1] <= LINE_CLEARANCE_CM and p[-1][1] >= LOOKAHEAD_CM):
+            return False
+        radial_sign = 1 if p[-1][0] > p[0][0] else -1
+        return (all(self.inner <= radius <= self.outer for radius, _ in p)
+                and all(radial_sign * (r1 - r0) > 0 and d1 > d0
+                        for (r0, d0), (r1, d1) in zip(p, p[1:])))
+
+    def pixels_on_ring(self, x, y):
+        squared_radius = (x - self.cx) ** 2 + (y - self.cy) ** 2
+        return self.inner ** 2 <= squared_radius <= self.outer ** 2
+
+    def bearing(self, x, y):
+        raw = image_angle(x - self.cx, y - self.cy)
+        return ((raw - cfg.FRONT_DEG) * (1 if cfg.CLOCKWISE else -1)) % 360
+
+    def ground_rays(self):
+        # Precompute pixel coordinates and distances once, through the calibrated range.
+        rays = []
+        for i in range(RAY_COUNT):
+            bearing = 360 * i / RAY_COUNT
+            angle = math.radians(cfg.FRONT_DEG + bearing * (1 if cfg.CLOCKWISE else -1))
+            dx, dy = math.sin(angle), -math.cos(angle)
+            samples = []
+            for (r0, d0), (r1, d1) in zip(self.points, self.points[1:]):
+                steps = math.ceil(abs(r1 - r0))
+                for step in range(steps + 1):
+                    fraction = step / steps
+                    distance = d0 + (d1 - d0) * fraction
+                    if distance > LOOKAHEAD_CM:
+                        break
+                    radius = r0 + (r1 - r0) * fraction
+                    x, y = round(self.cx + radius * dx), round(self.cy + radius * dy)
+                    if not samples or (x, y) != samples[-1][:2]:
+                        samples.append((x, y, distance))
+            rays.append((bearing, samples))
+        return rays
+
+
+def find_color_blob(img, mirror, thresholds, min_pixels):
+    counts = [0, 0, 0]  # Color components, too small, rejected by mirror geometry.
+    best = None
+    best_pixels = 0
+    roi = None
+    if mirror.ring_ready:
+        radius = math.ceil(mirror.outer)
+        x, y = round(mirror.cx), round(mirror.cy)
+        left, top = max(0, x - radius), max(0, y - radius)
+        roi = (left, top, min(mirror.width, x + radius + 1) - left,
+               min(mirror.height, y + radius + 1) - top)
+    for blob in img.find_blobs(thresholds, roi=roi, pixels_threshold=1, area_threshold=1):
+        counts[0] += 1
+        pixels = blob_value(blob, "pixels")
+        if pixels < min_pixels:
+            counts[1] += 1
             continue
-    try:
-        img.draw_string((x, y), text)
-    except Exception:
-        pass
-
-
-def safe_draw_rectangle(img, rect, color):
-    if not isinstance(rect, (tuple, list)):
-        return
-    try:
-        img.draw_rectangle(rect, color, 1)
-    except Exception:
-        try:
-            img.draw_rectangle(rect, color)
-        except Exception:
-            pass
-
-
-def draw_detections(img, objects, status):
-    """objects: (name, cx, cy, color, rect, blob) のリストを画面に重ねる。
-    矩形ではなく blob の輪郭（凸包）を描く。中心点は描かない。"""
-    for name, cx, cy, color, _rect, blob in objects:
-        draw_blob_outline(img, blob, color, name)
-        safe_draw_string(img, cx - 20, cy - 14, name, color)
-    y = 2
-    for line in status:
-        safe_draw_string(img, 2, y, line, COLOR_INFO if y == 0 else COLOR_TEXT)
-        y += 12
-
-
-def point_in_quad(x, y, quad):
-    """4点の多边形の中に点があるか（レイキャスト法）。"""
-    if not quad:
-        return True
-    inside = False
-    n = len(quad)
-    j = n - 1
-    for i in range(n):
-        xi, yi = quad[i]
-        xj, yj = quad[j]
-        if ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / (yj - yi) + xi):
-            inside = not inside
-        j = i
-    return inside
-
-
-def overlap_ratio(a, b):
-    if a is None or b is None or len(a) < 4 or len(b) < 4:
-        return 0.0
-    ax, ay, aw, ah = a
-    bx, by, bw, bh = b
-    ix = max(0, min(ax + aw, bx + bw) - max(ax, bx))
-    iy = max(0, min(ay + ah, by + bh) - max(ay, by))
-    small = min(aw * ah, bw * bh)
-    return (ix * iy) / float(small) if small > 0 else 0.0
-
-
-def rect_center_inside(rect, cx, cy):
-    if rect is None or cx is None or cy is None:
-        return False
-    x, y, w, h = rect
-    return x <= cx <= x + w and y <= cy <= y + h
-
-
-def valid_ball_blob(blob):
-    """ボールらしい形（ほぼ正方形）かで誤検出を除く。"""
-    rect = blob_value(blob, "rect")
-    if rect is None or len(rect) < 4:
-        return False
-    w, h = rect[2], rect[3]
-    if w <= 0 or h <= 0:
-        return False
-    ratio = w / float(h)
-    return 0.6 <= ratio <= 1.6
-
-
-def valid_wall_blob(blob):
-    """壁は横長の帯。PCや影などの四角い黒領域を拾わないための形状条件。"""
-    rect = blob_value(blob, "rect")
-    if rect is None or len(rect) < 4:
-        return False
-    w, h = rect[2], rect[3]
-    if w < 30 or h < 4 or h > 150:
-        return False
-    # 床の黒い物体（ケーブル・服・PC）を壁と誤検出しない。
-    if WALL_MAX_Y is not None and rect[1] > WALL_MAX_Y:
-        return False
-    return w >= 1.5 * h
-
-
-def biggest_blob(img, thresholds, roi, pixel_threshold, quad=None, shape_filter=None):
-    """(size, cx, cy, rect, blob) を返す。未検出なら (0, None, None, None, None)。"""
-    best, cx, cy, rect, best_blob = 0, None, None, None, None
-    for blob in img.find_blobs(thresholds, roi=roi,
-                               pixels_threshold=pixel_threshold,
-                               area_threshold=pixel_threshold,
-                               merge=True, margin=6):
-        size = blob_value(blob, "pixels")
-        if shape_filter is not None and not shape_filter(blob):
+        x, y = blob_value(blob, "cx"), blob_value(blob, "cy")
+        corners = blob_value(blob, "corners")
+        if mirror.ring_ready and (not mirror.pixels_on_ring(x, y)
+                                  or not all(mirror.pixels_on_ring(*p) for p in corners)):
+            counts[2] += 1
             continue
-        if quad:
-            bx = blob_value(blob, "cx")
-            by = blob_value(blob, "cy")
-            nx = bx * 255 // img.width()
-            ny = by * 255 // img.height()
-            if not point_in_quad(nx, ny, quad):
-                continue
-        if size > best:
-            best = size
-            cx = blob_value(blob, "cx")
-            cy = blob_value(blob, "cy")
-            rect = blob_value(blob, "rect")
-            best_blob = blob
-    return best, cx, cy, rect, best_blob
+        if pixels > best_pixels:
+            best, best_pixels = blob, pixels
+    return best, counts
 
 
+def goal_geometry(blob, mirror):
+    center = mirror.bearing(blob_value(blob, "cx"), blob_value(blob, "cy"))
+    offsets = [angle_error(mirror.bearing(x, y), center) for x, y in blob_value(blob, "corners")]
+    lower, upper = min(offsets), max(offsets)
+    # shortcut: contour corners approximate the opening; replace with tracked posts if needed.
+    aim = (abs(angle_error(center)) <= GOAL_MAX_AIM_DEG
+           and 0 < upper - lower <= 90
+           and lower + GOAL_EDGE_MARGIN_DEG <= angle_error(0, center)
+           <= upper - GOAL_EDGE_MARGIN_DEG)
+    return center, aim
 
 
+class GoalTrack:
+    def __init__(self):
+        self.last = None
+        self.count = 0
+        self.aim_count = 0
 
-def _clamp_corners(corners, width, height):
-    """角を画像内に収める（画面外の線を消す）。"""
-    return [(max(0, min(width - 1, int(x))), max(0, min(height - 1, int(y))))
-            for x, y in corners]
-
-
-def _order_corners(corners):
-    """角を重心回りの角度順に並べ、線の交差を防ぐ。"""
-    import math
-    cx = sum(p[0] for p in corners) / float(len(corners))
-    cy = sum(p[1] for p in corners) / float(len(corners))
-    return sorted(corners, key=lambda p: math.atan2(p[1] - cy, p[0] - cx))
-
-
-def draw_blob_outline(img, blob, color, key=None):
-    """blob.corners（輪郭由来の4角）を draw_edges で描く。中心点は描かない。
-    OpenMV v5 は convex_hull() が無く draw_line も座標タプル必須のため、
-    旧版の draw_line と rect フォールバックも用意する。"""
-    if blob is None:
-        return
-    corners = None
-    for attr in ("corners", "min_corners"):
-        try:
-            candidate = blob_value(blob, attr)
-            if candidate and len(candidate) >= 4:
-                corners = candidate
-                break
-        except Exception:
-            continue
-    if corners is None:
-        try:
-            rect = blob_value(blob, "rect")
-            if rect and len(rect) >= 4:
-                x, y, w, h = rect
-                corners = [(x, y), (x + w, y), (x + w, y + h), (x, y + h)]
-        except Exception:
-            return
-    if corners is not None:
-        corners = _clamp_corners(corners, img.width(), img.height())
-        corners = _order_corners(corners)
-        # v5: draw_edges(corners, color, size, thickness)
-        try:
-            img.draw_edges(corners, color, 0, 3)
-            return
-        except Exception:
-            pass
-        # 旧版: draw_line(x0, y0, x1, y1, color, thickness)
-        try:
-            for i in range(len(corners)):
-                p1 = corners[i]
-                p2 = corners[(i + 1) % len(corners)]
-                img.draw_line(p1[0], p1[1], p2[0], p2[1], color, 3)
-            return
-        except Exception:
-            pass
-    # 最後の手段: 矩形
-    try:
-        img.draw_rectangle(blob_value(blob, "rect"), color, 3)
-    except Exception:
-        pass
-
-def collect_wall_blobs(img, thresholds, roi, pixel_threshold, quad=None, shape_filter=None):
-    """形状条件を通った壁 blob をすべて返す（人に遮られても全断片を描画）。"""
-    found = []
-    for blob in img.find_blobs(thresholds, roi=roi,
-                               pixels_threshold=pixel_threshold,
-                               area_threshold=pixel_threshold,
-                               merge=True, margin=12):
-        if shape_filter is not None and not shape_filter(blob):
-            continue
-        if quad:
-            bx = blob_value(blob, "cx")
-            by = blob_value(blob, "cy")
-            nx = bx * 255 // img.width()
-            ny = by * 255 // img.height()
-            if not point_in_quad(nx, ny, quad):
-                continue
-        found.append(blob)
-    return found
+    def update(self, goal):
+        if goal is None:
+            self.last, self.count, self.aim_count = None, 0, 0
+            return None
+        angle, aimed = goal
+        continuous = self.last is not None and abs(angle_error(angle, self.last)) <= GOAL_MAX_JUMP_DEG
+        self.count = self.count + 1 if continuous else 1
+        self.aim_count = (self.aim_count + 1 if continuous else 1) if aimed else 0
+        self.last = angle
+        if self.count >= GOAL_STABLE_FRAMES:
+            return angle, self.aim_count >= GOAL_STABLE_FRAMES
+        return None
 
 
-def main_loop():
-    global WALL_MAX_Y
+def scan_ray(samples, color_at):
+    green_run = 0
+    ground_seen = False
+    previous = None
+    for x, y, distance in samples:
+        color = color_at(x, y)
+        if previous is not None and previous[0] == color:
+            return ground_seen, previous
+        previous = (color, distance, x, y) if green_run >= 2 and color in ("WHITE", "BLACK") else None
+        green_run = green_run + 1 if color == "GREEN" else 0
+        ground_seen = ground_seen or green_run >= 2
+    return ground_seen, None
+
+
+def scan_field(img, mirror):
+    def color_at(x, y):
+        lab = image.rgb_to_lab(img.get_pixel(x, y, rgbtuple=True))
+        if in_lab(lab, cfg.GREEN):
+            return "GREEN"
+        if in_lab(lab, cfg.WHITE):
+            return "WHITE"
+        if in_lab(lab, cfg.BLACK):
+            return "BLACK"
+        return None
+
+    visible = set()
+    boundaries = []
+    for bearing, samples in mirror.rays:
+        ground, edge = scan_ray(samples, color_at)
+        if ground:
+            visible.add(bearing)
+        if edge is not None:
+            boundaries.append((bearing,) + edge)
+    return visible, boundaries
+
+
+def decide_navigation(ready, visible, boundaries, goal):
+    if not ready:
+        return 0, 0, 0, 0, MODE_WAIT, FLAG_OMNI
+    away_x = away_y = 0.0
+    boundary_near = False
+    for bearing, color, distance, _, _ in boundaries:
+        clearance = LINE_CLEARANCE_CM + (OUTER_CM if color == "BLACK" else 0)
+        if distance <= clearance:
+            boundary_near = True
+            angle = math.radians(bearing)
+            weight = clearance - distance + 1
+            away_x -= math.sin(angle) * weight
+            away_y -= math.cos(angle) * weight
+    if boundary_near:
+        length = math.sqrt(away_x ** 2 + away_y ** 2)
+        vx, vy = (round(35 * away_x / length), round(35 * away_y / length)) if length >= 1 else (0, 0)
+        return vx, vy, 0, 0, MODE_AVOID, FLAG_OMNI | FLAG_VIRTUAL_LINE
+    step = 360 / RAY_COUNT
+    if len(visible) < RAY_COUNT // 2 or not {360 - step, 0, step}.issubset(visible):
+        return 0, 0, 0, 0, MODE_WAIT, FLAG_OMNI
+    if goal is None:
+        return 0, 0, 0, 0, MODE_TRACK_IR, FLAG_OMNI
+    angle, aimed = goal
+    turn = round(max(-35, min(35, -0.6 * angle_error(angle))))
+    return 0, 0, 0 if aimed else turn, int(aimed), MODE_AIMED if aimed else MODE_ALIGN, FLAG_OMNI
+
+
+def make_nav_packet(vx, vy, turn, aimed, mode, flags):
+    packet = bytearray((0x20, vx & 0xff, vy & 0xff, turn & 0xff, aimed, mode, flags, 0))
+    for byte in packet[:7]:
+        packet[7] ^= byte
+    return packet
+
+
+def draw_mirror(img, mirror):
+    cx, cy = round(mirror.cx), round(mirror.cy)
+    img.draw_cross(cx, cy, color=(255, 255, 255))
+    if mirror.ring_ready:
+        for radius in (mirror.inner, mirror.outer):
+            img.draw_circle(cx, cy, round(radius), color=(255, 255, 255))
+        front = math.radians(cfg.FRONT_DEG)
+        end_x = round(cx + mirror.outer * math.sin(front))
+        end_y = round(cy - mirror.outer * math.cos(front))
+        img.draw_line((cx, cy, end_x, end_y), color=(255, 255, 255))
+
+
+def draw_goal(img, blob, name):
+    img.draw_edges(blob_value(blob, "corners"), color=GOAL_COLORS[name], thickness=3)
+
+
+def main_loop(send_uart=True, display=False):
     init_camera()
-    uart = UART(3, 9600, timeout_char=1000)
-    uart.init(9600, bits=8, parity=None, stop=1, timeout_char=1000)
-    clock = time.clock()
-    last_stream_ms = pyb.millis()
-    last_kick_ms = -1000
-    ball_seen_count = 0
+    frame = sensor.snapshot()
+    mirror = Mirror(frame.width(), frame.height())
+    target = cfg.TARGET_GOAL
+    ready = bool(mirror.rays and target in GOAL_COLORS)
+    uart = pyb.UART(3, 9600) if send_uart else None
+    track = GoalTrack()
+    last_tx = time.ticks_ms()
     while True:
-        clock.tick()
+        started = time.ticks_ms()
         img = sensor.snapshot()
-        ysize, ycx, ycy, y_rect, y_blob = biggest_blob(img, YellowThresholds, GoalRoi, GOAL_MIN_PIX)
-        bsize, bcx, bcy, b_rect, b_blob = biggest_blob(img, BlueThresholds, GoalRoi, GOAL_MIN_PIX)
-        # ルール3.1.4: 壁の上の色（服など）を無視するため、
-        # 壁探索を画像下2/3に制限する。
-        wall_roi = (0, img.height() // 4, img.width(), img.height() * 3 // 4)
-        WALL_MAX_Y = wall_roi[1] + wall_roi[3] * 3 // 4
-        wsize, wcx, wcy, w_rect, w_blob = biggest_blob(
-            img, BlackThresholds, wall_roi, WALL_PIX_TH, WALL_QUAD, valid_wall_blob)
-        # 人などに遮られて壁が分断されても、すべての断片を描画対象にする。
-        wall_blobs = collect_wall_blobs(
-            img, BlackThresholds, wall_roi, WALL_PIX_TH, WALL_QUAD, valid_wall_blob)
-        # ボール検出は無効（IRが担当）。カメラはゴールと壁だけを見る。
-        if BALL_DETECTION_ENABLED:
-            ball_size, ball_cx, ball_cy, ball_rect, ball_blob = biggest_blob(
-                img, BallThresholds, wall_roi, PIXELS_THRESHOLD, shape_filter=valid_ball_blob)
-        else:
-            ball_size, ball_cx, ball_cy, ball_rect, ball_blob = 0, None, None, None, None
-        obs_size, obs_cx, obs_cy, obs_rect, obs_blob = biggest_blob(
-            img, ObstacleThresholds, wall_roi, PIXELS_THRESHOLD)
-        # 黄ゴールの一部をボールと誤検出した場合はボールを捨てる（形＋重なりで判定）。
-        if ball_size > 0 and ball_rect is not None:
-            if overlap_ratio(ball_rect, y_rect) > 0.4 or overlap_ratio(ball_rect, b_rect) > 0.4:
-                ball_size, ball_cx, ball_cy, ball_rect, ball_blob = 0, None, None, None, None
-        # オレンジボールは黄ゴール閾値にも引っかかるため、ボールと重なったゴール検出は破棄する。
-        if ball_size > 0 and ball_cx is not None:
-            if rect_center_inside(ball_rect, ycx, ycy):
-                ysize, ycx, ycy, y_rect, y_blob = 0, None, None, None, None
-            if rect_center_inside(ball_rect, bcx, bcy):
-                bsize, bcx, bcy, b_rect, b_blob = 0, None, None, None, None
-        # ボールのロック: 連続 BALL_LOCK_FRAMES フレーム見えて初めて採用する。
-        ball_seen_count = ball_seen_count + 1 if ball_size > 0 else 0
-        if ball_seen_count < BALL_LOCK_FRAMES:
-            ball_size, ball_cx, ball_cy, ball_rect, ball_blob = 0, None, None, None, None
-        yx, yy = norm_coord(ycx, ycy, img)
-        bx, by = norm_coord(bcx, bcy, img)
-        wx, wy = norm_coord(wcx, wcy, img)
-        ball_x, ball_y = norm_coord(ball_cx, ball_cy, img)
-        obs_x, obs_y = norm_coord(obs_cx, obs_cy, img)
-        lock_target_from_goals(ysize, bsize, yx, yy, bx, by)
-        now = pyb.millis()
-        vx, vy, turn, want_kick, mode, name, flags = decide_navigation(
-            yx, yy, bx, by, wx, wy, wsize, (ysize, bsize),
-            (ball_x, ball_y, ball_size), (obs_x, obs_y, obs_size),
-            w_rect, (y_rect, b_rect))
-        # ② ボールがキッカー内に来た瞬間に焦点距離を自己較正する。
-        if flags & FLAG_BALL_IN_KICKER:
-            calibrate_focal_from_ball(ball_rect)
-
-        # 検知した物体の名前と枠をカメラ画面に表示する。
-        objects = []
-        if ysize >= PIXELS_THRESHOLD and ycx is not None:
-            objects.append(("YELLOW GOAL" if TARGET_GOAL == "YELLOW" else "OWN GOAL",
-                            ycx, ycy, COLOR_GOAL_YELLOW, y_rect, y_blob))
-        if bsize >= PIXELS_THRESHOLD and bcx is not None:
-            objects.append(("BLUE GOAL" if TARGET_GOAL == "BLUE" else "OWN GOAL",
-                            bcx, bcy, COLOR_GOAL_BLUE, b_rect, b_blob))
-        if wsize >= WALL_PIX_TH and wcx is not None:
-            objects.append(("BLACK WALL", wcx, wcy, COLOR_WALL, w_rect, w_blob))
-        for i, b in enumerate(wall_blobs[1:], 2):
-            objects.append(("BLACK WALL %d" % i,
-                            blob_value(b, "cx"), blob_value(b, "cy"),
-                            COLOR_WALL, blob_value(b, "rect"), b))
-        if ball_size >= PIXELS_THRESHOLD and ball_cx is not None:
-            objects.append(("BALL", ball_cx, ball_cy, COLOR_BALL, ball_rect, ball_blob))
-        if obs_size >= OBSTACLE_PIX_TH and obs_cx is not None:
-            objects.append(("OBSTACLE", obs_cx, obs_cy, COLOR_OBSTACLE, obs_rect, obs_blob))
-        status = [
-            "DETECT: " + (",".join(obj[0] for obj in objects) if objects else "NONE"),
-            "TARGET: " + (TARGET_GOAL if target_locked else "LOCKING..."),
-            "MODE: " + name,
-            "KICK: " + ("YES" if want_kick else "NO"),
-            "FOCAL: " + ("N/A" if focal_px <= 0 else "%d" % int(focal_px)),
-        ]
-        draw_detections(img, objects, status)
-
-        # クールダウン削除: 要求が立ち上がるたびにキックを送る
-        kick = 1 if want_kick else 0
-        try:
-            print("NAV {} vx{} vy{} turn{} kick{} wall={}cm flags{}".format(
-                name, vx, vy, turn, kick,
-                -1 if wsize <= 0 else int(wall_distance_cm(wsize)), flags))
-        except Exception:
-            pass
-        if (now - last_stream_ms) >= STREAM_INTERVAL_MS:
-            last_stream_ms = now
-            goal, wall = make_legacy_packets(yx, yy, bx, by, wx, wy, wsize)
-            uart.write(goal)
-            uart.write(wall)
-            uart.write(make_nav_packet(vx, vy, turn, kick, mode, flags))
+        visible, boundaries = scan_field(img, mirror) if mirror.rays else ((), [])
+        goal = None
+        detections = []
+        for color, thresholds in (("YELLOW", cfg.YELLOW), ("BLUE", cfg.BLUE)):
+            if not display and (not ready or color != target):
+                continue
+            blob, _ = find_color_blob(img, mirror, thresholds, cfg.GOAL_MIN_PIXELS)
+            if blob is not None:
+                if ready and color == target:
+                    goal = goal_geometry(blob, mirror)
+                if display:
+                    detections.append((blob, color))
+        now = time.ticks_ms()
+        fresh = time.ticks_diff(now, started) <= MAX_FRAME_AGE_MS
+        command = decide_navigation(ready and fresh, visible, boundaries, track.update(goal if fresh else None))
+        if uart is not None and time.ticks_diff(now, last_tx) >= STREAM_INTERVAL_MS:
+            uart.write(make_nav_packet(*command))
+            last_tx = now
+        if display:
+            for blob, color in detections:
+                draw_goal(img, blob, color)
+            draw_mirror(img, mirror)
+            for _, color, _, x, y in boundaries:
+                img.draw_cross(x, y, color=(255, 80, 80) if color == "BLACK" else (255, 255, 255))
+            img.draw_string(2, 2, "TARGET: {}  MODE: {}".format(target, MODES[command[4]]),
+                            color=(255, 255, 255))
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@
 #include "../common/src/BoardConfig.ino"
 #include "../common/src/RobotDevices.ino"
 #include "../common/src/Rs485.ino"
+#include "../main/OpenMvNavigation.h"
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -1441,11 +1442,37 @@ static void testUnspecifiedSafetyInputsFailClosed() {
     CHECK(output.motion.x == 0 && output.motion.y == 0 && output.motion.turn == 0);
 }
 
+static void testOpenMvControlAndPacketValidation() {
+    uint8_t avoid[] = {0x20, 221, 0, 0, 0, 1, 0x21, 221};
+    CHECK(validOpenMvFrame(avoid));
+    uint8_t aimed[] = {0x20, 0, 0, 0, 1, 4, 0x20, 5};
+    CHECK(validOpenMvFrame(aimed));
+    aimed[7] ^= aimed[6];
+    aimed[6] = 0;
+    CHECK(!validOpenMvFrame(aimed));
+    avoid[7] ^= avoid[1] ^ 101;
+    avoid[1] = 101;
+    CHECK(!validOpenMvFrame(avoid));
+    CHECK(decideOpenMvControl(false, true, true, kOpenMvAvoid, true, true).control == kCameraStop);
+    CHECK(decideOpenMvControl(true, false, true, kOpenMvAimed, true, true).control == kCameraStop);
+    CHECK(decideOpenMvControl(true, true, false, kOpenMvAimed, true, true).control == kCameraStop);
+    CHECK(decideOpenMvControl(true, true, true, kOpenMvWait, true, true).control == kCameraStop);
+    const auto boundary = decideOpenMvControl(true, true, true, kOpenMvAvoid, true, true);
+    CHECK(boundary.control == kCameraAvoid && !boundary.kick);
+    const auto far = decideOpenMvControl(true, true, true, kOpenMvAimed, false, true);
+    CHECK(far.control == kIrFollow && !far.kick);
+    CHECK(decideOpenMvControl(true, true, true, kOpenMvTrackIr, true, false).control == kSearchGoal);
+    CHECK(!decideOpenMvControl(true, true, true, kOpenMvAlign, true, false).kick);
+    const auto good = decideOpenMvControl(true, true, true, kOpenMvAimed, true, true);
+    CHECK(good.control == kCameraAim && good.kick);
+}
+
 using TestFn = void (*)();
 struct TestCase { const char* name; TestFn run; };
 
 int main() {
     const TestCase cases[] = {
+        {"Calibrated OpenMV frame and joint control", testOpenMvControlAndPacketValidation},
         {"CRC vector and packet round trip", testCrcKnownVectorAndFrameRoundTrip},
         {"CRC corruption", testBadCrcRejected},
         {"Dropped packet sequence gap", testDroppedPacketSequenceGap},

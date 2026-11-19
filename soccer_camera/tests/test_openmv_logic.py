@@ -1,255 +1,124 @@
 #!/usr/bin/env python3
-"""Host tests for the OpenMV navigation decision logic (no camera required)."""
-import importlib.util
+"""Host tests for the competition camera logic."""
+import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-ROOT = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location(
-    "goal_wall_navigation", ROOT / "openmv/goal_wall_navigation.py")
-nav = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(nav)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "openmv"))
+import goal_wall_navigation as nav
+
+
+def edge(angle, color="WHITE", cm=15):
+    return angle, color, cm, 0, 0
+
+
+VISIBLE = set(range(0, 360, 15))
 
 
 class OpenMvNavigationTests(unittest.TestCase):
-    def setUp(self):
-        self._saved = (nav.TARGET_GOAL, nav.OWN_GOAL, nav.target_locked,
-                       nav.target_candidate, nav.target_candidate_count, nav.AUTO_TARGET_COLOR)
-        nav.TARGET_GOAL = "YELLOW"
-        nav.OWN_GOAL = "BLUE"
-        nav.target_locked = True
-        nav.AUTO_TARGET_COLOR = False
+    def test_defaults_wait_for_measurements(self):
+        self.assertFalse(nav.Mirror(320, 320).rays)
+        self.assertEqual(nav.decide_navigation(False, VISIBLE, [], (0, True))[4], nav.MODE_WAIT)
 
-    def tearDown(self):
-        (nav.TARGET_GOAL, nav.OWN_GOAL, nav.target_locked,
-         nav.target_candidate, nav.target_candidate_count, nav.AUTO_TARGET_COLOR) = self._saved
+    def test_calibration_uses_actual_size_center_rotation_and_mirroring(self):
+        with patch.multiple(nav.cfg, IMAGE_SIZE=(320, 240), MIRROR_CENTER=(149, 110),
+                            MIRROR_RING=(20, 100), FRONT_DEG=90, CLOCKWISE=False,
+                            GROUND_POINTS=((70, 10), (50, 30), (32, 52))):
+            mirror = nav.Mirror(320, 240)
+            self.assertTrue(mirror.ring_ready)
+            self.assertEqual(len(mirror.rays), 24)
+            self.assertAlmostEqual(mirror.bearing(219, 110), 0)
+            self.assertAlmostEqual(mirror.bearing(149, 40), 90)
+            self.assertAlmostEqual(mirror.bearing(79, 110), 180)
+            self.assertAlmostEqual(mirror.bearing(149, 180), 270)
+            self.assertFalse(mirror.pixels_on_ring(149, 110))
+            self.assertTrue(mirror.pixels_on_ring(219, 110))
+            self.assertFalse(nav.Mirror(320, 320).rays)
+            self.assertEqual(mirror.rays[0][1][0], (219, 110, 10))
+            self.assertLessEqual(mirror.rays[0][1][-1][2], nav.LOOKAHEAD_CM)
 
-    def test_angle_conventions(self):
-        self.assertAlmostEqual(nav.angle_from_normalized(128, 0), 0.0)
-        self.assertAlmostEqual(nav.angle_from_normalized(254, 128), 90.0)
-        self.assertAlmostEqual(nav.angle_from_normalized(128, 254), 180.0)
-        self.assertAlmostEqual(nav.angle_from_normalized(0, 128), 270.0)
-        self.assertIsNone(nav.angle_from_normalized(255, 255))
+    def test_ground_calibration_rejects_nonmonotonic_points_and_incomplete_range(self):
+        with patch.multiple(nav.cfg, IMAGE_SIZE=(320, 320), MIRROR_CENTER=(160, 160),
+                            MIRROR_RING=(20, 120), GROUND_POINTS=((70, 10), (80, 30), (32, 52))):
+            self.assertFalse(nav.Mirror(320, 320).rays)
+            with patch.object(nav.cfg, "GROUND_POINTS", ((70, 10), (50, 30))):
+                self.assertFalse(nav.Mirror(320, 320).rays)
 
-    def test_shortest_angle_error(self):
-        self.assertAlmostEqual(nav.angle_error(359.0, 0.0), -1.0)
-        self.assertAlmostEqual(nav.angle_error(1.0, 359.0), 2.0)
-        self.assertAlmostEqual(nav.angle_error(90.0, 0.0), 90.0)
+    def test_green_to_white_or_black_boundary_and_noise(self):
+        samples = [(i, 0, i + 10) for i in range(5)]
+        for color in ("WHITE", "BLACK"):
+            colors = ["GREEN", "GREEN", color, color, None]
+            self.assertEqual(nav.scan_ray(samples, lambda x, _: colors[x]), (True, (color, 12, 2, 0)))
+        colors = ["GREEN", "GREEN", "BLACK", None, "BLACK"]
+        self.assertEqual(nav.scan_ray(samples, lambda x, _: colors[x]), (True, None))
+        colors = ["GREEN", "GREEN", "BLACK", "WHITE", "BLACK"]
+        self.assertEqual(nav.scan_ray(samples, lambda x, _: colors[x]), (True, None))
+        self.assertEqual(nav.scan_ray(samples, lambda x, _: "BLACK"), (False, None))
 
-    def test_front_wall_takes_priority_and_inhibits_kick(self):
-        vx, vy, turn, kick, mode, name, flags = nav.decide_navigation(
-            128, 40, 255, 255, 128, 30, 6000, (500, 0))
-        self.assertEqual(name, "AVOID")
-        self.assertEqual(vx, 0)
-        self.assertEqual(vy, -50)
-        self.assertGreater(turn, 0)  # 壁と逆 (CCW) へ旋回
-        self.assertEqual(kick, 0)
+    def test_avoid_moves_away_on_all_four_sides_and_inhibits_aim(self):
+        for bearing, motion in ((0, (0, -35)), (90, (-35, 0)), (180, (0, 35)), (270, (35, 0))):
+            result = nav.decide_navigation(True, VISIBLE, [edge(bearing)], (0, True))
+            self.assertEqual(result, (*motion, 0, 0, nav.MODE_AVOID, nav.FLAG_OMNI | nav.FLAG_VIRTUAL_LINE))
 
-    def test_front_goal_shoots_only_with_ball_in_front(self):
-        ball = (128, 30, 4000)
-        result = nav.decide_navigation(128, 30, 255, 255, 255, 255, 0, (500, 0), ball)
-        self.assertEqual(result[5], "SHOOT")
-        self.assertEqual(result[3], 1)
-        self.assertEqual(result[2], 0)
-        self.assertTrue(result[6] & nav.FLAG_BALL)
-        self.assertTrue(result[6] & nav.FLAG_BALL_ALIGNED)
-        # ボールが見えていなければ、ゴールが正面でも蹴らない
-        no_ball = nav.decide_navigation(128, 30, 255, 255, 255, 255, 0, (500, 0))
-        self.assertEqual(no_ball[5], "APPROACH")
-        self.assertEqual(no_ball[3], 0)
+    def test_corner_avoidance_and_conflicting_boundaries(self):
+        corner = nav.decide_navigation(True, VISIBLE, [edge(0), edge(90)], None)
+        self.assertEqual(corner[:2], (-25, -25))
+        opposite = nav.decide_navigation(True, VISIBLE, [edge(0), edge(180)], None)
+        self.assertEqual(opposite[:3], (0, 0, 0))
+        self.assertEqual(opposite[4], nav.MODE_AVOID)
 
-    def test_off_axis_goal_approaches_without_kick(self):
-        result = nav.decide_navigation(230, 128, 255, 255, 255, 255, 0, (500, 0))
-        self.assertEqual(result[5], "APPROACH")
-        self.assertEqual(result[3], 0)
-        self.assertLess(result[2], 0)  # 右のゴールへ時計回り
+    def test_wall_clearance_includes_outer_area_without_inventing_penalty_flag(self):
+        command = nav.decide_navigation(True, VISIBLE, [edge(90, "BLACK", 29)], None)
+        self.assertEqual(command[4], nav.MODE_AVOID)
+        self.assertFalse(command[5] & 0x02)
+        for boundary in (edge(90, "BLACK", 31), edge(90, "WHITE", 19)):
+            self.assertEqual(nav.decide_navigation(True, VISIBLE, [boundary], None)[4], nav.MODE_TRACK_IR)
 
-    def test_no_goal_searches(self):
-        result = nav.decide_navigation(255, 255, 255, 255, 255, 255, 0, (0, 0))
-        self.assertEqual(result[5], "SEARCH")
-        self.assertEqual(result[3], 0)
+    def test_poor_floor_visibility_waits(self):
+        self.assertEqual(nav.decide_navigation(True, set(range(0, 165, 15)), [], (0, True))[4], nav.MODE_WAIT)
+        self.assertEqual(nav.decide_navigation(True, VISIBLE - {0}, [], (0, True))[4], nav.MODE_WAIT)
 
-    def test_target_goal_selection(self):
-        original = nav.TARGET_GOAL
-        try:
-            nav.TARGET_GOAL = "BLUE"
-            result = nav.decide_navigation(255, 255, 128, 30, 255, 255, 0, (0, 500),
-                                           (128, 30, 4000))
-            self.assertEqual(result[5], "SHOOT")
-        finally:
-            nav.TARGET_GOAL = original
+    def test_goal_tracking_wraps_and_drops_aim_immediately(self):
+        track = nav.GoalTrack()
+        self.assertIsNone(track.update((358, True)))
+        self.assertIsNone(track.update((1, True)))
+        self.assertEqual(track.update((0, True)), (0, True))
+        self.assertEqual(track.update((0, False)), (0, False))
+        self.assertIsNone(track.update((45, True)))
+        self.assertIsNone(track.update(None))
+        self.assertIsNone(track.update((45, True)))
 
-    def test_wall_distance_and_virtual_line(self):
-        self.assertIsNone(nav.wall_distance_cm(0))
-        self.assertAlmostEqual(nav.wall_distance_cm(6000), 30.0)
-        self.assertAlmostEqual(nav.wall_distance_cm(3000), 60.0)
-        # 壁が近い (blob大) -> 白線接近 (dist_line = 30-12 = 18cm なので余裕を広げる)
-        original_margin = nav.VIRTUAL_LINE_MARGIN_CM
-        nav.VIRTUAL_LINE_MARGIN_CM = 20.0
-        try:
-            line, penalty, angle, dist = nav.estimate_virtual_line(128, 30, 6000)
-            self.assertTrue(line)
-            self.assertTrue(penalty)
-            self.assertAlmostEqual(angle, 0.0, delta=1.0)
-        finally:
-            nav.VIRTUAL_LINE_MARGIN_CM = original_margin
-        # 壁が遠い -> ラインなし
-        line, penalty, angle, dist = nav.estimate_virtual_line(128, 30, 300)
-        self.assertFalse(line)
-        self.assertFalse(penalty)
+    def test_goal_commands_are_stationary_or_turn_only(self):
+        self.assertEqual(nav.decide_navigation(True, VISIBLE, [], (10, False))[:5], (0, 0, -6, 0, nav.MODE_ALIGN))
+        self.assertEqual(nav.decide_navigation(True, VISIBLE, [], (0, True))[:5], (0, 0, 0, 1, nav.MODE_AIMED))
+        self.assertEqual(nav.decide_navigation(True, VISIBLE, [], None)[:5], (0, 0, 0, 0, nav.MODE_TRACK_IR))
 
-    def test_penalty_area_moves_away_from_wall(self):
-        # 壁は中距離 (60cm) だがペナルティエリア判定が立つ場合は前進して壁から離れる
-        original = nav.PENALTY_DEPTH_CM
-        nav.PENALTY_DEPTH_CM = 100.0
-        try:
-            result = nav.decide_navigation(128, 30, 255, 255, 128, 30, 3000, (500, 0))
-            self.assertEqual(result[5], "AVOID")
-            self.assertGreater(result[1], 0)  # 前進して中央へ戻る
-            self.assertEqual(result[3], 0)    # ペナルティ内ではキックしない
-            self.assertTrue(result[6] & 2)    # flags bit1 = PA
-        finally:
-            nav.PENALTY_DEPTH_CM = original
+    def test_goal_mask_and_both_edges_of_aim_window(self):
+        class Blob:
+            def __init__(self, x, y, pixels, corners):
+                self.cx, self.cy, self.pixels, self.corners = x, y, pixels, corners
 
-    def test_rule_compliance_leds_off(self):
-        src = (Path(__file__).resolve().parents[1] / "openmv/goal_wall_navigation.py").read_text(encoding="utf-8")
-        self.assertIn("sensor.set_ir_led(False)", src)
-        self.assertIn("pyb.LED(led_id).off()", src)
-        self.assertIn("wall_roi", src)
+        true_goal = Blob(160, 100, 80, [(152, 100), (168, 100), (168, 95), (152, 95)])
+        outside = Blob(160, 8, 200, [(152, 8), (168, 8), (168, 9), (152, 9)])
+        small = Blob(160, 102, 3, [(159, 100), (161, 100), (161, 103), (159, 103)])
 
-    def test_nav_packet_checksum_and_signed_values(self):
-        pkt = nav.make_nav_packet(-50, 55, -12, 1, nav.MODE_SHOOT, 1)
-        self.assertEqual(len(pkt), 8)
-        self.assertEqual(pkt[0], 0x20)
-        self.assertEqual(pkt[1], 206)  # -50 & 0xFF
-        self.assertEqual(pkt[2], 55)
-        self.assertEqual(pkt[3], 244)  # -12 & 0xFF
-        self.assertEqual(pkt[4], 1)
-        self.assertEqual(pkt[5], nav.MODE_SHOOT)
-        self.assertEqual(pkt[6], 1)
-        checksum = 0
-        for value in pkt[:7]:
-            checksum ^= value
-        self.assertEqual(pkt[7], checksum)
+        class Frame:
+            def find_blobs(self, *args, **kwargs):
+                return outside, small, true_goal
 
-    def test_legacy_packet_layout(self):
-        goal, wall = nav.make_legacy_packets(10, 20, 30, 40, 50, 60, 0x0123)
-        self.assertEqual(list(goal), [0x02, 10, 20, 30, 40, 50, 60])
-        self.assertEqual(list(wall), [0x14, 50, 60, 0x01, 0x23, 0xFF, 0xFF])
+        with patch.multiple(nav.cfg, IMAGE_SIZE=(320, 320), MIRROR_CENTER=(160, 160),
+                            MIRROR_RING=(20, 100), FRONT_DEG=0, CLOCKWISE=True):
+            mirror = nav.Mirror(320, 320)
+            self.assertEqual(nav.find_color_blob(Frame(), mirror, nav.cfg.YELLOW, 30),
+                             (true_goal, [3, 1, 1]))
+            self.assertEqual(nav.goal_geometry(true_goal, mirror), (0, True))
+            narrow = Blob(160, 100, 30, [(159, 100), (161, 100), (161, 95), (159, 95)])
+            self.assertFalse(nav.goal_geometry(narrow, mirror)[1])
 
-    def test_own_goal_only_defends_without_kick(self):
-        # TARGET_GOAL=YELLOW のとき青ゴールだけ見えても自ゴールへは蹴らない
-        result = nav.decide_navigation(255, 255, 128, 30, 255, 255, 0, (0, 500),
-                                       (128, 30, 4000))
-        self.assertEqual(result[5], "DEFEND")
-        self.assertEqual(result[3], 0)
-        self.assertEqual(result[1], -20)
-
-    def test_obstacle_in_front_avoids_without_kick(self):
-        result = nav.decide_navigation(128, 30, 255, 255, 255, 255, 0, (500, 0),
-                                       (128, 30, 4000), (128, 40, 200))
-        self.assertEqual(result[5], "AVOID")
-        self.assertEqual(result[3], 0)
-
-    def test_ball_without_goal_approaches_ball(self):
-        result = nav.decide_navigation(255, 255, 255, 255, 255, 255, 0, (0, 0),
-                                       (180, 128, 100))
-        self.assertEqual(result[5], "APPROACH")
-        self.assertEqual(result[3], 0)
-        self.assertTrue(result[6] & nav.FLAG_BALL)
-
-    def test_point_in_quad(self):
-        quad = [(0, 0), (255, 0), (255, 30), (0, 30)]
-        self.assertTrue(nav.point_in_quad(128, 10, quad))
-        self.assertFalse(nav.point_in_quad(128, 200, quad))
-        self.assertTrue(nav.point_in_quad(128, 200, None))
-
-    def test_rules_detectors_present(self):
-        src = (Path(__file__).resolve().parents[1] / "openmv/goal_wall_navigation.py").read_text(encoding="utf-8")
-        self.assertIn("BallThresholds", src)
-        self.assertIn("ObstacleThresholds", src)
-        self.assertIn("OWN_GOAL", src)
-
-    def test_camera_only_display_detects_ball_and_obstacle(self):
-        spec = importlib.util.spec_from_file_location(
-            "camera_only_display", Path(__file__).resolve().parents[1] / "openmv/camera_only_display.py")
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        objects = module.detected_objects(500, 120, 60, 0, None, None, 0, None, None,
-                                          (128, 100, 80), (128, 110, 120))
-        names = [obj[0] for obj in objects]
-        self.assertIn("BALL", names)
-        self.assertIn("OBSTACLE", names)
-        lines = module.status_lines(objects, "SHOOT", 1, False, False, 30.0,
-                                    module.FLAG_BALL | module.FLAG_BALL_ALIGNED)
-        self.assertTrue(any("BALL: SEEN" in line for line in lines))
-
-
-    def test_auto_target_locks_front_goal(self):
-        nav.AUTO_TARGET_COLOR = True
-        nav.target_locked = False
-        nav.target_candidate = None
-        nav.target_candidate_count = 0
-        try:
-            for _ in range(nav.TARGET_LOCK_FRAMES):
-                nav.lock_target_from_goals(500, 0, 128, 30, 255, 255)
-            self.assertEqual(nav.TARGET_GOAL, "YELLOW")
-            self.assertEqual(nav.OWN_GOAL, "BLUE")
-            self.assertTrue(nav.target_locked)
-        finally:
-            nav.target_locked = False
-
-    def test_auto_target_prefers_goal_nearest_front_even_if_both_visible(self):
-        nav.AUTO_TARGET_COLOR = True
-        nav.target_locked = False
-        nav.target_candidate = None
-        nav.target_candidate_count = 0
-        try:
-            # 黄は後方(180°)、青は正面(0°)→ 青を相手ゴールにする
-            for _ in range(nav.TARGET_LOCK_FRAMES):
-                nav.lock_target_from_goals(800, 500, 128, 254, 128, 30)
-            self.assertEqual(nav.TARGET_GOAL, "BLUE")
-            self.assertEqual(nav.OWN_GOAL, "YELLOW")
-        finally:
-            nav.target_locked = False
-
-    def test_auto_target_ignores_goal_behind(self):
-        nav.AUTO_TARGET_COLOR = True
-        nav.target_locked = False
-        nav.target_candidate = None
-        nav.target_candidate_count = 0
-        try:
-            for _ in range(nav.TARGET_LOCK_FRAMES + 2):
-                nav.lock_target_from_goals(500, 0, 128, 254, 255, 255)
-            self.assertFalse(nav.target_locked)
-        finally:
-            nav.target_locked = False
-
-    def test_no_kick_before_target_locked(self):
-        nav.target_locked = False
-        result = nav.decide_navigation(128, 30, 255, 255, 255, 255, 0, (500, 0),
-                                       (128, 30, 4000))
-        self.assertNotEqual(result[5], "SHOOT")
-        self.assertEqual(result[3], 0)
-
-    def test_no_kick_when_ball_not_in_kicker(self):
-        # ボールが遠すぎる（blobが小さい）→ キックしない
-        result = nav.decide_navigation(128, 30, 255, 255, 255, 255, 0, (500, 0),
-                                       (128, 30, 40))
-        self.assertEqual(result[3], 0)
-        self.assertFalse(result[6] & nav.FLAG_BALL_IN_KICKER)
-
-    def test_no_kick_when_ball_and_goal_not_aligned(self):
-        # ボールとゴールが両方とも正面でも、方位が20°ずれていればキックしない
-        result = nav.decide_navigation(128, 30, 255, 255, 255, 255, 0, (500, 0),
-                                       (171, 9, 400))
-        self.assertEqual(result[3], 0)
-        self.assertEqual(result[5], "APPROACH")
-
-    def test_ball_in_kicker_flag(self):
-        result = nav.decide_navigation(128, 30, 255, 255, 255, 255, 0, (500, 0),
-                                       (128, 30, 4000))
-        self.assertTrue(result[6] & nav.FLAG_BALL_IN_KICKER)
+    def test_wire_format_signed_motion_checksum_and_protocol_marker(self):
+        packet = nav.make_nav_packet(*nav.decide_navigation(True, VISIBLE, [edge(90)], None))
+        self.assertEqual(list(packet), [0x20, 221, 0, 0, 0, 1, 0x21, 221])
 
 
 if __name__ == "__main__":

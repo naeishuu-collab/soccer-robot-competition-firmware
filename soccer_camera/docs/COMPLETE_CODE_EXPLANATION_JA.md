@@ -12,7 +12,7 @@
 4 枚の基板で役割を分担します。MAIN だけが RS485 共有バスの親（マスター）です。
 
 ```text
-   [OpenMV H7 カメラ] ─UART2 9600 / 0x20 & 0x02 & 0x14─→ MAIN
+   [OpenMV H7 Plus カメラ] ─UART2 9600 / 0x20─→ MAIN
    [BNO055 ジャイロ] ──I2C 0x28 / 50kHz──────────────→ MAIN
    [USB コマンド] ─────AUTO / ARM IR / S / M─→ MAIN
                                                  │
@@ -33,8 +33,8 @@
 - バス調停（`Rs485MasterArbiter`）で IR／LINE の要求を 1 つだけ保持し、応答かタイムアウトで MOTOR 命令へ進みます。
 - BNO055 を読み、相対方位の急変フィルタ（単発は保留、連続で最大 30° ずつ追従）を適用します。オフセットは実機動作テスト由来の値を適用します。
 - `MainController::step()` は競技用 AUTO の状態機械です。現在は構成ゲートが閉じており `AUTO FLOAT` / `AUTO FLOOR` は起動できません。
-- **`AUTO IR` が唯一動作するモード**です。起動後 IR 待機 → 最初の新鮮なボールで 1 度だけ自動 ARM → IR ロストでも ARM を維持し探索旋回 → カメラ有効ならカメラ指令 → カメラも消えたらジャイロ方位ホールド → 全センサー遮断 500ms で停止、回復で自動再開。
-- キック判断はカメラのみです。0x20 の `flags` bit2（ボール有）／bit3（ボール正面）／bit4（ボールがキッカー内）を受け取り、カメラが SHOOT を出したときに未検証 BNO の方位ゲートをカメラ判断で上書きして GPIO11 へ 30ms パルスを出します。
+- `AUTO IR` では新鮮なカメラとIRが必要です。両方が有効なら、壁・白線回避、IR追跡、ゴール整列を順に判断します。
+- キックにはIRの近接・正面と、校正済みカメラのゴール整列がそろう必要があります。発射時は GPIO11 に30 msのパルスを出します。
 
 ### `ir/ir.ino` — ボール方位
 
@@ -75,54 +75,21 @@
 | IR 要求 / 応答 | `01` / `AA dirH dirL relH relL 55` | 形式のみ |
 | LINE 要求 / 応答 | `A5 5A 01 03 00 seq CRC` / `A5 5A 01 01 len seq payload CRC` | CRC16 (0x1021)・連番 |
 | MOTOR 命令 | `AA 04 v0L v0H … v3L v3H XOR 55` | 値域・XOR・終端（ACK なし） |
-| OpenMV ナビ | `20 vx vy turn kick mode flags xor` | XOR、100ms で失効 |
+| OpenMV ナビ | `20 vx vy turn aimed mode flags xor` | XOR、200 msで失効 |
 
-OpenMV はレガシーパケットも送ります: `02 yx yy bx by wx wy` と `14 wx wy wsizeH wsizeL FF FF`。送信周期は参照コードに合わせ **200ms** です。
 
-## 5. カメラ（`openmv/goal_wall_navigation.py` / `camera_only_display.py`）
+## 5. 全方位カメラ
 
-### 検出
+ミラーのリング内でゴール色を検出し、機体の正面を基準に方位を求めます。放射状に緑床から白線・黒壁への変化を探し、実測した半径と床面距離の表で近接を判定します。攻撃色は各ハーフ前に設定します。
 
-参照コード `main.py` に合わせた色閾値（LAB）を使用します。
+`0x20` の mode は 0: WAIT、1: AVOID、2: TRACK IR、3: ALIGN、4: AIMED です。flags の bit 5 は新しい形式、bit 0 は回避中を表します。aimed が立ってもMAINで新鮮なIRの近接・正面を確認するまでキックしません。送信周期の目標は50 msです。
 
-| 対象 | 閾値 | 備考 |
-|---|---|---|
-| 黄色ゴール | `[(64, 91, -6, 14, 26, 62)]` | `GoalRoi=(30,30,260,260)` |
-| 青ゴール | `[(85, 0, 68, -128, -48, -17)]` | 同上 |
-| 黒い壁 | `[(91, 52, 61, 8, 20, -10)]` | ルール 3.1.4 で画面下 2/3 に制限 |
-| オレンジボール | `[(60, 95, 40, 95, 60, 130)]` | 2026 年ルールの 42mm IR ボール。要較正 |
-| 相手ロボット | `[(30, 90, 140, 255, 110, 200)]` | 赤系マーカー。要較正 |
-
-座標は `nx = cx*255/width, ny = cy*255/height` に正規化し、`255` を「未検出」とします。方位は画面上＝0°、時計回りです。
-
-### 相手ゴールの自動決定
-
-资料上、攻撃するゴールの色は**コイントスで決まり、後半で入れ替わります**（規約 2.2.1）。固定値は使いません。セット時にロボットは相手ゴール側を向いて置かれるため、**起動時に正面（0°）へ最も近いゴール**を `TARGET_GOAL`（相手）、反対色を `OWN_GOAL`（自ゴール）としてロックします。カメラが広範囲に見えて両方のゴールが同時に映っても、`angle_error(方位, 0)` の絶対値が小さい（＝正面に近い）ほうを選びます。90°より後ろのゴールは候補外で、5 フレーム連続で同じ色が選ばれた時点で確定します。ロック前はシュートしません。誤ロックを避けたい場合は `AUTO_TARGET_COLOR=False` にして定数で固定します。
-
-### シュートの条件（すべて満たす必要あり）
-
-1. 攻撃対象ゴールが見えている（ロック済み）
-2. ゴールが正面 ±15° 以内・blob が十分大きい・距離がコート長の 60% 以内
-3. ボールが見えている
-4. ボールが正面 ±25° 以内
-5. **ボールがキッカーのポケットの距離（5〜16cm、要較正）にある**
-6. **ボールとゴールの方位差が ±12° 以内**（これがずれるとキックが外れる）
-7. 仮想白線／PA／相手ロボットが近くない
-
-`flags` の bit0=仮想白線、bit1=PA、bit2=ボール有、bit3=ボール正面、bit4=ボールがキッカー内、です。
-
-### cm 定数の扱い
-
-カメラは絶対位置を持たないため、コート定数は「距離推定の較正と妥当性チェック」にだけ使います。実際に判定へ効くのは `OUTER_CM`（白線＝壁−12cm）、`PENALTY_DEPTH_CM`（壁−37cm で PA）、`VIRTUAL_LINE_MARGIN_CM`（8cm）、`FIELD_L_CM` 由来のシュート可能距離です。`WALL_H_CM` / `PENALTY_WIDTH_CM` / `CENTER_CIRCLE_CM` は資料用の参照値で判定には使いません。
-
-### 判断の優先順位
-
-壁／仮想白線 → PA 脱出 → 相手ロボット回避 → 自ゴール退避 → ボール回収／探索 → シュート／接近。
+[全方位カメラの校正](OPENMV_CALIBRATION_JA.md) に撮像・取付・通信の確認手順があります。
 
 ## 6. 安全設定
 
 - `kCompetitionArmed=false`、`AUTO FLOAT` / `AUTO FLOOR` は起動不可。
-- IR ロストで停止しない（`AUTO IR` のみ）。全センサー遮断 500ms で停止。
+- `AUTO IR` はIRまたはカメラ通信が失効すると停止します。
 - 停止は `S`・物理電源スイッチ・300ms ウォッチドッグ。
 - MAIN に物理 E-stop はありません。MOTOR の物理スイッチが最終手段です。
 - 実機未検証: RS485 実配線、IR/LINE 実測、BNO 実動作、車輪の合成方向、キッカー高圧回路、カメラの色較正。
@@ -131,10 +98,10 @@ OpenMV はレガシーパケットも送ります: `02 yx yy bx by wx wy` と `1
 
 | ファイル | 内容 |
 |---|---|
-| `tests/test_core.cpp` | 共通ロジック単体 **62 件 / 3814 チェック** |
+| `tests/test_core.cpp` | 共通ロジックとOpenMV/IRの合流判定 |
 | `tests/test_integration.cpp` | システム統合 **14 シナリオ / 107 チェック** |
 | `tests/check_gpio.py` | GPIO プロファイル＋共通コード一致 **12 件** |
-| `tests/test_openmv_logic.py` | 角度・距離・色ロック・キック条件など **22 件** |
+| `tests/test_openmv_logic.py` | ミラー校正・境界検出・ゴール整列・UART形式 |
 | `tests/run_tests.ps1` | g++（なければ MSVC）で C++ テストをビルド・実行 |
 
 ホスト上のモック試験であり、実波形・実 I2C・実カメラ画像を証明するものではありません。
@@ -146,5 +113,5 @@ OpenMV はレガシーパケットも送ります: `02 yx yy bx by wx wy` と `1
 3. `common/src/RobotProtocol.ino`（フレーム形式）
 4. `main/main.ino` の `loop()`
 5. `common/src/RobotControl.ino` の `MainController::step()` / `IrTestController`
-6. `openmv/goal_wall_navigation.py` の `decide_navigation()` / `lock_target_from_goals()`
+6. `openmv/goal_wall_navigation.py` の `decide_navigation()` と `main/OpenMvNavigation.h`
 7. `motor/motor.ino` の `motorOutput()` / `receiveCommands()`

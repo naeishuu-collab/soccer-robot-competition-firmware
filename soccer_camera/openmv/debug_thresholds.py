@@ -1,211 +1,54 @@
-# 一時的な閾値調整用デバッグスクリプト
-#
-# 使い方:
-#   1. このファイルを OpenMV に main.py として書き込む
-#   2. IDE のターミナルに「色名 / 面積 / 矩形 / 中心 / LAB平均」が出る
-#   3. 数値を調整して TH に反映し、さらに Threshold Editor と突き合わせる
-#   4. 調整が終わったら camera_only_display.py / goal_wall_navigation.py に戻す
-#
-# 明るさ・解像度の設定は camera_only_display.py と完全に同じにしている。
-# （露出/ゲイン=オート、白色バランス=OFF、解像度は B320X320 優先）
+"""LAB and exposure diagnostics. Copy both competition Python modules beside this script."""
+from goal_wall_navigation import (GOAL_COLORS, Mirror, blob_value, cfg, draw_goal, draw_mirror,
+                                  find_color_blob, init_camera, sensor, time)
 
-import sensor
-import image
-import time
-import pyb
-
-# ---------- カメラ設定（camera_only_display.py と同じ） ----------
-FRAMESIZE_ORDER = ("B320X320", "B640X480", "QVGA", "QQVGA")
+# Optional named ROIs in raw image pixels. Sample the inside of each target.
+SAMPLE_ROIS = ()  # (("yellow", (x, y, width, height)), ...)
 PRINT_INTERVAL_MS = 500
-
-# ---------- 現在の閾値（ここを書き換えて調整する） ----------
-TH = {
-    "YELLOW": [(68, 80, -5, 6, 58, 72)],
-    "BLUE":   [(39, 42, 3, 7, -45, -41), (19, 25, 13, 20, -46, -40)],
-    "BLACK":  [(5, 32, -20, 5, -5, 15)],
-    "RED":    [(30, 90, 140, 255, 110, 200)],
-}
-
-COLORS = {
-    "BALL":   (255, 170, 0),
-    "YELLOW": (255, 255, 0),
-    "BLUE":   (0, 255, 255),
-    "BLACK":  (255, 80, 80),
-    "RED":    (255, 0, 255),
-}
-
-
-
-
-
-def _clamp_corners(corners, width, height):
-    """角を画像内に収める（画面外の線を消す）。"""
-    return [(max(0, min(width - 1, int(x))), max(0, min(height - 1, int(y))))
-            for x, y in corners]
-
-
-def _order_corners(corners):
-    """角を重心回りの角度順に並べ、線の交差を防ぐ。"""
-    import math
-    cx = sum(p[0] for p in corners) / float(len(corners))
-    cy = sum(p[1] for p in corners) / float(len(corners))
-    return sorted(corners, key=lambda p: math.atan2(p[1] - cy, p[0] - cx))
-
-
-def draw_blob_outline(img, blob, color, key=None):
-    """blob.corners（輪郭由来の4角）を draw_edges で描く。中心点は描かない。
-    OpenMV v5 は convex_hull() が無く draw_line も座標タプル必須のため、
-    旧版の draw_line と rect フォールバックも用意する。"""
-    if blob is None:
-        return
-    corners = None
-    for attr in ("corners", "min_corners"):
-        try:
-            candidate = blob_value(blob, attr)
-            if candidate and len(candidate) >= 4:
-                corners = candidate
-                break
-        except Exception:
-            continue
-    if corners is None:
-        try:
-            rect = blob_value(blob, "rect")
-            if rect and len(rect) >= 4:
-                x, y, w, h = rect
-                corners = [(x, y), (x + w, y), (x + w, y + h), (x, y + h)]
-        except Exception:
-            return
-    if corners is not None:
-        corners = _clamp_corners(corners, img.width(), img.height())
-        corners = _order_corners(corners)
-        # v5: draw_edges(corners, color, size, thickness)
-        try:
-            img.draw_edges(corners, color, 0, 3)
-            return
-        except Exception:
-            pass
-        # 旧版: draw_line(x0, y0, x1, y1, color, thickness)
-        try:
-            for i in range(len(corners)):
-                p1 = corners[i]
-                p2 = corners[(i + 1) % len(corners)]
-                img.draw_line(p1[0], p1[1], p2[0], p2[1], color, 3)
-            return
-        except Exception:
-            pass
-    # 最後の手段: 矩形
-    try:
-        img.draw_rectangle(blob_value(blob, "rect"), color, 3)
-    except Exception:
-        pass
-
-def blob_value(blob, name):
-    """OpenMV v5 はプロパティ、旧版はメソッド。両対応。"""
-    value = getattr(blob, name)
-    return value() if callable(value) else value
-
-
-def safe_text(img, x, y, text, color):
-    for call in (
-        lambda: img.draw_string(x, y, text, color, 1),
-        lambda: img.draw_string((x, y), text, color, 1),
-        lambda: img.draw_string(x, y, text, color),
-        lambda: img.draw_string(x, y, text),
-    ):
-        try:
-            call()
-            return
-        except Exception:
-            continue
-
-
-def lab_mean(img, rect):
-    """矩形内のLAB平均を返す（閾値の妥当性確認用）。"""
-    if rect is None:
-        return None
-    try:
-        st = img.get_statistics(roi=rect)
-        return (int(st.l_mean()), int(st.a_mean()), int(st.b_mean()))
-    except Exception:
-        return None
-
-
-def init():
-    sensor.reset()
-    sensor.set_pixformat(sensor.RGB565)
-    # camera_only_display.py と同じ順で解像度を試す
-    for size in FRAMESIZE_ORDER:
-        try:
-            sensor.set_framesize(getattr(sensor, size))
-            break
-        except Exception:
-            continue
-    sensor.skip_frames(time=300)
-    # camera_only_display.py と同じ明るさ設定
-    try:
-        sensor.set_auto_exposure(True)
-    except Exception:
-        pass
-    try:
-        sensor.set_auto_gain(True)
-    except Exception:
-        pass
-    try:
-        sensor.set_auto_whitebal(False)
-    except Exception:
-        pass
-    # 競技ルール: IR/可視LEDはOFF
-    try:
-        sensor.set_ir_led(False)
-    except Exception:
-        pass
-    try:
-        for i in (1, 2, 3):
-            pyb.LED(i).off()
-    except Exception:
-        pass
 
 
 def main():
-    init()
+    init_camera()
+    img = sensor.snapshot()
+    width, height = img.width(), img.height()
+    mirror = Mirror(width, height)
     clock = time.clock()
-    last_print = pyb.millis()
+    last_print = time.ticks_ms()
+    print("frame={}x{} ring={} ground={}".format(width, height, mirror.ring_ready, bool(mirror.rays)))
     while True:
         clock.tick()
         img = sensor.snapshot()
-        lines = []
-        # 壁は画面下2/3だけを探す（背景の黒い棚などの誤検出を減らす）
-        wall_roi = (0, img.height() // 4, img.width(), img.height() * 3 // 4)
-        WALL_MAX_Y = wall_roi[1] + wall_roi[3] // 2
-        for name, thresholds in TH.items():
-            count = 0
-            roi = wall_roi if name == "BLACK" else None
-            min_px = 150 if name == "BLACK" else 20
-            for blob in img.find_blobs(thresholds, roi=roi,
-                                       pixels_threshold=min_px,
-                                       area_threshold=min_px, merge=True, margin=6):
-                rect = blob_value(blob, "rect")
-                # 壁は横長の帯だけを表示（PCや影の黒領域を除外）
-                if name == "BLACK" and rect is not None and len(rect) >= 4:
-                    if rect[2] < 30 or rect[3] < 4 or rect[3] > 150 or rect[2] < 1.5 * rect[3]:
-                        continue
-                count += 1
-                px = blob_value(blob, "pixels")
-                cx = blob_value(blob, "cx")
-                cy = blob_value(blob, "cy")
-                mean = lab_mean(img, rect)
-                lines.append("{} px={} rect={} cxcy=({},{}) lab={}".format(
-                    name, px, rect, cx, cy, mean))
-                draw_blob_outline(img, blob, COLORS[name], name)
-                safe_text(img, cx, cy, name, COLORS[name])
-            if count == 0:
-                lines.append("{}: NONE".format(name))
-        now = pyb.millis()
-        if (now - last_print) >= PRINT_INTERVAL_MS:
+        now = time.ticks_ms()
+        log = time.ticks_diff(now, last_print) >= PRINT_INTERVAL_MS
+        detections = []
+        for name, thresholds in (("YELLOW", cfg.YELLOW), ("BLUE", cfg.BLUE)):
+            blob, counts = find_color_blob(img, mirror, thresholds, cfg.GOAL_MIN_PIXELS)
+            if blob is not None:
+                detections.append((name, blob))
+            if log:
+                rect = blob_value(blob, "rect") if blob is not None else None
+                print("{} components/small/masked={} selected={}".format(name, counts, rect))
+        if log:
             last_print = now
-            print("--- fps {:.1f} ---".format(clock.fps()))
-            for line in lines:
-                print(line)
+            print("fps={:.1f} exposure_us={} gain_db={} rgb_gain={}".format(
+                clock.fps(), sensor.get_exposure_us(), sensor.get_gain_db(), sensor.get_rgb_gain_db()))
+            for name, rect in SAMPLE_ROIS:
+                x, y, w, h = rect
+                if x < 0 or y < 0 or w <= 0 or h <= 0 or x + w > width or y + h > height:
+                    print("{}: ROI outside image".format(name))
+                    continue
+                histogram = img.get_histogram(roi=rect)
+                lo, hi = histogram.get_percentile(0.05), histogram.get_percentile(0.95)
+                print("{}: LAB p05–p95 {}".format(
+                    name, tuple(value for channel in ("l_value", "a_value", "b_value")
+                                for value in (blob_value(lo, channel), blob_value(hi, channel)))))
+        for name, rect in SAMPLE_ROIS:
+            x, y, w, h = rect
+            if x >= 0 and y >= 0 and w > 0 and h > 0 and x + w <= width and y + h <= height:
+                img.draw_rectangle(rect, color=GOAL_COLORS.get(name.upper(), (255, 255, 255)))
+        for name, blob in detections:
+            draw_goal(img, blob, name)
+        draw_mirror(img, mirror)
 
 
 if __name__ == "__main__":
