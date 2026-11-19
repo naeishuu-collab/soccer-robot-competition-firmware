@@ -19,8 +19,8 @@ WALL_PIX_TH = 300
 HDR_GOALWALL = 0x02
 HDR_WALL = 0x14
 
-# 実機計測 L31-33 / A-6--4 / B-1-2 に少し余裕を持たせた値
-BlackThresholds = [(27, 40, -11, 1, -6, 7)]
+# 実測2サンプル L31-33 / L53-54（A≈-5 / B≈0）を両方カバー
+BlackThresholds = [(28, 57, -8, -2, -3, 3)]
 
 uart = UART(3, 9600, timeout_char=1000)
 uart.init(9600, bits=8, parity=None, stop=1, timeout_char=1000)
