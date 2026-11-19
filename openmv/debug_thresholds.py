@@ -20,10 +20,10 @@ PRINT_INTERVAL_MS = 500
 
 # ---------- 現在の閾値（ここを書き換えて調整する） ----------
 TH = {
-    "BALL":   [(60, 95, 15, 80, 40, 120)],
-    "YELLOW": [(64, 91, -6, 14, 26, 62)],
+    "BALL":   [(53, 78, 11, 45, 40, 82)],
+    "YELLOW": [(68, 80, -5, 6, 58, 72)],
     "BLUE":   [(85, 0, 68, -128, -48, -17)],
-    "BLACK":  [(25, 40, -12, 2, -8, 10)],
+    "BLACK":  [(29, 36, -9, -1, -4, 5)],
     "RED":    [(30, 90, 140, 255, 110, 200)],
 }
 
@@ -111,10 +111,15 @@ def main():
         clock.tick()
         img = sensor.snapshot()
         lines = []
+        # 壁は画面下2/3だけを探す（背景の黒い棚などの誤検出を減らす）
+        wall_roi = (0, img.height() // 3, img.width(), img.height() * 2 // 3)
         for name, thresholds in TH.items():
             count = 0
-            for blob in img.find_blobs(thresholds, pixels_threshold=20,
-                                       area_threshold=20, merge=True, margin=6):
+            roi = wall_roi if name == "BLACK" else None
+            min_px = 400 if name == "BLACK" else 20
+            for blob in img.find_blobs(thresholds, roi=roi,
+                                       pixels_threshold=min_px,
+                                       area_threshold=min_px, merge=True, margin=6):
                 count += 1
                 px = blob_value(blob, "pixels")
                 cx = blob_value(blob, "cx")

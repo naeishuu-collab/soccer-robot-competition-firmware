@@ -60,7 +60,7 @@ GOAL_REF_DIST_CM = 100.0
 
 # ---------- 検出設定 ----------
 PIXELS_THRESHOLD = 20
-WALL_PIX_TH = 70
+WALL_PIX_TH = 400
 STREAM_INTERVAL_MS = 200
 
 WALL_AVOID_ANGLE_DEG = 60.0
@@ -83,12 +83,13 @@ MODE_SEARCH = 2
 MODE_APPROACH = 3
 MODE_SHOOT = 4
 
-YellowThresholds = [(64, 91, -6, 14, 26, 62)]
+# 黄ゴール: 実機計測 L74-75 / A0-1 / B64-65。ボール(A>=13)と A 軸で分離する。
+YellowThresholds = [(68, 80, -5, 6, 58, 72)]
 BlueThresholds = [(85, 0, 68, -128, -48, -17)]
-# 黒い壁: 実機計測 L≈31-33 / A≈-6--4 / B≈-1-2
-BlackThresholds = [(25, 40, -12, 2, -8, 10)]
-# オレンジのIRボール。黄ゴールと色が近いため、後段で「ボール優先」の重なり判定も行う。
-BallThresholds = [(60, 95, 15, 80, 40, 120)]
+# 黒い壁: 実機計測 L≈31-33 / A≈-6--4 / B≈-1-2 にぎりぎり合わせる
+BlackThresholds = [(29, 36, -9, -1, -4, 5)]
+# オレンジボール: 実機計測 L55-76 / A13-42 / B42-78
+BallThresholds = [(53, 78, 11, 45, 40, 82)]
 # 相手ロボットのマーカー（赤系）。実機の色で要調整。
 ObstacleThresholds = [(30, 90, 140, 255, 110, 200)]
 GoalRoi = (30, 30, 260, 260)
