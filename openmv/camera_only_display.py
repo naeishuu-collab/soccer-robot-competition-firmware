@@ -10,6 +10,22 @@
 # 注: OpenMV の内蔵フォントは ASCII のみのため、画面表示は英語名。
 #     日本語名は USB ターミナルへ print する。
 
+# OpenMV 用モジュールはホスト側テストでも import できるようガードしておく。
+try:
+    import sensor
+    import image
+    import time
+    import pyb
+    from pyb import UART
+    OPENMV = True
+except ImportError:
+    OPENMV = False
+    sensor = None
+    image = None
+    time = None
+    pyb = None
+    UART = None
+
 import math
 
 # ---------- 検出設定 ----------
@@ -277,9 +293,6 @@ def make_nav_packet(vx, vy, turn, kick, mode, flags=0):
 
 # ---------- OpenMV H7 固有 ----------
 def init_camera():
-    import sensor
-    import pyb
-
     sensor.reset()
     sensor.set_pixformat(sensor.RGB565)
     for size in ("B320X320", "B640X480", "QVGA", "QQVGA"):
@@ -326,27 +339,20 @@ def norm_coord(cx, cy, img):
 
 
 def draw_overlay(img, objects, rects, lines):
-    for name, cx, cy, color, _size in objects:
+    # (英語名, 日本語名, cx, cy, 色, サイズ) の6要素で展開する。
+    for name, _name_ja, cx, cy, color, _size in objects:
         rect = rects.get(name)
         if rect is not None:
-            try:
-                img.draw_rectangle(rect, color=color, thickness=1)
-            except Exception:
-                img.draw_rectangle(rect, color=color)
-        img.draw_string(max(0, cx - 20), max(0, cy - 14), name, color=color, scale=1)
+            img.draw_rectangle(rect, color, 1)
+        img.draw_string(max(0, cx - 20), max(0, cy - 14), name, color, 1)
     y = 2
     for line in lines:
-        img.draw_string(2, y, line, color=COLOR_INFO if y == 0 else COLOR_TEXT, scale=1)
+        img.draw_string(2, y, line, COLOR_INFO if y == 0 else COLOR_TEXT, 1)
         y += 12
 
 
 def main_loop():
-    import pyb
-    import time
-    from machine import UART
-
     init_camera()
-    sensor = __import__("sensor")
 
     uart = None
     if SEND_UART:
