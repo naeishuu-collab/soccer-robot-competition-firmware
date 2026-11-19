@@ -48,6 +48,9 @@ BallThresholds = [(53, 78, 11, 45, 40, 82)]
 ObstacleThresholds = [(30, 90, 140, 255, 110, 200)]
 
 # ---------- 競技台定数 (cm) ----------
+FIELD_W_CM = 158.0
+FIELD_L_CM = 219.0
+MAX_FIELD_CM = max(FIELD_W_CM, FIELD_L_CM)
 OUTER_CM = 12.0
 PENALTY_DEPTH_CM = 25.0
 VIRTUAL_LINE_MARGIN_CM = 8.0
@@ -390,6 +393,18 @@ def rect_center_inside(rect, cx, cy):
         return False
     x, y, w, h = rect
     return x <= cx <= x + w and y <= cy <= y + h
+
+
+def valid_ball_blob(blob):
+    """ボールらしい形（ほぼ正方形）かで誤検出を除く。"""
+    rect = blob_value(blob, "rect")
+    if rect is None or len(rect) < 4:
+        return False
+    w, h = rect[2], rect[3]
+    if w <= 0 or h <= 0:
+        return False
+    ratio = w / float(h)
+    return 0.6 <= ratio <= 1.6
 
 
 def valid_wall_blob(blob):
