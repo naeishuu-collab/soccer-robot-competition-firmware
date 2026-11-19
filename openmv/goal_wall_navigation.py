@@ -67,6 +67,8 @@ WALL_AVOID_ANGLE_DEG = 60.0
 WALL_AVOID_DIST_CM = 35.0     # 壁がこの距離より近ければ回避
 GOAL_SHOOT_ANGLE_DEG = 15.0
 GOAL_NEAR_PIX = 60
+# 人物の服などの小さな誤検出をゴールと扱わないための最小面積。
+GOAL_MIN_PIX = 200
 
 # 壁blobサイズ -> 距離の較正 (OpenMV H7 + 標準レンズ用の初期値)
 # 実機で 30cm と 60cm の壁を撮って WALL_REF_PIX@30CM を調整すること。
@@ -84,8 +86,8 @@ MODE_SHOOT = 4
 YellowThresholds = [(64, 91, -6, 14, 26, 62)]
 BlueThresholds = [(85, 0, 68, -128, -48, -17)]
 BlackThresholds = [(91, 52, 61, 8, 20, -10)]
-# オレンジのIRボール。実機の色で要調整。
-BallThresholds = [(60, 95, 40, 95, 60, 130)]
+# オレンジのIRボール。黄ゴールと色が近いため、後段で「ボール優先」の重なり判定も行う。
+BallThresholds = [(60, 95, 15, 80, 40, 120)]
 # 相手ロボットのマーカー（赤系）。実機の色で要調整。
 ObstacleThresholds = [(30, 90, 140, 255, 110, 200)]
 GoalRoi = (30, 30, 260, 260)
@@ -200,7 +202,7 @@ def lock_target_from_goals(ysize, bsize, yx=255, yy=255, bx=255, by=255):
         return
     candidates = []
     for size, nx, ny, color in ((ysize, yx, yy, "YELLOW"), (bsize, bx, by, "BLUE")):
-        if size < GOAL_NEAR_PIX:
+        if size < GOAL_MIN_PIX:
             continue
         angle = angle_from_normalized(nx, ny)
         if angle is None:
@@ -417,6 +419,13 @@ def draw_detections(img, objects, status):
         y += 12
 
 
+def rect_center_inside(rect, cx, cy):
+    if rect is None or cx is None or cy is None:
+        return False
+    x, y, w, h = rect
+    return x <= cx <= x + w and y <= cy <= y + h
+
+
 def biggest_blob(img, thresholds, roi, pixel_threshold):
     best, cx, cy, rect = 0, None, None, None
     for blob in img.find_blobs(thresholds, roi=roi,
@@ -442,14 +451,20 @@ def main_loop():
     while True:
         clock.tick()
         img = sensor.snapshot()
-        ysize, ycx, ycy, y_rect = biggest_blob(img, YellowThresholds, GoalRoi, PIXELS_THRESHOLD)
-        bsize, bcx, bcy, b_rect = biggest_blob(img, BlueThresholds, GoalRoi, PIXELS_THRESHOLD)
+        ysize, ycx, ycy, y_rect = biggest_blob(img, YellowThresholds, GoalRoi, GOAL_MIN_PIX)
+        bsize, bcx, bcy, b_rect = biggest_blob(img, BlueThresholds, GoalRoi, GOAL_MIN_PIX)
         # ルール3.1.4: 壁の上の色（服など）を無視するため、
         # 壁探索を画像下2/3に制限する。
         wall_roi = (0, img.height() // 3, img.width(), img.height() * 2 // 3)
         wsize, wcx, wcy, w_rect = biggest_blob(img, BlackThresholds, wall_roi, WALL_PIX_TH)
         ball_size, ball_cx, ball_cy, ball_rect = biggest_blob(img, BallThresholds, wall_roi, PIXELS_THRESHOLD)
         obs_size, obs_cx, obs_cy, obs_rect = biggest_blob(img, ObstacleThresholds, wall_roi, PIXELS_THRESHOLD)
+        # オレンジボールは黄ゴール閾値にも引っかかるため、ボールと重なったゴール検出は破棄する。
+        if ball_size > 0 and ball_cx is not None:
+            if rect_center_inside(ball_rect, ycx, ycy):
+                ysize, ycx, ycy, y_rect = 0, None, None, None
+            if rect_center_inside(ball_rect, bcx, bcy):
+                bsize, bcx, bcy, b_rect = 0, None, None, None
         yx, yy = norm_coord(ycx, ycy, img)
         bx, by = norm_coord(bcx, bcy, img)
         wx, wy = norm_coord(wcx, wcy, img)

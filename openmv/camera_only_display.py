@@ -38,7 +38,8 @@ BlueThresholds = [(85, 0, 68, -128, -48, -17)]
 BlackThresholds = [(91, 52, 61, 8, 20, -10)]
 GoalRoi = (30, 30, 260, 260)
 # オレンジのIRボール。実機の色で要調整。
-BallThresholds = [(60, 95, 40, 95, 60, 130)]
+# オレンジボールは黄ゴール閾値にも引っかかるため、後段でボール優先の重なり判定も行う。
+BallThresholds = [(60, 95, 15, 80, 40, 120)]
 # 相手ロボットのマーカー（赤系）。実機の色で要調整。
 ObstacleThresholds = [(30, 90, 140, 255, 110, 200)]
 
@@ -50,6 +51,8 @@ WALL_AVOID_ANGLE_DEG = 60.0
 WALL_AVOID_DIST_CM = 35.0
 GOAL_SHOOT_ANGLE_DEG = 15.0
 GOAL_NEAR_PIX = 60
+# 人物の服などの小さな誤検出をゴールと扱わないための最小面積。
+GOAL_MIN_PIX = 200
 WALL_REF_PIX = 6000
 WALL_REF_DIST_CM = 30.0
 
@@ -145,7 +148,7 @@ def lock_target_from_goals(ysize, bsize, yx=255, yy=255, bx=255, by=255):
         return
     candidates = []
     for size, nx, ny, color in ((ysize, yx, yy, "YELLOW"), (bsize, bx, by, "BLUE")):
-        if size < GOAL_NEAR_PIX:
+        if size < GOAL_MIN_PIX:
             continue
         angle = angle_from_normalized(nx, ny)
         if angle is None:
@@ -326,6 +329,13 @@ def blob_value(blob, name):
     return value() if callable(value) else value
 
 
+def rect_center_inside(rect, cx, cy):
+    if rect is None or cx is None or cy is None:
+        return False
+    x, y, w, h = rect
+    return x <= cx <= x + w and y <= cy <= y + h
+
+
 def biggest_blob_info(img, thresholds, roi, pixel_threshold):
     """(size, cx, cy, rect) を返す。未検出なら (0, None, None, None)。"""
     best, cx, cy, rect = 0, None, None, None
@@ -415,13 +425,19 @@ def main_loop():
         goal_roi = GoalRoi
         wall_roi = (0, height // 3, width, height * 2 // 3)
 
-        y_size, ycx, ycy, y_rect = biggest_blob_info(img, YellowThresholds, goal_roi, PIXELS_THRESHOLD)
-        b_size, bcx, bcy, b_rect = biggest_blob_info(img, BlueThresholds, goal_roi, PIXELS_THRESHOLD)
+        y_size, ycx, ycy, y_rect = biggest_blob_info(img, YellowThresholds, goal_roi, GOAL_MIN_PIX)
+        b_size, bcx, bcy, b_rect = biggest_blob_info(img, BlueThresholds, goal_roi, GOAL_MIN_PIX)
         w_size, wcx, wcy, w_rect = biggest_blob_info(img, BlackThresholds, wall_roi, WALL_PIX_TH)
         ball_size, ball_cx, ball_cy, ball_rect = biggest_blob_info(
             img, BallThresholds, wall_roi, PIXELS_THRESHOLD)
         obs_size, obs_cx, obs_cy, obs_rect = biggest_blob_info(
             img, ObstacleThresholds, wall_roi, PIXELS_THRESHOLD)
+        # ボールと重なったゴール検出は破棄（オレンジは黄ゴール閾値にも入るため）。
+        if ball_size > 0 and ball_cx is not None:
+            if rect_center_inside(ball_rect, ycx, ycy):
+                y_size, ycx, ycy, y_rect = 0, None, None, None
+            if rect_center_inside(ball_rect, bcx, bcy):
+                b_size, bcx, bcy, b_rect = 0, None, None, None
 
         yx, yy = norm_coord(ycx, ycy, img)
         bx, by = norm_coord(bcx, bcy, img)
