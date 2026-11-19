@@ -30,15 +30,15 @@ import math
 
 # ---------- 検出設定 ----------
 PIXELS_THRESHOLD = 20
-WALL_PIX_TH = 120
+WALL_PIX_TH = 200
 STREAM_INTERVAL_MS = 200
 
 # 黄ゴール: 実機計測 L82-83 / A1-3 / B61-66。ボール(L<=78, A>=13)と分離する。
 YellowThresholds = [(79, 86, -3, 7, 57, 70)]
 # 青ゴール: 最新サンプル L40-41 / A4-5 / B-43 を主とし、旧サンプルも予備で保持
 BlueThresholds = [(39, 42, 3, 7, -45, -41), (19, 25, 13, 20, -46, -40)]
-# 黒い壁: 検出を優先して広めの範囲に緩和（形状フィルタで誤検出を抑える）
-BlackThresholds = [(20, 70, -15, 5, -8, 8)]
+# 黒い壁: 最新実測 L53-54/A-5--4/B-1-1 に合わせる（緑のフィールドを拾わない）
+BlackThresholds = [(48, 60, -8, -2, -3, 3)]
 # 壁領域を画像上の4点（正規化座標 nx,ny）で定义する。None なら従来のblob検出。
 WALL_QUAD = None
 GoalRoi = (30, 30, 260, 260)
@@ -417,9 +417,9 @@ def valid_wall_blob(blob):
     if rect is None or len(rect) < 4:
         return False
     w, h = rect[2], rect[3]
-    if w < 20 or h < 3:
+    if w < 30 or h < 4 or h > 150:
         return False
-    return w >= 1.2 * h
+    return w >= 1.5 * h
 
 
 def biggest_blob_info(img, thresholds, roi, pixel_threshold, quad=None, shape_filter=None):
@@ -517,7 +517,7 @@ def main_loop():
         img = sensor.snapshot()
         width, height = img.width(), img.height()
         goal_roi = GoalRoi
-        wall_roi = (0, height // 4, width, height * 3 // 4)
+        wall_roi = (0, height // 3, width, height * 2 // 3)
 
         y_size, ycx, ycy, y_rect = biggest_blob_info(img, YellowThresholds, goal_roi, GOAL_MIN_PIX)
         b_size, bcx, bcy, b_rect = biggest_blob_info(img, BlueThresholds, goal_roi, GOAL_MIN_PIX)
