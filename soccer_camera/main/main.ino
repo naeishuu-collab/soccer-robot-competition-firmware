@@ -2768,19 +2768,16 @@ void loop() {
         kickerInput.fault = false;
         // 故障したLINEセンサーの代わりに、カメラから推定した仮想白線とペナルティエリアを使う。
         kickerInput.lineClear = !(openMvFresh && (openMvVirtualLine || openMvPenaltyArea));
-        // キック判断はカメラに任せる。ボールがキッカーに収まったこと
-        // （カメラの flags bit4）を最優先の条件にする。
-        const bool cameraBallReady = openMvFresh && openMvBallSeen && openMvBallInKicker;
-        kickerInput.ballFresh = cameraBallReady || input.irFresh;
-        kickerInput.ballDetected = cameraBallReady;
-        kickerInput.ballAligned = cameraBallReady;
-        // カメラがSHOOTと判断した時点で方位は確認済みとして扱う。
-        // ロボットが旋回した分はカメラが毎フレーム見直すため、MAINでは保持しない。
-        if (openMvFresh && openMvKick) {
-            kickerInput.headingValid = true;
-            kickerInput.headingAligned = true;
-        }
-        kickerInput.request = openMvKick;
+        // ボール判断はIRに任せる。カメラはゴール／壁の検出のみに使用する
+        // （ゴールをボールと誤検出する問題があるため、カメラのボール情報は使わない）。
+        const bool irBallFront = input.irFresh && input.ballFound && input.ballAngleDeg < 360 &&
+            fabsf(shortestAngleError(static_cast<float>(input.ballAngleDeg), 0.0f)) <= 5.0f;
+        kickerInput.ballFresh = input.irFresh;
+        kickerInput.ballDetected = input.ballFound;
+        kickerInput.ballAligned = irBallFront;
+        kickerInput.headingValid = true;
+        kickerInput.headingAligned = true;
+        kickerInput.request = irBallFront;
     }
     const KickerOutput kickerOutput = kickerController.update(kickerInput, nowMs,
                                                               board::kKickerPulseMs,

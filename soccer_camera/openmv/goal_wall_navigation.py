@@ -96,6 +96,8 @@ WALL_QUAD = [(0, 0), (255, 0), (255, 30), (0, 30)]
 WALL_QUAD = None
 # オレンジボール: 実機計測 L55-76 / A13-42 / B42-78（2026ルールで直径4.2cm）
 BallThresholds = [(53, 78, 11, 45, 40, 82)]
+# カメラはボール検知に使わない（IRに任せる）。誤検出を完全に止める。
+BALL_DETECTION_ENABLED = False
 # 相手ロボットのマーカー（赤系）。実機の色で要調整。
 ObstacleThresholds = [(30, 90, 140, 255, 110, 200)]
 GoalRoi = (30, 30, 260, 260)
@@ -659,8 +661,12 @@ def main_loop():
         # 人などに遮られて壁が分断されても、すべての断片を描画対象にする。
         wall_blobs = collect_wall_blobs(
             img, BlackThresholds, wall_roi, WALL_PIX_TH, WALL_QUAD, valid_wall_blob)
-        ball_size, ball_cx, ball_cy, ball_rect, ball_blob = biggest_blob(
-            img, BallThresholds, wall_roi, PIXELS_THRESHOLD, shape_filter=valid_ball_blob)
+        # ボール検出は無効（IRが担当）。カメラはゴールと壁だけを見る。
+        if BALL_DETECTION_ENABLED:
+            ball_size, ball_cx, ball_cy, ball_rect, ball_blob = biggest_blob(
+                img, BallThresholds, wall_roi, PIXELS_THRESHOLD, shape_filter=valid_ball_blob)
+        else:
+            ball_size, ball_cx, ball_cy, ball_rect, ball_blob = 0, None, None, None, None
         obs_size, obs_cx, obs_cy, obs_rect, obs_blob = biggest_blob(
             img, ObstacleThresholds, wall_roi, PIXELS_THRESHOLD)
         # 黄ゴールの一部をボールと誤検出した場合はボールを捨てる（形＋重なりで判定）。
