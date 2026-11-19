@@ -14,13 +14,13 @@ from pyb import UART
 
 # ---------- 設定 ----------
 STREAM_INTERVAL_MS = 200
-WALL_PIX_TH = 300
+WALL_PIX_TH = 120
 
 HDR_GOALWALL = 0x02
 HDR_WALL = 0x14
 
-# 実測2サンプル L31-33 / L53-54（A≈-5 / B≈0）を両方カバー
-BlackThresholds = [(28, 57, -8, -2, -3, 3)]
+# 検出を優先して広めの範囲に緩和（形状条件で誤検出を抑える）
+BlackThresholds = [(20, 70, -15, 5, -8, 8)]
 
 uart = UART(3, 9600, timeout_char=1000)
 uart.init(9600, bits=8, parity=None, stop=1, timeout_char=1000)
@@ -83,7 +83,7 @@ while True:
     img = sensor.snapshot()
 
     # 壁は画面下2/3だけを探す（ルール3.1.4: 壁より上の色を無視）
-    wall_roi = (0, img.height() // 3, img.width(), img.height() * 2 // 3)
+    wall_roi = (0, img.height() // 4, img.width(), img.height() * 3 // 4)
     best_size = 0
     best_cx = None
     best_cy = None
@@ -97,7 +97,7 @@ while True:
             continue
         w, h = rect[2], rect[3]
         # 壁は横長の帯。四角い黒領域（PCや影）は除外する。
-        if w < 40 or h < 4 or w < 2.0 * h:
+        if w < 20 or h < 3 or w < 1.2 * h:
             continue
         size = blob_value(blob, "pixels")
         if size > best_size:

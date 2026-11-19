@@ -23,7 +23,7 @@ TH = {
     "BALL":   [(53, 78, 11, 45, 40, 82)],
     "YELLOW": [(68, 80, -5, 6, 58, 72)],
     "BLUE":   [(39, 42, 3, 7, -45, -41), (19, 25, 13, 20, -46, -40)],
-    "BLACK":  [(28, 57, -8, -2, -3, 3)],
+    "BLACK":  [(20, 70, -15, 5, -8, 8)],
     "RED":    [(30, 90, 140, 255, 110, 200)],
 }
 
@@ -112,18 +112,18 @@ def main():
         img = sensor.snapshot()
         lines = []
         # 壁は画面下2/3だけを探す（背景の黒い棚などの誤検出を減らす）
-        wall_roi = (0, img.height() // 3, img.width(), img.height() * 2 // 3)
+        wall_roi = (0, img.height() // 4, img.width(), img.height() * 3 // 4)
         for name, thresholds in TH.items():
             count = 0
             roi = wall_roi if name == "BLACK" else None
-            min_px = 300 if name == "BLACK" else 20
+            min_px = 120 if name == "BLACK" else 20
             for blob in img.find_blobs(thresholds, roi=roi,
                                        pixels_threshold=min_px,
                                        area_threshold=min_px, merge=True, margin=6):
                 rect = blob_value(blob, "rect")
                 # 壁は横長の帯だけを表示（PCや影の黒領域を除外）
                 if name == "BLACK" and rect is not None and len(rect) >= 4:
-                    if rect[2] < 40 or rect[3] < 4 or rect[2] < 2.0 * rect[3]:
+                    if rect[2] < 20 or rect[3] < 3 or rect[2] < 1.2 * rect[3]:
                         continue
                 count += 1
                 px = blob_value(blob, "pixels")
