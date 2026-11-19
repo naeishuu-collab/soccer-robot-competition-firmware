@@ -35,8 +35,8 @@ STREAM_INTERVAL_MS = 200
 
 # 黄ゴール: 実機計測 L82-83 / A1-3 / B61-66。ボール(L<=78, A>=13)と分離する。
 YellowThresholds = [(79, 86, -3, 7, 57, 70)]
-# 青ゴール: 実測サンプル2種（L21-23/A15-18 と L40-41/A5-6、Bは共通 -44）を両方保持
-BlueThresholds = [(19, 25, 13, 20, -46, -40), (38, 43, 3, 8, -46, -42)]
+# 青ゴール: 最新サンプル L40-41 / A4-5 / B-43 を主とし、旧サンプルも予備で保持
+BlueThresholds = [(39, 42, 3, 7, -45, -41), (19, 25, 13, 20, -46, -40)]
 # 黒い壁: 実機計測 L31-33 を中心に少し余裕を持たせる（形状フィルタも併用）
 BlackThresholds = [(27, 40, -11, 1, -6, 7)]
 # 壁領域を画像上の4点（正規化座標 nx,ny）で定义する。None なら従来のblob検出。
@@ -70,7 +70,9 @@ TARGET_GOAL = "YELLOW"
 OWN_GOAL = "BLUE"
 # 最初に安定して見えたゴールの色を相手ゴールとして自動ロックする。
 AUTO_TARGET_COLOR = True
-TARGET_LOCK_FRAMES = 5
+TARGET_LOCK_FRAMES = 8
+# ボールも単発の誤検出で採用しないため、連続検出フレーム数を要求する。
+BALL_LOCK_FRAMES = 3
 TARGET_LOCK_MAX_ANGLE_DEG = 90.0
 target_locked = not AUTO_TARGET_COLOR
 target_candidate = None
@@ -490,6 +492,7 @@ def main_loop():
     clock = time.clock()
     last_stream_ms = pyb.millis()
 
+    ball_seen_count = 0
     while True:
         clock.tick()
         img = sensor.snapshot()
@@ -502,7 +505,7 @@ def main_loop():
         w_size, wcx, wcy, w_rect = biggest_blob_info(
             img, BlackThresholds, wall_roi, WALL_PIX_TH, WALL_QUAD, valid_wall_blob)
         ball_size, ball_cx, ball_cy, ball_rect = biggest_blob_info(
-            img, BallThresholds, wall_roi, PIXELS_THRESHOLD)
+            img, BallThresholds, wall_roi, PIXELS_THRESHOLD, shape_filter=valid_ball_blob)
         obs_size, obs_cx, obs_cy, obs_rect = biggest_blob_info(
             img, ObstacleThresholds, wall_roi, PIXELS_THRESHOLD)
         # 黄ゴールの一部をボールと誤検出した場合はボールを捨てる（形＋重なりで判定）。
@@ -515,6 +518,10 @@ def main_loop():
                 y_size, ycx, ycy, y_rect = 0, None, None, None
             if rect_center_inside(ball_rect, bcx, bcy):
                 b_size, bcx, bcy, b_rect = 0, None, None, None
+        # ボールのロック: 連続 BALL_LOCK_FRAMES フレーム見えて初めて採用する。
+        ball_seen_count = ball_seen_count + 1 if ball_size > 0 else 0
+        if ball_seen_count < BALL_LOCK_FRAMES:
+            ball_size, ball_cx, ball_cy, ball_rect = 0, None, None, None
 
         yx, yy = norm_coord(ycx, ycy, img)
         bx, by = norm_coord(bcx, bcy, img)

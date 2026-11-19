@@ -85,8 +85,8 @@ MODE_SHOOT = 4
 
 # 黄ゴール: 実機計測 L82-83 / A1-3 / B61-66。ボール(L<=78, A>=13)と分離する。
 YellowThresholds = [(79, 86, -3, 7, 57, 70)]
-# 青ゴール: 実測サンプル2種（L21-23/A15-18 と L40-41/A5-6、Bは共通 -44）を両方保持
-BlueThresholds = [(19, 25, 13, 20, -46, -40), (38, 43, 3, 8, -46, -42)]
+# 青ゴール: 最新サンプル L40-41 / A4-5 / B-43 を主とし、旧サンプルも予備で保持
+BlueThresholds = [(39, 42, 3, 7, -45, -41), (19, 25, 13, 20, -46, -40)]
 # 黒い壁: 実機計測 L31-33 を中心に少し余裕を持たせる（形状フィルタも併用）
 BlackThresholds = [(27, 40, -11, 1, -6, 7)]
 # 壁領域を画像上の4点（正規化座標 nx,ny）で定义する。None なら従来のblob検出。
@@ -105,7 +105,9 @@ OWN_GOAL = "BLUE"
 # コイントス／後半のエンド入れ替えに合わせて自動で決まるが、最初に自ゴールを
 # 見た場合は誤るため、必要なら AUTO_TARGET_COLOR=False にして定数で固定する。
 AUTO_TARGET_COLOR = True
-TARGET_LOCK_FRAMES = 5
+TARGET_LOCK_FRAMES = 8
+# ボールも単発の誤検出で採用しないため、連続検出フレーム数を要求する。
+BALL_LOCK_FRAMES = 3
 # セット時の正面(0°)に最も近いゴールを相手ゴールとする。それより後ろのゴールは候補にしない。
 TARGET_LOCK_MAX_ANGLE_DEG = 90.0
 target_locked = not AUTO_TARGET_COLOR
@@ -545,6 +547,7 @@ def main_loop():
     clock = time.clock()
     last_stream_ms = pyb.millis()
     last_kick_ms = -1000
+    ball_seen_count = 0
     while True:
         clock.tick()
         img = sensor.snapshot()
@@ -568,6 +571,10 @@ def main_loop():
                 ysize, ycx, ycy, y_rect = 0, None, None, None
             if rect_center_inside(ball_rect, bcx, bcy):
                 bsize, bcx, bcy, b_rect = 0, None, None, None
+        # ボールのロック: 連続 BALL_LOCK_FRAMES フレーム見えて初めて採用する。
+        ball_seen_count = ball_seen_count + 1 if ball_size > 0 else 0
+        if ball_seen_count < BALL_LOCK_FRAMES:
+            ball_size, ball_cx, ball_cy, ball_rect = 0, None, None, None
         yx, yy = norm_coord(ycx, ycy, img)
         bx, by = norm_coord(bcx, bcy, img)
         wx, wy = norm_coord(wcx, wcy, img)
