@@ -2158,11 +2158,7 @@ bool openMvFresh = false;
 uint8_t openMvMode = 0;
 float gyroLockHeading = 0.0f;
 bool gyroLockValid = false;
-// キック判定をIR優先にするためのゴール方位ロック（起動時ジャイロ0°基準）。
-float kickGoalHeading = 0.0f;
-bool kickGoalHeadingValid = false;
-constexpr float kKickGoalHeadingTolDeg = 5.0f;
-constexpr float kIrKickAngleTolDeg = 5.0f;
+// キック判断はカメラに委ねるため、MAIN側のIR／ジャイロ方位ゲートは使用しない。
 uint32_t lastOpenMvMs = 0;
 uint32_t lastSensorContactMs = 0;
 bool sensorBlackout = false;
@@ -2201,7 +2197,6 @@ void stopIrTest() {
     motorMotion = {};
     motorEnabled = false;
     motorStopPending = true;
-    kickGoalHeadingValid = false;
 }
 
 constexpr int8_t kMainSafetyPins[3] = {board::kMainArmPin, board::kMainEStopPin,
@@ -2767,27 +2762,15 @@ void loop() {
         kickerInput.fault = false;
         // 故障したLINEセンサーの代わりに、カメラから推定した仮想白線とペナルティエリアを使う。
         kickerInput.lineClear = !(openMvFresh && (openMvVirtualLine || openMvPenaltyArea));
-        // キック判定はIR優先。IRが新鮮なら赤外線方位±5°を最優先条件にする。
-        const bool irBallFront = input.irFresh && input.ballFound && input.ballAngleDeg < 360 &&
-            fabsf(shortestAngleError(static_cast<float>(input.ballAngleDeg), 0.0f)) <= kIrKickAngleTolDeg;
-        const bool cameraBallReady = openMvFresh && openMvBallSeen &&
-                                     openMvBallAligned && openMvBallInKicker;
-        kickerInput.ballFresh = irBallFront || cameraBallReady || input.irFresh;
-        kickerInput.ballDetected = irBallFront || cameraBallReady;
-        kickerInput.ballAligned = input.irFresh ? irBallFront : cameraBallReady;
-        // カメラがSHOOTと判断した瞬間の相対方位をゴール方位として記録する。
-        // ロボットが旋回すると相対方位も変わるため、誤差で判定すれば
-        // 位置・向きが変わってもシュート方向が追従する。
-        if (openMvFresh && openMvKick && headingSample.headingValid) {
-            if (!kickGoalHeadingValid) {
-                kickGoalHeading = headingSample.headingDeg;
-                kickGoalHeadingValid = true;
-            }
-            kickerInput.headingValid = true;
-            kickerInput.headingAligned =
-                fabsf(shortestAngleError(kickGoalHeading, headingSample.headingDeg)) <= kKickGoalHeadingTolDeg;
-        } else if (openMvFresh && openMvKick) {
-            // ジャイロが使えない場合はカメラ判断に委ねる（従来どおり）。
+        // キック判断はカメラに任せる。ボールがキッカーに収まったこと
+        // （カメラの flags bit4）を最優先の条件にする。
+        const bool cameraBallReady = openMvFresh && openMvBallSeen && openMvBallInKicker;
+        kickerInput.ballFresh = cameraBallReady || input.irFresh;
+        kickerInput.ballDetected = cameraBallReady;
+        kickerInput.ballAligned = cameraBallReady;
+        // カメラがSHOOTと判断した時点で方位は確認済みとして扱う。
+        // ロボットが旋回した分はカメラが毎フレーム見直すため、MAINでは保持しない。
+        if (openMvFresh && openMvKick) {
             kickerInput.headingValid = true;
             kickerInput.headingAligned = true;
         }

@@ -81,6 +81,8 @@ target_locked = not AUTO_TARGET_COLOR
 target_candidate = None
 target_candidate_count = 0
 BALL_FRONT_ANGLE_DEG = 25.0
+# ボールがキッカーのポケットにある場合は正面から外れて見えることがあるため広めに取る。
+BALL_IN_KICKER_ANGLE_TOL_DEG = 60.0
 BALL_GOAL_ALIGN_TOL_DEG = 12.0
 OBSTACLE_PIX_TH = 60
 MODE_DEFEND = 5
@@ -225,7 +227,9 @@ def decide_navigation(yx, yy, bx, by, wx, wy, wsize, goal_sizes,
     if ball_aligned:
         flags |= FLAG_BALL_ALIGNED
     ball_dist = ball_distance_cm(ball[2]) if ball_seen else None
-    ball_in_kicker = (ball_aligned and ball_dist is not None and
+    ball_kicker_angle_ok = (ball_angle is not None and
+                            abs(angle_error(ball_angle, 0.0)) <= BALL_IN_KICKER_ANGLE_TOL_DEG)
+    ball_in_kicker = (ball_kicker_angle_ok and ball_dist is not None and
                       BALL_KICK_MIN_CM <= ball_dist <= BALL_KICK_MAX_CM)
     if ball_in_kicker:
         flags |= FLAG_BALL_IN_KICKER
