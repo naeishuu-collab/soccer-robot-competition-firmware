@@ -107,9 +107,9 @@ focal_px = 0.0
 SEND_UART = True
 
 # ---------- 描画色 (RGB565) ----------
-COLOR_GOAL_YELLOW = (255, 255, 0)
+COLOR_GOAL_YELLOW = (0, 255, 255)
 COLOR_GOAL_BLUE = (0, 255, 255)
-COLOR_WALL = (255, 80, 80)
+COLOR_WALL = (0, 0, 255)
 COLOR_BALL = (255, 170, 0)
 COLOR_OBSTACLE = (255, 0, 255)
 COLOR_TEXT = (255, 255, 255)
@@ -609,7 +609,7 @@ def main_loop():
         width, height = img.width(), img.height()
         goal_roi = GoalRoi
         wall_roi = (0, height // 4, width, height * 3 // 4)
-        WALL_MAX_Y = wall_roi[1] + wall_roi[3] // 2
+        WALL_MAX_Y = wall_roi[1] + wall_roi[3] * 3 // 4
 
         y_size, ycx, ycy, y_rect, y_blob = biggest_blob_info(
             img, YellowThresholds, goal_roi, GOAL_MIN_PIX)

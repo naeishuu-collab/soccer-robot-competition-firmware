@@ -408,9 +408,9 @@ def init_camera():
 
 
 # ---------- 画面表示用（OpenMV v5 互換） ----------
-COLOR_GOAL_YELLOW = (255, 255, 0)
+COLOR_GOAL_YELLOW = (0, 255, 255)
 COLOR_GOAL_BLUE = (0, 255, 255)
-COLOR_WALL = (255, 80, 80)
+COLOR_WALL = (0, 0, 255)
 COLOR_BALL = (255, 170, 0)
 COLOR_OBSTACLE = (255, 0, 255)
 COLOR_TEXT = (255, 255, 255)
@@ -655,7 +655,7 @@ def main_loop():
         # ルール3.1.4: 壁の上の色（服など）を無視するため、
         # 壁探索を画像下2/3に制限する。
         wall_roi = (0, img.height() // 4, img.width(), img.height() * 3 // 4)
-        WALL_MAX_Y = wall_roi[1] + wall_roi[3] // 2
+        WALL_MAX_Y = wall_roi[1] + wall_roi[3] * 3 // 4
         wsize, wcx, wcy, w_rect, w_blob = biggest_blob(
             img, BlackThresholds, wall_roi, WALL_PIX_TH, WALL_QUAD, valid_wall_blob)
         # 人などに遮られて壁が分断されても、すべての断片を描画対象にする。

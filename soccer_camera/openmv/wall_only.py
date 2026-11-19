@@ -169,7 +169,7 @@ while True:
         if w < 30 or h < 4 or h > 150 or w < 1.5 * h:
             continue
         # 床の黒い物体を壁と誤検出しない（壁は床より上）。
-        if rect[1] > wall_roi[1] + wall_roi[3] // 2:
+        if rect[1] > wall_roi[1] + wall_roi[3] * 3 // 4:
             if len(rejected) < 3:
                 rejected.append(rect)
             continue
