@@ -36,7 +36,42 @@ COLORS = {
 }
 
 
-def draw_blob_outline(img, blob, color):
+
+# ---------- 輪郭の補正（揺れ・はみ出し・交差対策） ----------
+_last_outline = {}
+
+
+def _clamp_corners(corners, width, height):
+    """角を画像内に収める。"""
+    return [(max(0, min(width - 1, int(x))), max(0, min(height - 1, int(y))))
+            for x, y in corners]
+
+
+def _order_corners(corners):
+    """角を重心回りの角度順に並べ、線の交差を防ぐ。"""
+    import math
+    cx = sum(p[0] for p in corners) / float(len(corners))
+    cy = sum(p[1] for p in corners) / float(len(corners))
+    return sorted(corners, key=lambda p: math.atan2(p[1] - cy, p[0] - cx))
+
+
+def _smooth_corners(key, corners, max_shift=80, alpha=0.5):
+    """前フレームとブレンドし、急激な変化は揺れとして無視する。"""
+    prev = _last_outline.get(key)
+    if prev is not None and len(prev) == len(corners):
+        shift = max(abs(p[0] - c[0]) + abs(p[1] - c[1])
+                    for p, c in zip(prev, corners))
+        if shift > max_shift:
+            corners = prev
+        else:
+            corners = [(int(p[0] * (1 - alpha) + c[0] * alpha),
+                        int(p[1] * (1 - alpha) + c[1] * alpha))
+                       for p, c in zip(prev, corners)]
+    _last_outline[key] = corners
+    return corners
+
+
+def draw_blob_outline(img, blob, color, key=None):
     """blob.corners（輪郭由来の4角）を draw_edges で描く。中心点は描かない。
     OpenMV v5 は convex_hull() が無く draw_line も座標タプル必須のため、
     旧版の draw_line と rect フォールバックも用意する。"""
@@ -60,6 +95,9 @@ def draw_blob_outline(img, blob, color):
         except Exception:
             return
     if corners is not None:
+        corners = _clamp_corners(corners, img.width(), img.height())
+        corners = _order_corners(corners)
+        corners = _smooth_corners(key or color, corners)
         # v5: draw_edges(corners, color, size, thickness)
         try:
             img.draw_edges(corners, color, 0, 2)
@@ -177,7 +215,7 @@ def main():
                 mean = lab_mean(img, rect)
                 lines.append("{} px={} rect={} cxcy=({},{}) lab={}".format(
                     name, px, rect, cx, cy, mean))
-                draw_blob_outline(img, blob, COLORS[name])
+                draw_blob_outline(img, blob, COLORS[name], name)
                 safe_text(img, cx, cy, name, COLORS[name])
             if count == 0:
                 lines.append("{}: NONE".format(name))
