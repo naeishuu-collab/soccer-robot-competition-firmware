@@ -20,7 +20,7 @@ HDR_GOALWALL = 0x02
 HDR_WALL = 0x14
 
 # 最新実測 L53-54/A-5--4/B-1-1（緑のフィールドを拾わない）
-BlackThresholds = [(27, 60, -12, 0, -5, 5)]
+BlackThresholds = [(5, 30, -12, 0, -2, 10)]
 
 uart = UART(3, 9600, timeout_char=1000)
 uart.init(9600, bits=8, parity=None, stop=1, timeout_char=1000)
