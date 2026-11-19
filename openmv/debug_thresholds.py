@@ -37,26 +37,49 @@ COLORS = {
 
 
 def draw_blob_outline(img, blob, color):
-    """blob の輪郭（凸包）を描く。取れない場合は rect を描く。中心点は描かない。"""
-    hull = None
-    try:
-        hull = blob_value(blob, "convex_hull")
-    except Exception:
-        pass
-    if hull and len(hull) >= 3:
-        for i in range(len(hull)):
-            p1 = hull[i]
-            p2 = hull[(i + 1) % len(hull)]
-            try:
-                img.draw_line(p1[0], p1[1], p2[0], p2[1], color, 2)
-            except Exception:
-                pass
-    else:
+    """blob.corners（輪郭由来の4角）を draw_edges で描く。中心点は描かない。
+    OpenMV v5 は convex_hull() が無く draw_line も座標タプル必須のため、
+    旧版の draw_line と rect フォールバックも用意する。"""
+    if blob is None:
+        return
+    corners = None
+    for attr in ("corners", "min_corners"):
         try:
-            img.draw_rectangle(blob_value(blob, "rect"), color, 2)
+            candidate = blob_value(blob, attr)
+            if candidate and len(candidate) >= 4:
+                corners = candidate
+                break
+        except Exception:
+            continue
+    if corners is None:
+        try:
+            rect = blob_value(blob, "rect")
+            if rect and len(rect) >= 4:
+                x, y, w, h = rect
+                corners = [(x, y), (x + w, y), (x + w, y + h), (x, y + h)]
+        except Exception:
+            return
+    if corners is not None:
+        # v5: draw_edges(corners, color, size, thickness)
+        try:
+            img.draw_edges(corners, color, 0, 2)
+            return
         except Exception:
             pass
-
+        # 旧版: draw_line(x0, y0, x1, y1, color, thickness)
+        try:
+            for i in range(len(corners)):
+                p1 = corners[i]
+                p2 = corners[(i + 1) % len(corners)]
+                img.draw_line(p1[0], p1[1], p2[0], p2[1], color, 2)
+            return
+        except Exception:
+            pass
+    # 最後の手段: 矩形
+    try:
+        img.draw_rectangle(blob_value(blob, "rect"), color, 2)
+    except Exception:
+        pass
 
 def blob_value(blob, name):
     """OpenMV v5 はプロパティ、旧版はメソッド。両対応。"""

@@ -51,111 +51,46 @@ def uart_write(pkt):
 
 
 def draw_wall_outline(img, blob):
-    """壁の輪郭（凸包）を青い線で描く。中心点は描かない。
-    凸包が取れないファームウェアでは rect を4点として描く。"""
-    hull = None
-    try:
-        hull = blob_value(blob, "convex_hull")
-    except Exception:
-        pass
-    if hull and len(hull) >= 3:
-        for i in range(len(hull)):
-            p1 = hull[i]
-            p2 = hull[(i + 1) % len(hull)]
-            try:
-                img.draw_line(p1[0], p1[1], p2[0], p2[1], (0, 0, 255), 2)
-            except Exception:
-                pass
-    else:
-        # 凸包が空でも何も出ないよりは確実に枠を見せる。
+    """blob.corners（輪郭由来の4角）を draw_edges で描く。中心点は描かない。
+    OpenMV v5 は convex_hull() が無く draw_line も座標タプル必須のため、
+    旧版の draw_line と rect フォールバックも用意する。"""
+    if blob is None:
+        return
+    corners = None
+    for attr in ("corners", "min_corners"):
         try:
-            img.draw_rectangle(blob_value(blob, "rect"), (0, 0, 255), 2)
+            candidate = blob_value(blob, attr)
+            if candidate and len(candidate) >= 4:
+                corners = candidate
+                break
+        except Exception:
+            continue
+    if corners is None:
+        try:
+            rect = blob_value(blob, "rect")
+            if rect and len(rect) >= 4:
+                x, y, w, h = rect
+                corners = [(x, y), (x + w, y), (x + w, y + h), (x, y + h)]
+        except Exception:
+            return
+    if corners is not None:
+        # v5: draw_edges(corners, color, size, thickness)
+        try:
+            img.draw_edges(corners, (0, 0, 255), 0, 2)
+            return
         except Exception:
             pass
-
-
-# ---------- 初期化 ----------
-sensor.reset()
-sensor.set_pixformat(sensor.RGB565)
-try:
-    sensor.set_framesize(sensor.B320X320)
-except Exception:
-    sensor.set_framesize(sensor.QVGA)
-sensor.skip_frames(time=300)
-try:
-    sensor.set_auto_exposure(True)
-    sensor.set_auto_gain(True)
-    sensor.set_auto_whitebal(False)
-except Exception:
-    pass
-# 競技ルール: IR/可視LEDはOFF
-try:
-    sensor.set_ir_led(False)
-except Exception:
-    pass
-try:
-    for led_id in (1, 2, 3):
-        pyb.LED(led_id).off()
-except Exception:
-    pass
-
-clock = time.clock()
-last_stream_ms = pyb.millis()
-
-while True:
-    clock.tick()
-    img = sensor.snapshot()
-
-    # 壁は画面下2/3だけを探す（ルール3.1.4: 壁より上の色を無視）
-    wall_roi = (0, img.height() // 3, img.width(), img.height() * 2 // 3)
-    best_size = 0
-    best_cx = None
-    best_cy = None
-    best_rect = None
-    best_blob = None
-    raw_blobs = list(img.find_blobs(BlackThresholds, roi=wall_roi,
-                                    pixels_threshold=WALL_PIX_TH,
-                                    area_threshold=WALL_PIX_TH,
-                                    merge=True, margin=6))
-    rejected = []
-    for blob in raw_blobs:
-        rect = blob_value(blob, "rect")
-        if rect is None or len(rect) < 4:
-            continue
-        w, h = rect[2], rect[3]
-        # 壁は横長の帯。四角い黒領域（PCや影）は除外する。
-        if w < 25 or h < 3 or h > 150 or w < 1.3 * h:
-            if len(rejected) < 3:
-                rejected.append(rect)
-            continue
-        size = blob_value(blob, "pixels")
-        if size > best_size:
-            best_size = size
-            best_cx = blob_value(blob, "cx")
-            best_cy = blob_value(blob, "cy")
-            best_rect = rect
-            best_blob = blob
-
-    if best_size > 0 and best_cx is not None:
-        wx, wy = norm_coord(best_cx, best_cy, img)
-        wsize = best_size
-        # 壁の形に沿った青い輪郭を描く（中心点は描かない）。
-        if best_blob is not None:
-            draw_wall_outline(img, best_blob)
-    else:
-        wx = wy = 255
-        wsize = 0
-
+        # 旧版: draw_line(x0, y0, x1, y1, color, thickness)
+        try:
+            for i in range(len(corners)):
+                p1 = corners[i]
+                p2 = corners[(i + 1) % len(corners)]
+                img.draw_line(p1[0], p1[1], p2[0], p2[1], (0, 0, 255), 2)
+            return
+        except Exception:
+            pass
+    # 最後の手段: 矩形
     try:
-        # raw=色閾値で拾った数 / rej=形状で弾いた rect / Wsize=採用した壁
-        print("raw:{} rej:{} Wsize:{} rect:{} wx:{} wy:{}".format(
-            len(raw_blobs), rejected, wsize, best_rect, wx, wy))
+        img.draw_rectangle(blob_value(blob, "rect"), (0, 0, 255), 2)
     except Exception:
         pass
-
-    now = pyb.millis()
-    if (now - last_stream_ms) >= STREAM_INTERVAL_MS:
-        last_stream_ms = now
-        uart_write(make_packet(HDR_GOALWALL, 255, 255, 255, 255, wx, wy))
-        uart_write(make_packet(HDR_WALL, wx, wy,
-                               (wsize >> 8) & 0xFF, wsize & 0xFF, 0xFF, 0xFF))
