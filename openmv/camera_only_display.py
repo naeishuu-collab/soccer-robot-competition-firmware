@@ -320,6 +320,12 @@ def init_camera():
         pass
 
 
+def blob_rect(blob):
+    """OpenMV のバージョンで rect がメソッド／プロパティのどちらでも対応する。"""
+    r = blob.rect
+    return r() if callable(r) else r
+
+
 def biggest_blob_info(img, thresholds, roi, pixel_threshold):
     """(size, cx, cy, rect) を返す。未検出なら (0, None, None, None)。"""
     best, cx, cy, rect = 0, None, None, None
@@ -328,7 +334,7 @@ def biggest_blob_info(img, thresholds, roi, pixel_threshold):
                                area_threshold=pixel_threshold,
                                merge=True, margin=6):
         if blob.pixels() > best:
-            best, cx, cy, rect = blob.pixels(), blob.cx(), blob.cy(), blob.rect()
+            best, cx, cy, rect = blob.pixels(), blob.cx(), blob.cy(), blob_rect(blob)
     return best, cx, cy, rect
 
 
@@ -338,16 +344,52 @@ def norm_coord(cx, cy, img):
     return int((cx * 255) // img.width()), int((cy * 255) // img.height())
 
 
+def safe_draw_string(img, x, y, text, color):
+    """OpenMV のバージョン差に合わせて複数シグネチャを試す。"""
+    x = int(max(0, x))
+    y = int(max(0, y))
+    text = str(text)
+    for call in (
+        lambda: img.draw_string(x, y, text, color, 1),
+        lambda: img.draw_string((x, y), text, color, 1),
+        lambda: img.draw_string(x, y, text, color),
+        lambda: img.draw_string(x, y, text),
+    ):
+        try:
+            call()
+            return
+        except Exception:
+            continue
+    # 最終手段: 座標タプル指定も試し、それでもダメなら描画を諦めて動作は継続する。
+    try:
+        img.draw_string((x, y), text)
+    except Exception:
+        pass
+
+
+def safe_draw_rectangle(img, rect, color):
+    """rect が tuple でない場合も耐える。"""
+    if not isinstance(rect, (tuple, list)):
+        return
+    try:
+        img.draw_rectangle(rect, color, 1)
+    except Exception:
+        try:
+            img.draw_rectangle(rect, color)
+        except Exception:
+            pass
+
+
 def draw_overlay(img, objects, rects, lines):
     # (英語名, 日本語名, cx, cy, 色, サイズ) の6要素で展開する。
     for name, _name_ja, cx, cy, color, _size in objects:
         rect = rects.get(name)
         if rect is not None:
-            img.draw_rectangle(rect, color, 1)
-        img.draw_string(max(0, cx - 20), max(0, cy - 14), name, color, 1)
+            safe_draw_rectangle(img, rect, color)
+        safe_draw_string(img, cx - 20, cy - 14, name, color)
     y = 2
     for line in lines:
-        img.draw_string(2, y, line, COLOR_INFO if y == 0 else COLOR_TEXT, 1)
+        safe_draw_string(img, 2, y, line, COLOR_INFO if y == 0 else COLOR_TEXT)
         y += 12
 
 
