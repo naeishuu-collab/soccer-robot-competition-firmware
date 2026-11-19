@@ -14,7 +14,7 @@ from pyb import UART
 
 # ---------- 設定 ----------
 STREAM_INTERVAL_MS = 200
-WALL_PIX_TH = 80
+WALL_PIX_TH = 150
 
 HDR_GOALWALL = 0x02
 HDR_WALL = 0x14
@@ -158,7 +158,7 @@ while True:
     raw_blobs = list(img.find_blobs(BlackThresholds, roi=wall_roi,
                                     pixels_threshold=WALL_PIX_TH,
                                     area_threshold=WALL_PIX_TH,
-                                    merge=True, margin=12))
+                                    merge=True, margin=6))
     rejected = []
     for blob in raw_blobs:
         rect = blob_value(blob, "rect")
@@ -166,7 +166,7 @@ while True:
             continue
         w, h = rect[2], rect[3]
         # 壁は横長の帯。四角い黒領域（PCや影）は除外する。
-        if w < 15 or h < 3 or h > 150 or w < 0.8 * h:
+        if w < 30 or h < 4 or h > 150 or w < 2.0 * h:
             if len(rejected) < 3:
                 rejected.append(rect)
             continue

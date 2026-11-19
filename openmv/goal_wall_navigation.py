@@ -60,7 +60,7 @@ GOAL_REF_DIST_CM = 100.0
 
 # ---------- 検出設定 ----------
 PIXELS_THRESHOLD = 20
-WALL_PIX_TH = 80
+WALL_PIX_TH = 150
 STREAM_INTERVAL_MS = 200
 
 WALL_AVOID_ANGLE_DEG = 60.0
@@ -516,9 +516,9 @@ def valid_wall_blob(blob):
     if rect is None or len(rect) < 4:
         return False
     w, h = rect[2], rect[3]
-    if w < 15 or h < 3 or h > 150:
+    if w < 30 or h < 4 or h > 150:
         return False
-    return w >= 0.8 * h
+    return w >= 2.0 * h
 
 
 def biggest_blob(img, thresholds, roi, pixel_threshold, quad=None, shape_filter=None):
@@ -527,7 +527,7 @@ def biggest_blob(img, thresholds, roi, pixel_threshold, quad=None, shape_filter=
     for blob in img.find_blobs(thresholds, roi=roi,
                                pixels_threshold=pixel_threshold,
                                area_threshold=pixel_threshold,
-                               merge=True, margin=12):
+                               merge=True, margin=6):
         size = blob_value(blob, "pixels")
         if shape_filter is not None and not shape_filter(blob):
             continue
