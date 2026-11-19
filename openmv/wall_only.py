@@ -14,7 +14,7 @@ from pyb import UART
 
 # ---------- 設定 ----------
 STREAM_INTERVAL_MS = 200
-WALL_PIX_TH = 120
+WALL_PIX_TH = 80
 
 HDR_GOALWALL = 0x02
 HDR_WALL = 0x14
@@ -51,12 +51,10 @@ def uart_write(pkt):
 
 
 
-# ---------- 輪郭の補正（揺れ・はみ出し・交差対策） ----------
-_last_outline = {}
 
 
 def _clamp_corners(corners, width, height):
-    """角を画像内に収める。"""
+    """角を画像内に収める（画面外の線を消す）。"""
     return [(max(0, min(width - 1, int(x))), max(0, min(height - 1, int(y))))
             for x, y in corners]
 
@@ -67,22 +65,6 @@ def _order_corners(corners):
     cx = sum(p[0] for p in corners) / float(len(corners))
     cy = sum(p[1] for p in corners) / float(len(corners))
     return sorted(corners, key=lambda p: math.atan2(p[1] - cy, p[0] - cx))
-
-
-def _smooth_corners(key, corners, max_shift=80, alpha=0.5):
-    """前フレームとブレンドし、急激な変化は揺れとして無視する。"""
-    prev = _last_outline.get(key)
-    if prev is not None and len(prev) == len(corners):
-        shift = max(abs(p[0] - c[0]) + abs(p[1] - c[1])
-                    for p, c in zip(prev, corners))
-        if shift > max_shift:
-            corners = prev
-        else:
-            corners = [(int(p[0] * (1 - alpha) + c[0] * alpha),
-                        int(p[1] * (1 - alpha) + c[1] * alpha))
-                       for p, c in zip(prev, corners)]
-    _last_outline[key] = corners
-    return corners
 
 
 def draw_wall_outline(img, blob):
@@ -111,7 +93,6 @@ def draw_wall_outline(img, blob):
     if corners is not None:
         corners = _clamp_corners(corners, img.width(), img.height())
         corners = _order_corners(corners)
-        corners = _smooth_corners("WALL", corners)
         # v5: draw_edges(corners, color, size, thickness)
         try:
             img.draw_edges(corners, (0, 0, 255), 0, 2)
@@ -173,10 +154,11 @@ while True:
     best_cy = None
     best_rect = None
     best_blob = None
+    wall_blobs = []
     raw_blobs = list(img.find_blobs(BlackThresholds, roi=wall_roi,
                                     pixels_threshold=WALL_PIX_TH,
                                     area_threshold=WALL_PIX_TH,
-                                    merge=True, margin=6))
+                                    merge=True, margin=12))
     rejected = []
     for blob in raw_blobs:
         rect = blob_value(blob, "rect")
@@ -184,10 +166,12 @@ while True:
             continue
         w, h = rect[2], rect[3]
         # 壁は横長の帯。四角い黒領域（PCや影）は除外する。
-        if w < 25 or h < 3 or h > 150 or w < 1.3 * h:
+        if w < 15 or h < 3 or h > 150 or w < 0.8 * h:
             if len(rejected) < 3:
                 rejected.append(rect)
             continue
+        # 遮蔽で壁が分断されても、すべての断片を描画対象にする。
+        wall_blobs.append(blob)
         size = blob_value(blob, "pixels")
         if size > best_size:
             best_size = size
@@ -200,8 +184,9 @@ while True:
         wx, wy = norm_coord(best_cx, best_cy, img)
         wsize = best_size
         # 壁の形に沿った青い輪郭を描く（中心点は描かない）。
-        if best_blob is not None:
-            draw_wall_outline(img, best_blob)
+        # 人などに遮られて分断されても、すべての断片を描画する。
+        for blob in wall_blobs:
+            draw_wall_outline(img, blob)
     else:
         wx = wy = 255
         wsize = 0

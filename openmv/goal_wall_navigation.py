@@ -60,7 +60,7 @@ GOAL_REF_DIST_CM = 100.0
 
 # ---------- 検出設定 ----------
 PIXELS_THRESHOLD = 20
-WALL_PIX_TH = 120
+WALL_PIX_TH = 80
 STREAM_INTERVAL_MS = 200
 
 WALL_AVOID_ANGLE_DEG = 60.0
@@ -516,9 +516,9 @@ def valid_wall_blob(blob):
     if rect is None or len(rect) < 4:
         return False
     w, h = rect[2], rect[3]
-    if w < 25 or h < 3 or h > 150:
+    if w < 15 or h < 3 or h > 150:
         return False
-    return w >= 1.3 * h
+    return w >= 0.8 * h
 
 
 def biggest_blob(img, thresholds, roi, pixel_threshold, quad=None, shape_filter=None):
@@ -527,7 +527,7 @@ def biggest_blob(img, thresholds, roi, pixel_threshold, quad=None, shape_filter=
     for blob in img.find_blobs(thresholds, roi=roi,
                                pixels_threshold=pixel_threshold,
                                area_threshold=pixel_threshold,
-                               merge=True, margin=6):
+                               merge=True, margin=12):
         size = blob_value(blob, "pixels")
         if shape_filter is not None and not shape_filter(blob):
             continue
@@ -548,12 +548,10 @@ def biggest_blob(img, thresholds, roi, pixel_threshold, quad=None, shape_filter=
 
 
 
-# ---------- 輪郭の補正（揺れ・はみ出し・交差対策） ----------
-_last_outline = {}
 
 
 def _clamp_corners(corners, width, height):
-    """角を画像内に収める。"""
+    """角を画像内に収める（画面外の線を消す）。"""
     return [(max(0, min(width - 1, int(x))), max(0, min(height - 1, int(y))))
             for x, y in corners]
 
@@ -564,22 +562,6 @@ def _order_corners(corners):
     cx = sum(p[0] for p in corners) / float(len(corners))
     cy = sum(p[1] for p in corners) / float(len(corners))
     return sorted(corners, key=lambda p: math.atan2(p[1] - cy, p[0] - cx))
-
-
-def _smooth_corners(key, corners, max_shift=80, alpha=0.5):
-    """前フレームとブレンドし、急激な変化は揺れとして無視する。"""
-    prev = _last_outline.get(key)
-    if prev is not None and len(prev) == len(corners):
-        shift = max(abs(p[0] - c[0]) + abs(p[1] - c[1])
-                    for p, c in zip(prev, corners))
-        if shift > max_shift:
-            corners = prev
-        else:
-            corners = [(int(p[0] * (1 - alpha) + c[0] * alpha),
-                        int(p[1] * (1 - alpha) + c[1] * alpha))
-                       for p, c in zip(prev, corners)]
-    _last_outline[key] = corners
-    return corners
 
 
 def draw_blob_outline(img, blob, color, key=None):
@@ -608,7 +590,6 @@ def draw_blob_outline(img, blob, color, key=None):
     if corners is not None:
         corners = _clamp_corners(corners, img.width(), img.height())
         corners = _order_corners(corners)
-        corners = _smooth_corners(key or color, corners)
         # v5: draw_edges(corners, color, size, thickness)
         try:
             img.draw_edges(corners, color, 0, 2)
@@ -630,6 +611,26 @@ def draw_blob_outline(img, blob, color, key=None):
     except Exception:
         pass
 
+def collect_wall_blobs(img, thresholds, roi, pixel_threshold, quad=None, shape_filter=None):
+    """形状条件を通った壁 blob をすべて返す（人に遮られても全断片を描画）。"""
+    found = []
+    for blob in img.find_blobs(thresholds, roi=roi,
+                               pixels_threshold=pixel_threshold,
+                               area_threshold=pixel_threshold,
+                               merge=True, margin=12):
+        if shape_filter is not None and not shape_filter(blob):
+            continue
+        if quad:
+            bx = blob_value(blob, "cx")
+            by = blob_value(blob, "cy")
+            nx = bx * 255 // img.width()
+            ny = by * 255 // img.height()
+            if not point_in_quad(nx, ny, quad):
+                continue
+        found.append(blob)
+    return found
+
+
 def main_loop():
     init_camera()
     uart = UART(3, 9600, timeout_char=1000)
@@ -647,6 +648,9 @@ def main_loop():
         # 壁探索を画像下2/3に制限する。
         wall_roi = (0, img.height() // 3, img.width(), img.height() * 2 // 3)
         wsize, wcx, wcy, w_rect, w_blob = biggest_blob(
+            img, BlackThresholds, wall_roi, WALL_PIX_TH, WALL_QUAD, valid_wall_blob)
+        # 人などに遮られて壁が分断されても、すべての断片を描画対象にする。
+        wall_blobs = collect_wall_blobs(
             img, BlackThresholds, wall_roi, WALL_PIX_TH, WALL_QUAD, valid_wall_blob)
         ball_size, ball_cx, ball_cy, ball_rect, ball_blob = biggest_blob(
             img, BallThresholds, wall_roi, PIXELS_THRESHOLD, shape_filter=valid_ball_blob)
@@ -691,6 +695,10 @@ def main_loop():
                             bcx, bcy, COLOR_GOAL_BLUE, b_rect, b_blob))
         if wsize >= WALL_PIX_TH and wcx is not None:
             objects.append(("BLACK WALL", wcx, wcy, COLOR_WALL, w_rect, w_blob))
+        for i, b in enumerate(wall_blobs[1:], 2):
+            objects.append(("BLACK WALL %d" % i,
+                            blob_value(b, "cx"), blob_value(b, "cy"),
+                            COLOR_WALL, blob_value(b, "rect"), b))
         if ball_size >= PIXELS_THRESHOLD and ball_cx is not None:
             objects.append(("BALL", ball_cx, ball_cy, COLOR_BALL, ball_rect, ball_blob))
         if obs_size >= OBSTACLE_PIX_TH and obs_cx is not None:

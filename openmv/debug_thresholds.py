@@ -37,12 +37,10 @@ COLORS = {
 
 
 
-# ---------- 輪郭の補正（揺れ・はみ出し・交差対策） ----------
-_last_outline = {}
 
 
 def _clamp_corners(corners, width, height):
-    """角を画像内に収める。"""
+    """角を画像内に収める（画面外の線を消す）。"""
     return [(max(0, min(width - 1, int(x))), max(0, min(height - 1, int(y))))
             for x, y in corners]
 
@@ -53,22 +51,6 @@ def _order_corners(corners):
     cx = sum(p[0] for p in corners) / float(len(corners))
     cy = sum(p[1] for p in corners) / float(len(corners))
     return sorted(corners, key=lambda p: math.atan2(p[1] - cy, p[0] - cx))
-
-
-def _smooth_corners(key, corners, max_shift=80, alpha=0.5):
-    """前フレームとブレンドし、急激な変化は揺れとして無視する。"""
-    prev = _last_outline.get(key)
-    if prev is not None and len(prev) == len(corners):
-        shift = max(abs(p[0] - c[0]) + abs(p[1] - c[1])
-                    for p, c in zip(prev, corners))
-        if shift > max_shift:
-            corners = prev
-        else:
-            corners = [(int(p[0] * (1 - alpha) + c[0] * alpha),
-                        int(p[1] * (1 - alpha) + c[1] * alpha))
-                       for p, c in zip(prev, corners)]
-    _last_outline[key] = corners
-    return corners
 
 
 def draw_blob_outline(img, blob, color, key=None):
@@ -97,7 +79,6 @@ def draw_blob_outline(img, blob, color, key=None):
     if corners is not None:
         corners = _clamp_corners(corners, img.width(), img.height())
         corners = _order_corners(corners)
-        corners = _smooth_corners(key or color, corners)
         # v5: draw_edges(corners, color, size, thickness)
         try:
             img.draw_edges(corners, color, 0, 2)
@@ -199,14 +180,14 @@ def main():
         for name, thresholds in TH.items():
             count = 0
             roi = wall_roi if name == "BLACK" else None
-            min_px = 120 if name == "BLACK" else 20
+            min_px = 80 if name == "BLACK" else 20
             for blob in img.find_blobs(thresholds, roi=roi,
                                        pixels_threshold=min_px,
-                                       area_threshold=min_px, merge=True, margin=6):
+                                       area_threshold=min_px, merge=True, margin=12):
                 rect = blob_value(blob, "rect")
                 # 壁は横長の帯だけを表示（PCや影の黒領域を除外）
                 if name == "BLACK" and rect is not None and len(rect) >= 4:
-                    if rect[2] < 25 or rect[3] < 3 or rect[3] > 150 or rect[2] < 1.3 * rect[3]:
+                    if rect[2] < 15 or rect[3] < 3 or rect[3] > 150 or rect[2] < 0.8 * rect[3]:
                         continue
                 count += 1
                 px = blob_value(blob, "pixels")
