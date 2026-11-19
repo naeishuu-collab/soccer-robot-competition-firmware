@@ -1,0 +1,20 @@
+Build timestamp: 2026-11-17 13:54:38 UTC
+Arduino CLI: arduino-cli  Version: 1.6.0 Commit: 50a0e80da Date: 2026-11-10T15:30:44Z
+Core: rp2040:rp2040 6.3.2
+Target: Generic RP2350 variants, 2MB flash; compile only, no upload.
+=== MAIN RP2354A [rp2040:rp2040:generic_rp2350:variantchip=RP2350A,flash=2097152_0] ===
+Sketch uses 72992 bytes (3%) of program storage space. Maximum is 2088960 bytes.
+Global variables use 10924 bytes (2%) of dynamic memory, leaving 513364 bytes for local variables. Maximum is 524288 bytes.
+RESULT: 0
+=== IR RP2354A [rp2040:rp2040:generic_rp2350:variantchip=RP2350A,flash=2097152_0] ===
+Sketch uses 60044 bytes (2%) of program storage space. Maximum is 2088960 bytes.
+Global variables use 14840 bytes (2%) of dynamic memory, leaving 509448 bytes for local variables. Maximum is 524288 bytes.
+RESULT: 0
+=== LINE RP2354B [rp2040:rp2040:generic_rp2350:variantchip=RP2350B,flash=2097152_0] ===
+Sketch uses 56508 bytes (2%) of program storage space. Maximum is 2088960 bytes.
+Global variables use 10164 bytes (1%) of dynamic memory, leaving 514124 bytes for local variables. Maximum is 524288 bytes.
+RESULT: 0
+=== MOTOR RP2354A [rp2040:rp2040:generic_rp2350:variantchip=RP2350A,flash=2097152_0] ===
+Sketch uses 57636 bytes (2%) of program storage space. Maximum is 2088960 bytes.
+Global variables use 10204 bytes (1%) of dynamic memory, leaving 514084 bytes for local variables. Maximum is 524288 bytes.
+RESULT: 0
