@@ -357,15 +357,79 @@ def init_camera():
         pass
 
 
+# ---------- 画面表示用（OpenMV v5 互換） ----------
+COLOR_GOAL_YELLOW = (255, 255, 0)
+COLOR_GOAL_BLUE = (0, 255, 255)
+COLOR_WALL = (255, 80, 80)
+COLOR_BALL = (255, 170, 0)
+COLOR_OBSTACLE = (255, 0, 255)
+COLOR_TEXT = (255, 255, 255)
+COLOR_INFO = (0, 255, 0)
+
+
+def blob_value(blob, name):
+    """OpenMV v5 は pixels/cx/cy/rect がプロパティ、旧版はメソッド。両対応する。"""
+    value = getattr(blob, name)
+    return value() if callable(value) else value
+
+
+def safe_draw_string(img, x, y, text, color):
+    x = int(max(0, x))
+    y = int(max(0, y))
+    text = str(text)
+    for call in (
+        lambda: img.draw_string(x, y, text, color, 1),
+        lambda: img.draw_string((x, y), text, color, 1),
+        lambda: img.draw_string(x, y, text, color),
+        lambda: img.draw_string(x, y, text),
+    ):
+        try:
+            call()
+            return
+        except Exception:
+            continue
+    try:
+        img.draw_string((x, y), text)
+    except Exception:
+        pass
+
+
+def safe_draw_rectangle(img, rect, color):
+    if not isinstance(rect, (tuple, list)):
+        return
+    try:
+        img.draw_rectangle(rect, color, 1)
+    except Exception:
+        try:
+            img.draw_rectangle(rect, color)
+        except Exception:
+            pass
+
+
+def draw_detections(img, objects, status):
+    """objects: (name, cx, cy, color, rect) のリストを画面に重ねる。"""
+    for name, cx, cy, color, rect in objects:
+        safe_draw_rectangle(img, rect, color)
+        safe_draw_string(img, cx - 20, cy - 14, name, color)
+    y = 2
+    for line in status:
+        safe_draw_string(img, 2, y, line, COLOR_INFO if y == 0 else COLOR_TEXT)
+        y += 12
+
+
 def biggest_blob(img, thresholds, roi, pixel_threshold):
-    best, cx, cy = 0, None, None
+    best, cx, cy, rect = 0, None, None, None
     for blob in img.find_blobs(thresholds, roi=roi,
                                pixels_threshold=pixel_threshold,
                                area_threshold=pixel_threshold,
                                merge=True, margin=6):
-        if blob.pixels() > best:
-            best, cx, cy = blob.pixels(), blob.cx(), blob.cy()
-    return best, cx, cy
+        size = blob_value(blob, "pixels")
+        if size > best:
+            best = size
+            cx = blob_value(blob, "cx")
+            cy = blob_value(blob, "cy")
+            rect = blob_value(blob, "rect")
+    return best, cx, cy, rect
 
 
 def main_loop():
@@ -378,14 +442,14 @@ def main_loop():
     while True:
         clock.tick()
         img = sensor.snapshot()
-        ysize, ycx, ycy = biggest_blob(img, YellowThresholds, GoalRoi, PIXELS_THRESHOLD)
-        bsize, bcx, bcy = biggest_blob(img, BlueThresholds, GoalRoi, PIXELS_THRESHOLD)
+        ysize, ycx, ycy, y_rect = biggest_blob(img, YellowThresholds, GoalRoi, PIXELS_THRESHOLD)
+        bsize, bcx, bcy, b_rect = biggest_blob(img, BlueThresholds, GoalRoi, PIXELS_THRESHOLD)
         # ルール3.1.4: 壁の上の色（服など）を無視するため、
         # 壁探索を画像下2/3に制限する。
         wall_roi = (0, img.height() // 3, img.width(), img.height() * 2 // 3)
-        wsize, wcx, wcy = biggest_blob(img, BlackThresholds, wall_roi, WALL_PIX_TH)
-        ball_size, ball_cx, ball_cy = biggest_blob(img, BallThresholds, wall_roi, PIXELS_THRESHOLD)
-        obs_size, obs_cx, obs_cy = biggest_blob(img, ObstacleThresholds, wall_roi, PIXELS_THRESHOLD)
+        wsize, wcx, wcy, w_rect = biggest_blob(img, BlackThresholds, wall_roi, WALL_PIX_TH)
+        ball_size, ball_cx, ball_cy, ball_rect = biggest_blob(img, BallThresholds, wall_roi, PIXELS_THRESHOLD)
+        obs_size, obs_cx, obs_cy, obs_rect = biggest_blob(img, ObstacleThresholds, wall_roi, PIXELS_THRESHOLD)
         yx, yy = norm_coord(ycx, ycy, img)
         bx, by = norm_coord(bcx, bcy, img)
         wx, wy = norm_coord(wcx, wcy, img)
@@ -396,6 +460,29 @@ def main_loop():
         vx, vy, turn, want_kick, mode, name, flags = decide_navigation(
             yx, yy, bx, by, wx, wy, wsize, (ysize, bsize),
             (ball_x, ball_y, ball_size), (obs_x, obs_y, obs_size))
+
+        # 検知した物体の名前と枠をカメラ画面に表示する。
+        objects = []
+        if ysize >= PIXELS_THRESHOLD and ycx is not None:
+            objects.append(("YELLOW GOAL" if TARGET_GOAL == "YELLOW" else "OWN GOAL",
+                            ycx, ycy, COLOR_GOAL_YELLOW, y_rect))
+        if bsize >= PIXELS_THRESHOLD and bcx is not None:
+            objects.append(("BLUE GOAL" if TARGET_GOAL == "BLUE" else "OWN GOAL",
+                            bcx, bcy, COLOR_GOAL_BLUE, b_rect))
+        if wsize >= WALL_PIX_TH and wcx is not None:
+            objects.append(("BLACK WALL", wcx, wcy, COLOR_WALL, w_rect))
+        if ball_size >= PIXELS_THRESHOLD and ball_cx is not None:
+            objects.append(("BALL", ball_cx, ball_cy, COLOR_BALL, ball_rect))
+        if obs_size >= OBSTACLE_PIX_TH and obs_cx is not None:
+            objects.append(("OBSTACLE", obs_cx, obs_cy, COLOR_OBSTACLE, obs_rect))
+        status = [
+            "DETECT: " + (",".join(obj[0] for obj in objects) if objects else "NONE"),
+            "TARGET: " + (TARGET_GOAL if target_locked else "LOCKING..."),
+            "MODE: " + name,
+            "KICK: " + ("YES" if want_kick else "NO"),
+        ]
+        draw_detections(img, objects, status)
+
         # クールダウン削除: 要求が立ち上がるたびにキックを送る
         kick = 1 if want_kick else 0
         try:

@@ -320,10 +320,10 @@ def init_camera():
         pass
 
 
-def blob_rect(blob):
-    """OpenMV のバージョンで rect がメソッド／プロパティのどちらでも対応する。"""
-    r = blob.rect
-    return r() if callable(r) else r
+def blob_value(blob, name):
+    """OpenMV v5 は pixels/cx/cy/rect がプロパティ、旧版はメソッド。両対応する。"""
+    value = getattr(blob, name)
+    return value() if callable(value) else value
 
 
 def biggest_blob_info(img, thresholds, roi, pixel_threshold):
@@ -333,8 +333,12 @@ def biggest_blob_info(img, thresholds, roi, pixel_threshold):
                                pixels_threshold=pixel_threshold,
                                area_threshold=pixel_threshold,
                                merge=True, margin=6):
-        if blob.pixels() > best:
-            best, cx, cy, rect = blob.pixels(), blob.cx(), blob.cy(), blob_rect(blob)
+        size = blob_value(blob, "pixels")
+        if size > best:
+            best = size
+            cx = blob_value(blob, "cx")
+            cy = blob_value(blob, "cy")
+            rect = blob_value(blob, "rect")
     return best, cx, cy, rect
 
 
