@@ -6,17 +6,16 @@
 #   3. 数値を調整して TH に反映し、さらに Threshold Editor と突き合わせる
 #   4. 調整が終わったら camera_only_display.py / goal_wall_navigation.py に戻す
 #
-# 露出・ゲインは固定する。オートだと同じ物体でもLAB値が変わって閾値が壊れる。
+# 明るさ・解像度の設定は camera_only_display.py と完全に同じにしている。
+# （露出/ゲイン=オート、白色バランス=OFF、解像度は B320X320 優先）
 
 import sensor
 import image
 import time
 import pyb
 
-# ---------- カメラ設定（環境に合わせて調整） ----------
-EXPOSURE_US = 10000
-GAIN_DB = 8.0
-FRAMESIZE = sensor.QVGA
+# ---------- カメラ設定（camera_only_display.py と同じ） ----------
+FRAMESIZE_ORDER = ("B320X320", "B640X480", "QVGA", "QQVGA")
 PRINT_INTERVAL_MS = 500
 
 # ---------- 現在の閾値（ここを書き換えて調整する） ----------
@@ -71,14 +70,21 @@ def lab_mean(img, rect):
 def init():
     sensor.reset()
     sensor.set_pixformat(sensor.RGB565)
-    sensor.set_framesize(FRAMESIZE)
+    # camera_only_display.py と同じ順で解像度を試す
+    for size in FRAMESIZE_ORDER:
+        try:
+            sensor.set_framesize(getattr(sensor, size))
+            break
+        except Exception:
+            continue
     sensor.skip_frames(time=300)
+    # camera_only_display.py と同じ明るさ設定
     try:
-        sensor.set_auto_exposure(False, exposure_us=EXPOSURE_US)
+        sensor.set_auto_exposure(True)
     except Exception:
         pass
     try:
-        sensor.set_auto_gain(False, gain_db=GAIN_DB)
+        sensor.set_auto_gain(True)
     except Exception:
         pass
     try:
