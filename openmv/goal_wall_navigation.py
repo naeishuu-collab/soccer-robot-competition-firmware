@@ -85,9 +85,13 @@ MODE_SHOOT = 4
 
 # 黄ゴール: 実機計測 L74-75 / A0-1 / B64-65。ボール(A>=13)と A 軸で分離する。
 YellowThresholds = [(68, 80, -5, 6, 58, 72)]
-BlueThresholds = [(85, 0, 68, -128, -48, -17)]
+# 青ゴール: 実機計測 L21-23 / A15-18 / B-44--42
+BlueThresholds = [(19, 25, 13, 20, -46, -40)]
 # 黒い壁: 実機計測 L≈31-33 / A≈-6--4 / B≈-1-2 にぎりぎり合わせる
 BlackThresholds = [(29, 36, -9, -1, -4, 5)]
+# 壁領域を画像上の4点（正規化座標 nx,ny）で定义する。None なら従来のblob検出。
+# 例: WALL_QUAD = [(0, 0), (255, 0), (255, 30), (0, 30)]
+WALL_QUAD = None
 # オレンジボール: 実機計測 L55-76 / A13-42 / B42-78
 BallThresholds = [(53, 78, 11, 45, 40, 82)]
 # 相手ロボットのマーカー（赤系）。実機の色で要調整。
@@ -421,6 +425,22 @@ def draw_detections(img, objects, status):
         y += 12
 
 
+def point_in_quad(x, y, quad):
+    """4点の多边形の中に点があるか（レイキャスト法）。"""
+    if not quad:
+        return True
+    inside = False
+    n = len(quad)
+    j = n - 1
+    for i in range(n):
+        xi, yi = quad[i]
+        xj, yj = quad[j]
+        if ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / (yj - yi) + xi):
+            inside = not inside
+        j = i
+    return inside
+
+
 def rect_center_inside(rect, cx, cy):
     if rect is None or cx is None or cy is None:
         return False
@@ -428,13 +448,20 @@ def rect_center_inside(rect, cx, cy):
     return x <= cx <= x + w and y <= cy <= y + h
 
 
-def biggest_blob(img, thresholds, roi, pixel_threshold):
+def biggest_blob(img, thresholds, roi, pixel_threshold, quad=None):
     best, cx, cy, rect = 0, None, None, None
     for blob in img.find_blobs(thresholds, roi=roi,
                                pixels_threshold=pixel_threshold,
                                area_threshold=pixel_threshold,
                                merge=True, margin=6):
         size = blob_value(blob, "pixels")
+        if quad:
+            bx = blob_value(blob, "cx")
+            by = blob_value(blob, "cy")
+            nx = bx * 255 // img.width()
+            ny = by * 255 // img.height()
+            if not point_in_quad(nx, ny, quad):
+                continue
         if size > best:
             best = size
             cx = blob_value(blob, "cx")
@@ -458,7 +485,7 @@ def main_loop():
         # ルール3.1.4: 壁の上の色（服など）を無視するため、
         # 壁探索を画像下2/3に制限する。
         wall_roi = (0, img.height() // 3, img.width(), img.height() * 2 // 3)
-        wsize, wcx, wcy, w_rect = biggest_blob(img, BlackThresholds, wall_roi, WALL_PIX_TH)
+        wsize, wcx, wcy, w_rect = biggest_blob(img, BlackThresholds, wall_roi, WALL_PIX_TH, WALL_QUAD)
         ball_size, ball_cx, ball_cy, ball_rect = biggest_blob(img, BallThresholds, wall_roi, PIXELS_THRESHOLD)
         obs_size, obs_cx, obs_cy, obs_rect = biggest_blob(img, ObstacleThresholds, wall_roi, PIXELS_THRESHOLD)
         # オレンジボールは黄ゴール閾値にも引っかかるため、ボールと重なったゴール検出は破棄する。

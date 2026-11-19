@@ -158,6 +158,12 @@ class OpenMvNavigationTests(unittest.TestCase):
         self.assertEqual(result[3], 0)
         self.assertTrue(result[6] & nav.FLAG_BALL)
 
+    def test_point_in_quad(self):
+        quad = [(0, 0), (255, 0), (255, 30), (0, 30)]
+        self.assertTrue(nav.point_in_quad(128, 10, quad))
+        self.assertFalse(nav.point_in_quad(128, 200, quad))
+        self.assertTrue(nav.point_in_quad(128, 200, None))
+
     def test_rules_detectors_present(self):
         src = (Path(__file__).resolve().parents[1] / "openmv/goal_wall_navigation.py").read_text(encoding="utf-8")
         self.assertIn("BallThresholds", src)
