@@ -95,7 +95,7 @@ def draw_wall_outline(img, blob):
         corners = _order_corners(corners)
         # v5: draw_edges(corners, color, size, thickness)
         try:
-            img.draw_edges(corners, (0, 0, 255), 0, 2)
+            img.draw_edges(corners, (0, 0, 255), 0, 3)
             return
         except Exception:
             pass
@@ -104,13 +104,13 @@ def draw_wall_outline(img, blob):
             for i in range(len(corners)):
                 p1 = corners[i]
                 p2 = corners[(i + 1) % len(corners)]
-                img.draw_line(p1[0], p1[1], p2[0], p2[1], (0, 0, 255), 2)
+                img.draw_line(p1[0], p1[1], p2[0], p2[1], (0, 0, 255), 3)
             return
         except Exception:
             pass
     # 最後の手段: 矩形
     try:
-        img.draw_rectangle(blob_value(blob, "rect"), (0, 0, 255), 2)
+        img.draw_rectangle(blob_value(blob, "rect"), (0, 0, 255), 3)
     except Exception:
         pass
 

@@ -107,7 +107,7 @@ focal_px = 0.0
 SEND_UART = True
 
 # ---------- 描画色 (RGB565) ----------
-COLOR_GOAL_YELLOW = (0, 255, 255)
+COLOR_GOAL_YELLOW = (255, 255, 0)
 COLOR_GOAL_BLUE = (0, 255, 255)
 COLOR_WALL = (0, 0, 255)
 COLOR_BALL = (255, 170, 0)
@@ -497,7 +497,7 @@ def draw_blob_outline(img, blob, color, key=None):
         corners = _order_corners(corners)
         # v5: draw_edges(corners, color, size, thickness)
         try:
-            img.draw_edges(corners, color, 0, 2)
+            img.draw_edges(corners, color, 0, 3)
             return
         except Exception:
             pass
@@ -506,13 +506,13 @@ def draw_blob_outline(img, blob, color, key=None):
             for i in range(len(corners)):
                 p1 = corners[i]
                 p2 = corners[(i + 1) % len(corners)]
-                img.draw_line(p1[0], p1[1], p2[0], p2[1], color, 2)
+                img.draw_line(p1[0], p1[1], p2[0], p2[1], color, 3)
             return
         except Exception:
             pass
     # 最後の手段: 矩形
     try:
-        img.draw_rectangle(blob_value(blob, "rect"), color, 2)
+        img.draw_rectangle(blob_value(blob, "rect"), color, 3)
     except Exception:
         pass
 
