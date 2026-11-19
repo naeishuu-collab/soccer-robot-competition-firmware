@@ -30,19 +30,19 @@ import math
 
 # ---------- 検出設定 ----------
 PIXELS_THRESHOLD = 20
-WALL_PIX_TH = 400
+WALL_PIX_TH = 300
 STREAM_INTERVAL_MS = 200
 
-# 黄ゴール: 実機計測 L74-75 / A0-1 / B64-65。ボール(A>=13)と A 軸で分離する。
-YellowThresholds = [(68, 80, -5, 6, 58, 72)]
-# 青ゴール: 実機計測 L21-23 / A15-18 / B-44--42
-BlueThresholds = [(19, 25, 13, 20, -46, -40)]
-# 黒い壁: 実機計測 L≈31-33 / A≈-6--4 / B≈-1-2 にぎりぎり合わせる
-BlackThresholds = [(29, 36, -9, -1, -4, 5)]
+# 黄ゴール: 実機計測 L82-83 / A1-3 / B61-66。ボール(L<=78, A>=13)と分離する。
+YellowThresholds = [(79, 86, -3, 7, 57, 70)]
+# 青ゴール: 実測サンプル2種（L21-23/A15-18 と L40-41/A5-6、Bは共通 -44）を両方保持
+BlueThresholds = [(19, 25, 13, 20, -46, -40), (38, 43, 3, 8, -46, -42)]
+# 黒い壁: 実機計測 L31-33 を中心に少し余裕を持たせる（形状フィルタも併用）
+BlackThresholds = [(27, 40, -11, 1, -6, 7)]
 # 壁領域を画像上の4点（正規化座標 nx,ny）で定义する。None なら従来のblob検出。
 WALL_QUAD = None
 GoalRoi = (30, 30, 260, 260)
-# オレンジボール: 実機計測 L55-76 / A13-42 / B42-78
+# オレンジボール: 実機計測 L55-76 / A13-42 / B42-78（2026ルールで直径4.2cm）
 BallThresholds = [(53, 78, 11, 45, 40, 82)]
 # 相手ロボットのマーカー（赤系）。実機の色で要調整。
 ObstacleThresholds = [(30, 90, 140, 255, 110, 200)]
@@ -88,6 +88,12 @@ BALL_REF_PIX = 4000.0
 BALL_REF_DIST_CM = 10.0
 BALL_KICK_MIN_CM = 5.0
 BALL_KICK_MAX_CM = 16.0
+# ② 自己較正: キッカー内のボール(実径4.2cm)から焦点距離を求める。
+BALL_DIAMETER_CM = 4.2
+BALL_AT_KICKER_CM = 10.0
+WALL_HEIGHT_CM = 22.0
+GOAL_HEIGHT_CM = 10.0
+focal_px = 0.0
 SEND_UART = True
 
 # ---------- 描画色 (RGB565) ----------
@@ -132,11 +138,28 @@ def ball_distance_cm(ball_size):
     return BALL_REF_DIST_CM * float(BALL_REF_PIX) / float(ball_size)
 
 
-def estimate_virtual_line(wx, wy, wsize):
-    if wx == 255 or wy == 255 or wsize <= 0:
+def calibrate_focal_from_ball(ball_rect):
+    """キッカー内のボールのピクセル高さから焦点距離を推定・平滑更新する。"""
+    global focal_px
+    if ball_rect is None or len(ball_rect) < 4 or ball_rect[3] <= 0:
+        return
+    estimated = BALL_AT_KICKER_CM * float(ball_rect[3]) / BALL_DIAMETER_CM
+    focal_px = estimated if focal_px <= 0 else focal_px * 0.7 + estimated * 0.3
+
+
+def height_distance_cm(real_height_cm, rect):
+    if focal_px <= 0 or rect is None or len(rect) < 4 or rect[3] <= 0:
+        return None
+    return min(MAX_FIELD_CM, real_height_cm * focal_px / float(rect[3]))
+
+
+def estimate_virtual_line(wx, wy, wsize, wall_rect=None):
+    if wx == 255 or wy == 255 or (wsize <= 0 and wall_rect is None):
         return False, False, None, None
     angle = angle_from_normalized(wx, wy)
-    dist_wall = wall_distance_cm(wsize)
+    dist_wall = height_distance_cm(WALL_HEIGHT_CM, wall_rect)
+    if dist_wall is None:
+        dist_wall = wall_distance_cm(wsize)
     if angle is None or dist_wall is None:
         return False, False, None, None
     dist_line = dist_wall - OUTER_CM
@@ -178,7 +201,7 @@ def lock_target_from_goals(ysize, bsize, yx=255, yy=255, bx=255, by=255):
 
 
 def decide_navigation(yx, yy, bx, by, wx, wy, wsize, goal_sizes,
-                      ball=None, obstacle=None):
+                      ball=None, obstacle=None, wall_rect=None, goal_rects=None):
     """detections -> (vx, vy, turn, want_kick, mode_code, mode_name, flags)"""
     if target_locked:
         gx, gy, gsize = (bx, by, goal_sizes[1]) if TARGET_GOAL == "BLUE" else (yx, yy, goal_sizes[0])
@@ -186,7 +209,7 @@ def decide_navigation(yx, yy, bx, by, wx, wy, wsize, goal_sizes,
     else:
         gx = gy = ox = oy = 255
         gsize = osize = 0
-    line_hit, penalty_hit, wall_angle, wall_dist = estimate_virtual_line(wx, wy, wsize)
+    line_hit, penalty_hit, wall_angle, wall_dist = estimate_virtual_line(wx, wy, wsize, wall_rect)
     flags = (1 if line_hit else 0) | (2 if penalty_hit else 0)
 
     ball_seen = ball is not None and ball[0] != 255 and ball[1] != 255 and ball[2] > 0
@@ -349,6 +372,17 @@ def point_in_quad(x, y, quad):
     return inside
 
 
+def overlap_ratio(a, b):
+    if a is None or b is None or len(a) < 4 or len(b) < 4:
+        return 0.0
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    ix = max(0, min(ax + aw, bx + bw) - max(ax, bx))
+    iy = max(0, min(ay + ah, by + bh) - max(ay, by))
+    small = min(aw * ah, bw * bh)
+    return (ix * iy) / float(small) if small > 0 else 0.0
+
+
 def rect_center_inside(rect, cx, cy):
     if rect is None or cx is None or cy is None:
         return False
@@ -356,7 +390,18 @@ def rect_center_inside(rect, cx, cy):
     return x <= cx <= x + w and y <= cy <= y + h
 
 
-def biggest_blob_info(img, thresholds, roi, pixel_threshold, quad=None):
+def valid_wall_blob(blob):
+    """壁は横長の帯。PCや影などの四角い黒領域を拾わないための形状条件。"""
+    rect = blob_value(blob, "rect")
+    if rect is None or len(rect) < 4:
+        return False
+    w, h = rect[2], rect[3]
+    if w < 40 or h < 4:
+        return False
+    return w >= 2.0 * h
+
+
+def biggest_blob_info(img, thresholds, roi, pixel_threshold, quad=None, shape_filter=None):
     """(size, cx, cy, rect) を返す。未検出なら (0, None, None, None)。"""
     best, cx, cy, rect = 0, None, None, None
     for blob in img.find_blobs(thresholds, roi=roi,
@@ -454,11 +499,16 @@ def main_loop():
 
         y_size, ycx, ycy, y_rect = biggest_blob_info(img, YellowThresholds, goal_roi, GOAL_MIN_PIX)
         b_size, bcx, bcy, b_rect = biggest_blob_info(img, BlueThresholds, goal_roi, GOAL_MIN_PIX)
-        w_size, wcx, wcy, w_rect = biggest_blob_info(img, BlackThresholds, wall_roi, WALL_PIX_TH, WALL_QUAD)
+        w_size, wcx, wcy, w_rect = biggest_blob_info(
+            img, BlackThresholds, wall_roi, WALL_PIX_TH, WALL_QUAD, valid_wall_blob)
         ball_size, ball_cx, ball_cy, ball_rect = biggest_blob_info(
             img, BallThresholds, wall_roi, PIXELS_THRESHOLD)
         obs_size, obs_cx, obs_cy, obs_rect = biggest_blob_info(
             img, ObstacleThresholds, wall_roi, PIXELS_THRESHOLD)
+        # 黄ゴールの一部をボールと誤検出した場合はボールを捨てる（形＋重なりで判定）。
+        if ball_size > 0 and ball_rect is not None:
+            if overlap_ratio(ball_rect, y_rect) > 0.4 or overlap_ratio(ball_rect, b_rect) > 0.4:
+                ball_size, ball_cx, ball_cy, ball_rect = 0, None, None, None
         # ボールと重なったゴール検出は破棄（オレンジは黄ゴール閾値にも入るため）。
         if ball_size > 0 and ball_cx is not None:
             if rect_center_inside(ball_rect, ycx, ycy):
@@ -476,7 +526,11 @@ def main_loop():
 
         lock_target_from_goals(y_size, b_size, yx, yy, bx, by)
         vx, vy, turn, want_kick, mode, mode_name, flags = decide_navigation(
-            yx, yy, bx, by, wx, wy, w_size, (y_size, b_size), ball, obstacle)
+            yx, yy, bx, by, wx, wy, w_size, (y_size, b_size), ball, obstacle,
+            w_rect, (y_rect, b_rect))
+        # ボールがキッカー内に来た瞬間に焦点距離を自己較正する。
+        if flags & FLAG_BALL_IN_KICKER:
+            calibrate_focal_from_ball(ball_rect)
         line_hit = (flags & 0x01) != 0
         penalty_hit = (flags & 0x02) != 0
         wall_cm = wall_distance_cm(w_size)
@@ -494,6 +548,7 @@ def main_loop():
         if obs_rect is not None:
             rects["OBSTACLE"] = obs_rect
         lines = status_lines(objects, mode_name, want_kick, line_hit, penalty_hit, wall_cm, flags)
+        lines.append("FOCAL: " + ("N/A" if focal_px <= 0 else "%d" % int(focal_px)))
         draw_overlay(img, objects, rects, lines)
 
         names_ja = ", ".join(obj[1] for obj in objects) if objects else "なし"

@@ -22,8 +22,8 @@ PRINT_INTERVAL_MS = 500
 TH = {
     "BALL":   [(53, 78, 11, 45, 40, 82)],
     "YELLOW": [(68, 80, -5, 6, 58, 72)],
-    "BLUE":   [(19, 25, 13, 20, -46, -40)],
-    "BLACK":  [(29, 36, -9, -1, -4, 5)],
+    "BLUE":   [(19, 25, 13, 20, -46, -40), (38, 43, 3, 8, -46, -42)],
+    "BLACK":  [(27, 40, -11, 1, -6, 7)],
     "RED":    [(30, 90, 140, 255, 110, 200)],
 }
 
@@ -116,15 +116,19 @@ def main():
         for name, thresholds in TH.items():
             count = 0
             roi = wall_roi if name == "BLACK" else None
-            min_px = 400 if name == "BLACK" else 20
+            min_px = 300 if name == "BLACK" else 20
             for blob in img.find_blobs(thresholds, roi=roi,
                                        pixels_threshold=min_px,
                                        area_threshold=min_px, merge=True, margin=6):
+                rect = blob_value(blob, "rect")
+                # 壁は横長の帯だけを表示（PCや影の黒領域を除外）
+                if name == "BLACK" and rect is not None and len(rect) >= 4:
+                    if rect[2] < 40 or rect[3] < 4 or rect[2] < 2.0 * rect[3]:
+                        continue
                 count += 1
                 px = blob_value(blob, "pixels")
                 cx = blob_value(blob, "cx")
                 cy = blob_value(blob, "cy")
-                rect = blob_value(blob, "rect")
                 mean = lab_mean(img, rect)
                 lines.append("{} px={} rect={} cxcy=({},{}) lab={}".format(
                     name, px, rect, cx, cy, mean))
