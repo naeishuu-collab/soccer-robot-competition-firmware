@@ -1630,8 +1630,8 @@ constexpr int8_t kMainArmActiveLevel = -1;
 constexpr int8_t kMainEStopActiveLevel = -1;
 constexpr int8_t kMainClearFaultActiveLevel = -1;
 constexpr bool kMainSafetyInputBiasVerified = false;
-constexpr uint32_t kMainSafetyReservedPinMask = (1u << 0) | (1u << 1) | (1u << 2) | (1u << 3) |
-                                                (1u << 4) | (1u << 5) | (1u << 8) | (1u << 11);
+constexpr uint32_t kMainSafetyReservedPinMask = (1u << 0) | (1u << 1) | (1u << 4) |
+                                                (1u << 5) | (1u << 8) | (1u << 11);
 
 // ir&main 回路図では BNO055 の信号は MAIN プロセッサ側に接続されている。
 constexpr int8_t kBnoSdaPin = 4;
@@ -2059,7 +2059,6 @@ constexpr uint32_t kHeadingPollPeriodMs = 20;
 constexpr uint32_t kHeadingFreshTimeoutMs = 100;
 constexpr uint32_t kDiagnosticPeriodMs = 250;
 constexpr uint32_t kMotorCommandPeriodMs = 40;
-constexpr uint32_t kMotorConsoleTimeoutMs = 300;
 constexpr uint8_t kMotorConsoleLineCapacity = 48;
 // 暫定: これらはPWM上限の初期値であり、実測車輪速度ではない。低速ログ採取後に引き上げる。
 constexpr uint8_t kAutoWheelLiftPwmCap = 48;
@@ -2118,7 +2117,6 @@ char motorConsoleLine[kMotorConsoleLineCapacity]{};
 uint8_t motorConsoleLineLength = 0;
 bool motorConsoleOverflow = false;
 bool motorConsoleCommandSeen = false;
-uint32_t lastMotorConsoleCommandMs = 0;
 uint32_t lastIrPacketMs = 0;
 uint32_t irRequests = 0;
 uint32_t irMatchedResponses = 0;
@@ -2463,7 +2461,7 @@ bool sendLinePoll(uint32_t nowUs) {
 bool sendMotorCommand(uint32_t nowMs, uint32_t nowUs) {
     if (!rs485.canTransmit(nowUs)) return false;
     int16_t values[kMotorCommandWheelCount]{};
-    // 手動指令はUSBから定期的に更新する。
+    // 手動指令は次の指令まで維持する。
     if (!motorStopPending && motorConsoleCommandSeen) {
         for (uint8_t i = 0; i < kMotorCommandWheelCount; ++i) values[i] = motorConsoleValues[i];
     } else if (!motorStopPending) {
@@ -2548,16 +2546,10 @@ void pollMotorConsole(uint32_t nowMs) {
                 if (Serial && Serial.availableForWrite() >= 32) Serial.println("MOTOR_CMD_INVALID; stopped");
             }
             motorConsoleCommandSeen = true;
-            lastMotorConsoleCommandMs = nowMs;
             if (command == kConsoleStop || command == kConsoleInvalid) motorStopPending = true;
         }
         motorConsoleLineLength = 0;
         motorConsoleOverflow = false;
-    }
-    if (manualMotorCommandExpired(motorConsoleCommandSeen, nowMs, lastMotorConsoleCommandMs, kMotorConsoleTimeoutMs)) {
-        motorConsoleCommandSeen = false;
-        motorStopPending = true;
-        for (int16_t& value : motorConsoleValues) value = 0;
     }
 }
 
@@ -2650,7 +2642,7 @@ void setup() {
     if (Serial && Serial.availableForWrite() >= 64)
         Serial.println("USB: AUTO [FLOAT] / AUTO FLOOR / AUTO IR; ARM IR; S=stop; M <v0> <v1> <v2> <v3>");
     if (Serial && Serial.availableForWrite() >= 64)
-        Serial.println("MOTOR M range -255..255, 256=brake; refresh within 300 ms");
+        Serial.println("MOTOR M range -255..255, 256=brake; S stops");
     if (Serial && Serial.availableForWrite() >= 96)
         Serial.println("IR TEST: no LINE; ARM IR required; PWM 180; IR loss stops; wheels up");
 

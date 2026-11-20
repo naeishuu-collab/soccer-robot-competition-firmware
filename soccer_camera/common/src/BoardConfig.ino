@@ -75,8 +75,8 @@ constexpr int8_t kMainArmActiveLevel = -1;
 constexpr int8_t kMainEStopActiveLevel = -1;
 constexpr int8_t kMainClearFaultActiveLevel = -1;
 constexpr bool kMainSafetyInputBiasVerified = false;
-constexpr uint32_t kMainSafetyReservedPinMask = (1u << 0) | (1u << 1) | (1u << 2) | (1u << 3) |
-                                                (1u << 4) | (1u << 5) | (1u << 8) | (1u << 11);
+constexpr uint32_t kMainSafetyReservedPinMask = (1u << 0) | (1u << 1) | (1u << 4) |
+                                                (1u << 5) | (1u << 8) | (1u << 11);
 
 // ir&main 回路図では BNO055 の信号は MAIN プロセッサ側に接続されている。
 constexpr int8_t kBnoSdaPin = 4;

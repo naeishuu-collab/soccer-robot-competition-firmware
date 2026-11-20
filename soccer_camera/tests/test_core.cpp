@@ -368,10 +368,6 @@ static void testIrTestContinuousTrackingAndCoarseSteering() {
 }
 
 static void testAutoMotorPwmCaps() {
-    CHECK(!manualMotorCommandExpired(false, 500, 0, 300));
-    CHECK(!manualMotorCommandExpired(true, 300, 0, 300));
-    CHECK(manualMotorCommandExpired(true, 301, 0, 300));
-    CHECK(manualMotorCommandExpired(true, 50, 0xFFFFFF00u, 300));
     int16_t scaled[4] = {50, -25, 0, 10};
     raiseMotionPeak(scaled, 150);
     CHECK(scaled[0] == 150 && scaled[1] == -75 && scaled[2] == 0 && scaled[3] == 30);

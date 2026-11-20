@@ -247,13 +247,10 @@ def verify_active_sources():
            "commandPriority.stopPending()" not in motor_source:
             errors.append("MOTOR must preserve a stop command through the next output tick")
         if "parseMotorConsoleCommand" not in (ROOT / "common/src/RobotProtocol.ino").read_text(encoding="utf-8") or \
-           "parseMainConsoleCommand" not in (ROOT / "common/src/RobotProtocol.ino").read_text(encoding="utf-8") or \
-           "kMotorConsoleTimeoutMs = 300" not in main_source:
-            errors.append("MAIN must accept validated direct/AUTO commands and keep the 300 ms manual timeout")
+           "parseMainConsoleCommand" not in (ROOT / "common/src/RobotProtocol.ino").read_text(encoding="utf-8"):
+            errors.append("MAIN must accept validated direct/AUTO commands")
         if "irTestController.armOnFirstFreshBall(" in main_source:
             errors.append("MAIN must require explicit ARM IR")
-        if "manualMotorCommandExpired(motorConsoleCommandSeen" not in main_source:
-            errors.append("MAIN must expire manual motor commands")
     except ValueError as error:
         errors.append(str(error))
     sketches = (ROOT / "main/main.ino", ROOT / "ir/ir.ino", ROOT / "line/line.ino", ROOT / "motor/motor.ino")
@@ -393,7 +390,7 @@ def main():
     print("PASS IR coherence/prediction; 18 LINE sensors enabled and 6 failed sensors excluded")
     print("PASS project IR/LINE pin maps; physical continuity and LINE angles still need measurement")
     print("PASS MOTOR pin map and TB67H450 direction logic match the user-tested four-wheel code")
-    print("PASS MAIN direct/AUTO commands; AUTO readiness gates; manual 300 ms timeout")
+    print("PASS MAIN direct/AUTO commands; AUTO readiness gates")
 
 
 if __name__ == "__main__":

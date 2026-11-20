@@ -44,10 +44,6 @@ inline OpenMvDecision decideOpenMvControl(bool armed, bool cameraFresh, bool irF
     return {kCameraAim, mode == kOpenMvAimed && aimed};
 }
 
-inline bool manualMotorCommandExpired(bool active, uint32_t nowMs, uint32_t lastMs, uint32_t timeoutMs) {
-    return active && static_cast<uint32_t>(nowMs - lastMs) > timeoutMs;
-}
-
 // Preserve wheel ratios; a zero vector remains stopped.
 inline void raiseMotionPeak(int16_t values[4], int16_t minimum) {
     int16_t peak = 0;
