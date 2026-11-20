@@ -33,7 +33,7 @@ def main():
         if wall is not None:
             img.draw_edges(blob_value(wall, "corners"), color=(255, 80, 80), thickness=3)
         for _, color, _, x, y in boundaries:
-            img.draw_cross(x, y, color=(255, 80, 80) if color == "BLACK" else (255, 255, 255))
+            img.draw_cross((x, y), color=(255, 80, 80) if color == "BLACK" else (255, 255, 255))
         draw_mirror(img, mirror)
 
 

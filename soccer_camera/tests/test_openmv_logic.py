@@ -45,6 +45,36 @@ class OpenMvNavigationTests(unittest.TestCase):
             with patch.object(nav.cfg, "GROUND_POINTS", ((70, 10), (50, 30))):
                 self.assertFalse(nav.Mirror(320, 320).rays)
 
+    def test_openmv_v5_pixel_and_drawing_coordinates(self):
+        class Frame:
+            def __init__(self):
+                self.calls = []
+            def get_pixel(self, position, *, rgbtuple):
+                self.calls.append(("pixel", position))
+                return (1, 2, 3)
+            def draw_cross(self, position, *, color):
+                self.calls.append(("cross", position))
+            def draw_circle(self, circle, *, color):
+                self.calls.append(("circle", circle))
+            def draw_line(self, line, *, color):
+                self.calls.append(("line", line))
+
+        frame = Frame()
+        class Mirror:
+            cx, cy, inner, outer, ring_ready = 10, 11, 2, 5, True
+            rays = [(0, [(1, 2, 10), (2, 2, 11), (3, 2, 12), (4, 2, 13)])]
+        nav.draw_mirror(frame, Mirror())
+        self.assertIn(("cross", (10, 11)), frame.calls)
+        self.assertIn(("circle", (10, 11, 2)), frame.calls)
+        class ImageModule:
+            @staticmethod
+            def rgb_to_lab(rgb):
+                return (30, -20, 0)
+        with patch.object(nav, "image", ImageModule):
+            visible, _ = nav.scan_field(frame, Mirror())
+        self.assertEqual(visible, {0})
+        self.assertIn(("pixel", (1, 2)), frame.calls)
+
     def test_green_to_white_or_black_boundary_and_noise(self):
         samples = [(i, 0, i + 10) for i in range(5)]
         for color in ("WHITE", "BLACK"):

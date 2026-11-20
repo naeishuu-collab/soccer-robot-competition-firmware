@@ -200,7 +200,7 @@ def scan_ray(samples, color_at):
 
 def scan_field(img, mirror):
     def color_at(x, y):
-        lab = image.rgb_to_lab(img.get_pixel(x, y, rgbtuple=True))
+        lab = image.rgb_to_lab(img.get_pixel((x, y), rgbtuple=True))
         if in_lab(lab, cfg.GREEN):
             return "GREEN"
         if in_lab(lab, cfg.WHITE):
@@ -256,10 +256,10 @@ def make_nav_packet(vx, vy, turn, aimed, mode, flags):
 
 def draw_mirror(img, mirror):
     cx, cy = round(mirror.cx), round(mirror.cy)
-    img.draw_cross(cx, cy, color=(255, 255, 255))
+    img.draw_cross((cx, cy), color=(255, 255, 255))
     if mirror.ring_ready:
         for radius in (mirror.inner, mirror.outer):
-            img.draw_circle(cx, cy, round(radius), color=(255, 255, 255))
+            img.draw_circle((cx, cy, round(radius)), color=(255, 255, 255))
         front = math.radians(cfg.FRONT_DEG)
         end_x = round(cx + mirror.outer * math.sin(front))
         end_y = round(cy - mirror.outer * math.cos(front))
@@ -305,8 +305,8 @@ def main_loop(send_uart=True, display=False):
                 draw_goal(img, blob, color)
             draw_mirror(img, mirror)
             for _, color, _, x, y in boundaries:
-                img.draw_cross(x, y, color=(255, 80, 80) if color == "BLACK" else (255, 255, 255))
-            img.draw_string(2, 2, "TARGET: {}  MODE: {}".format(target, MODES[command[4]]),
+                img.draw_cross((x, y), color=(255, 80, 80) if color == "BLACK" else (255, 255, 255))
+            img.draw_string((2, 2), "TARGET: {}  MODE: {}".format(target, MODES[command[4]]),
                             color=(255, 255, 255))
 
 
