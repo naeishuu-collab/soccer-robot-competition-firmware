@@ -795,9 +795,11 @@ constexpr float kIrTestSearchTurn = 0.12f;
 inline bool irTestMotionForBearing(uint16_t directionDeg, Motion& motion) {
     motion = {};
     if (directionDeg >= 360) return false;
-    const uint16_t sector = static_cast<uint16_t>(((directionDeg + 15u) / 30u * 30u) % 360u);
-    if (sector == 0) motion.y = 0.1f;
-    else motion.turn = sector <= 180 ? -0.1f : 0.1f;
+    const float angle = directionDeg * 0.01745329252f;
+    const float x = sinf(angle), y = cosf(angle);
+    const float projection = fmaxf(fabsf(x + y), fabsf(x - y)) * 0.70710678f;
+    motion.x = x * (0.06f / projection);
+    motion.y = y * (0.06f / projection);
     return true;
 }
 
@@ -830,10 +832,9 @@ public:
             searching_ = false;
             return true;
         }
-        // IRロストでもARMを維持し、その場でゆっくり旋回してボールを探す。
+        // ボール消失・通信断では停止し、再検出時に追跡を再開する。
         searching_ = true;
-        motion.turn = kIrTestSearchTurn;
-        return true;
+        return false;
     }
 
     void disarm() { armed_ = false; searching_ = false; }
@@ -1447,13 +1448,14 @@ public:
         float headingTurn = 0.0f;
         const bool headingOk = heading_.update(in.headingDeg, in.headingTargetDeg, in.headingValid, headingTurn);
         if (in.emergencyStop || in.fault ||
-            (in.armed && (!in.irFresh ||
+            (in.armed && (!in.lineFresh || !in.line.polarityValid || !in.irFresh ||
                           (in.headingRequired && !headingOk)))) {
             faultLatched_ = true;
             recoveryTiming_ = false;
         }
         if (faultLatched_) {
-            const bool canRecover = !in.emergencyStop && !in.fault && in.clearFault && in.irFresh &&
+            const bool canRecover = !in.emergencyStop && !in.fault && in.clearFault && in.lineFresh &&
+                                    in.line.polarityValid && in.irFresh && !in.line.detected &&
                                     (!in.headingRequired || headingOk);
             if (canRecover) {
                 if (!recoveryTiming_) { recoveryTiming_ = true; recoverySinceMs_ = in.nowMs; }
@@ -1590,8 +1592,8 @@ constexpr int8_t kMotorRs485RxPin = 1;
 constexpr int8_t kMotorRs485DePin = 2;
 constexpr int8_t kMotorRs485SharedDePin = -1;
 // ユーザー報告の動作MOTORテストコードに一致 (RP2354B + TB67H450 x4)。
-constexpr int8_t kMotorIn1Pins[4] = {6, 12, 11, 9};
-constexpr int8_t kMotorIn2Pins[4] = {7, 13, 10, 8};
+constexpr int8_t kMotorIn1Pins[4] = {6, 12, 11, 8};
+constexpr int8_t kMotorIn2Pins[4] = {7, 13, 10, 9};
 // ユーザー報告のJ2左前ピンは、テストの来歴として残している。
 constexpr int8_t kMotorTestIn1CandidatePin = 12;
 constexpr int8_t kMotorTestIn2CandidatePin = 13;
@@ -1604,9 +1606,9 @@ constexpr uint64_t kMotorSafetyReservedPinMask = kMotorPwmPinMask | kMotorReserv
 
 constexpr float kMotorWheelRadiusMm = 30.0f;
 constexpr float kMotorCenterToWheelMm = 94.762f;
-// ホスト統合モデルで使う候補マッピング。極性とローラー方向は4輪実機試験で要確認。
+// chase.zipの移動方向とPWM極性。統合後の回転方向は実機で要確認。
 constexpr WheelConfig kMotorWheelConfig[4] = {
-    {1, -1, 45, 1}, {-1, 1, 225, 1}, {1, 1, 135, 1}, {-1, -1, 315, 1}
+    {1, -1, 45, 1}, {-1, -1, 315, 1}, {-1, 1, 225, 1}, {1, 1, 135, 1}
 };
 constexpr bool kMotorWheelConfigConfigured = false;
 
@@ -2160,13 +2162,8 @@ static float constrainValue(float v, float lo, float hi) {
     return v < lo ? lo : (v > hi ? hi : v);
 }
 
-float gyroLockHeading = 0.0f;
-bool gyroLockValid = false;
 // キック判断はカメラに委ねるため、MAIN側のIR／ジャイロ方位ゲートは使用しない。
 uint32_t lastOpenMvMs = 0;
-uint32_t lastSensorContactMs = 0;
-bool sensorBlackout = false;
-constexpr uint32_t kSensorBlackoutStopMs = 500;
 
 Adafruit_BNO055 bnoSensor(kBnoSensorId, board::kBnoAddress, &Wire);
 struct ArduinoBnoDevices {
@@ -2687,7 +2684,6 @@ void setup() {
     Wire.setSCL(board::kBnoSclPin);
     Wire.begin();
     Wire.setClock(board::kBnoI2cClockHz);
-    lastSensorContactMs = millis();
 }
 
 void loop() {
@@ -2794,27 +2790,6 @@ void loop() {
         irTestController.armOnFirstFreshBall(input.irFresh, input.ballFound, irDirection);
         const bool wasArmed = irTestController.armed();
         motorEnabled = irTestController.update(input.irFresh, input.ballFound, irDirection, motorMotion);
-        // カメラ無し構成: カメラ指令は使わず、IRボール追従とジャイロ方位ホールドだけを使う。
-        if (gyroLockValid && headingSample.headingValid && !input.ballFound) {
-            // カメラもIRボールも見えない場合は停止せず、直進してゴール側へ戻る。
-            const float headingError = shortestAngleError(gyroLockHeading, headingSample.headingDeg);
-            motorMotion.x = 0.0f;
-            motorMotion.y = 0.35f;
-            motorMotion.turn = constrainValue(headingError * 0.01f, -0.3f, 0.3f);
-            motorEnabled = true;
-        }
-        // 全センサーが同時に無効になった場合は短い猶予の後に停止し、回復すれば自動再開する。
-        if (input.irFresh || openMvFresh || input.headingValid) {
-            sensorBlackout = false;
-            lastSensorContactMs = nowMs;
-        } else if (!sensorBlackout &&
-                   static_cast<uint32_t>(nowMs - lastSensorContactMs) >= kSensorBlackoutStopMs) {
-            sensorBlackout = true;
-        }
-        if (sensorBlackout) {
-            motorMotion = {};
-            motorEnabled = false;
-        }
         if (wasArmed && !motorEnabled) motorStopPending = true;
     }
 

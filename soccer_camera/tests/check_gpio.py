@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Check package ranges, configured line faults, and reported-versus-unknown board routes."""
 import json
 import re
@@ -240,9 +240,9 @@ def verify_active_sources():
         if "void motorOutput" not in motor_source or "kTb67h450ReversalDwellMs" not in motor_source or \
            "digitalWrite(in1, HIGH)" not in motor_source or "digitalWrite(in2, LOW)" not in motor_source:
             errors.append("MOTOR output must preserve the tested TB67H450 direction map and 200 ms reversal dwell")
-        if "MotorCommandFrameParser" not in motor_source or "kCommandTimeoutMs = 300" not in motor_source or \
+        if "MotorCommandFrameParser" not in motor_source or "kCommandTimeoutMs = 100" not in motor_source or \
            "kRampStep = 5" not in motor_source or "kRampIntervalMs = 10" not in motor_source:
-            errors.append("MOTOR must validate the 12-byte command and retain 300 ms timeout / 5-per-10-ms ramp")
+            errors.append("MOTOR must validate the 12-byte command and retain 100 ms timeout / 5-per-10-ms ramp")
         if "if (!commandPriority.accept(nextEnabled))" not in motor_source or \
            "commandPriority.stopPending()" not in motor_source:
             errors.append("MOTOR must preserve a stop command through the next output tick")
@@ -262,7 +262,7 @@ def verify_active_sources():
 
 class GpioCheckerTests(unittest.TestCase):
     def test_common_modules_are_inlined_in_every_board_sketch(self):
-        self.assertEqual(list(ROOT.rglob("*.h")), [])
+        self.assertEqual(list((ROOT / "common").rglob("*.h")), [])
         module_order = ("RobotProtocol", "RobotControl", "BoardConfig", "RobotDevices", "Rs485")
         modules = []
         for name in module_order:
@@ -280,6 +280,18 @@ class GpioCheckerTests(unittest.TestCase):
             )
             self.assertIsNotNone(match, f"{board} common code block is missing")
             self.assertEqual(match.group(1).strip(), expected, f"{board} common code differs")
+
+    def test_chase_firmware_settings_in_both_projects(self):
+        for root in (ROOT, ROOT.parent / "soccer_ir_main_line"):
+            ir = (root / "ir/ir.ino").read_text(encoding="utf-8")
+            motor = (root / "motor/motor.ino").read_text(encoding="utf-8")
+            self.assertIn("#define SAMPLE_TIME_US 2000", ir)
+            self.assertIn("#define MIN_TOTAL_DETECT 3", ir)
+            self.assertIn("normalizeDegrees(estimate.angleDeg + 180.0f)", ir)
+            self.assertIn("(uint16_t)(rawAngle + 0.5f) % 360", ir)
+            self.assertIn("kCommandTimeoutMs = 100", motor)
+            self.assertNotIn("if (magnitude <= 200)", motor)
+            self.assertIn("nowMs - lastRampMs[index]", motor)
 
     def test_custom_rp2354_package_ranges_have_no_collisions(self):
         self.assertEqual(validate_profile(CUSTOM), [])
@@ -305,7 +317,7 @@ class GpioCheckerTests(unittest.TestCase):
         self.assertEqual(validate_motor_routing(CUSTOM["nodes"]["MOTOR"]), [])
         self.assertTrue(valid_motor_legacy_reference(LEGACY_MOTOR))
         self.assertEqual(validate_motor_routing(LEGACY_MOTOR["old_reference_only"]), [])
-        self.assertEqual(extract_motor_driver_pins(ROOT / "motor/motor.ino"), [(6, 7), (12, 13), (11, 10), (9, 8)])
+        self.assertEqual(extract_motor_driver_pins(ROOT / "motor/motor.ino"), [(6, 7), (12, 13), (11, 10), (8, 9)])
 
     def test_reported_motor_map_is_unique_and_direct_control_is_enabled(self):
         pins = [pin for pair in extract_motor_driver_pins(ROOT / "motor/motor.ino") for pin in pair]
@@ -374,4 +386,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

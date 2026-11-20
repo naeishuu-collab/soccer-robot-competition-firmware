@@ -7,7 +7,7 @@
 
 using namespace soccer;
 
-static constexpr uint32_t kMotorCommandTimeoutMs = 300;
+static constexpr uint32_t kMotorCommandTimeoutMs = 100;
 static constexpr uint32_t kMotorRampIntervalMs = 10;
 
 static unsigned testCases = 0;
@@ -340,8 +340,8 @@ static void testMainToMotorLossUsesLocalWatchdog() {
     bool moving = false;
     for (uint8_t i = 0; i < 4; ++i) moving |= fabsf(robot.wheels()[i]) > 0.01f;
     CHECK(moving);
-    CHECK(robot.motorTick(299)); // ローカルタイムアウト直前はまだ有効。
-    CHECK(robot.motorTick(300)); // 新しいMAINパケットがなければ300msで出力をクリア。
+    CHECK(robot.motorTick(99)); // ローカルタイムアウト直前はまだ有効。
+    CHECK(robot.motorTick(100)); // 新しいMAINパケットがなければ100msで出力をクリア。
     for (uint8_t i = 0; i < 4; ++i) CHECK(robot.wheels()[i] == 0.0f);
 }
 

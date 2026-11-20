@@ -793,9 +793,11 @@ constexpr float kIrTestSearchTurn = 0.12f;
 inline bool irTestMotionForBearing(uint16_t directionDeg, Motion& motion) {
     motion = {};
     if (directionDeg >= 360) return false;
-    const uint16_t sector = static_cast<uint16_t>(((directionDeg + 15u) / 30u * 30u) % 360u);
-    if (sector == 0) motion.y = 0.1f;
-    else motion.turn = sector <= 180 ? -0.1f : 0.1f;
+    const float angle = directionDeg * 0.01745329252f;
+    const float x = sinf(angle), y = cosf(angle);
+    const float projection = fmaxf(fabsf(x + y), fabsf(x - y)) * 0.70710678f;
+    motion.x = x * (0.06f / projection);
+    motion.y = y * (0.06f / projection);
     return true;
 }
 
@@ -828,10 +830,9 @@ public:
             searching_ = false;
             return true;
         }
-        // IRロストでもARMを維持し、その場でゆっくり旋回してボールを探す。
+        // ボール消失・通信断では停止し、再検出時に追跡を再開する。
         searching_ = true;
-        motion.turn = kIrTestSearchTurn;
-        return true;
+        return false;
     }
 
     void disarm() { armed_ = false; searching_ = false; }
@@ -1589,8 +1590,8 @@ constexpr int8_t kMotorRs485RxPin = 1;
 constexpr int8_t kMotorRs485DePin = 2;
 constexpr int8_t kMotorRs485SharedDePin = -1;
 // ユーザー報告の動作MOTORテストコードに一致 (RP2354B + TB67H450 x4)。
-constexpr int8_t kMotorIn1Pins[4] = {6, 12, 11, 9};
-constexpr int8_t kMotorIn2Pins[4] = {7, 13, 10, 8};
+constexpr int8_t kMotorIn1Pins[4] = {6, 12, 11, 8};
+constexpr int8_t kMotorIn2Pins[4] = {7, 13, 10, 9};
 // ユーザー報告のJ2左前ピンは、テストの来歴として残している。
 constexpr int8_t kMotorTestIn1CandidatePin = 12;
 constexpr int8_t kMotorTestIn2CandidatePin = 13;
@@ -1603,9 +1604,9 @@ constexpr uint64_t kMotorSafetyReservedPinMask = kMotorPwmPinMask | kMotorReserv
 
 constexpr float kMotorWheelRadiusMm = 30.0f;
 constexpr float kMotorCenterToWheelMm = 94.762f;
-// ホスト統合モデルで使う候補マッピング。極性とローラー方向は4輪実機試験で要確認。
+// chase.zipの移動方向とPWM極性。統合後の回転方向は実機で要確認。
 constexpr WheelConfig kMotorWheelConfig[4] = {
-    {1, -1, 45, 1}, {-1, 1, 225, 1}, {1, 1, 135, 1}, {-1, -1, 315, 1}
+    {1, -1, 45, 1}, {-1, -1, 315, 1}, {-1, 1, 225, 1}, {1, 1, 135, 1}
 };
 constexpr bool kMotorWheelConfigConfigured = false;
 
@@ -2039,7 +2040,7 @@ private:
 
 using namespace soccer;
 
-constexpr uint32_t kCommandTimeoutMs = 300;
+constexpr uint32_t kCommandTimeoutMs = 100;
 // MAINが停止/故障したときの暴走防止。false にすれば旧挙動（物理スイッチのみ）に戻せる。
 constexpr bool kSoftwareWatchdogEnabled = true;
 constexpr uint32_t kMotorPeriodUs = 5000;
@@ -2164,19 +2165,6 @@ bool updateMotorOutput(uint8_t index, uint32_t nowMs) {
         return true;
     }
 
-    const int16_t magnitude = requested < 0 ? -requested : requested;
-    if (magnitude <= 200) {
-        motorCurrent[index] = requested;
-        motorOutput(index, requested);
-        return true;
-    }
-    if ((current < 0 ? -current : current) < 200) {
-        current = requested > 0 ? 200 : -200;
-        motorCurrent[index] = current;
-        lastRampMs[index] = nowMs;
-        motorOutput(index, current);
-        return true;
-    }
     if (static_cast<uint32_t>(nowMs - lastRampMs[index]) < kRampIntervalMs) return true;
     lastRampMs[index] = nowMs;
     if (current < requested) {

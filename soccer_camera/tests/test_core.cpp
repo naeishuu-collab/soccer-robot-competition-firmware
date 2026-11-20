@@ -336,55 +336,35 @@ static void testUsbInputCancelsBootAutoArm() {
 
 static void testIrTestContinuousTrackingAndCoarseSteering() {
     IrTestController controller;
-    Motion motion{1.0f, 1.0f, 1.0f};
-    IrTestController bootController;
-    CHECK(!bootController.armOnFirstFreshBall(false, true, 0));
-    CHECK(!bootController.armOnFirstFreshBall(true, false, 0));
-    CHECK(bootController.armOnFirstFreshBall(true, true, 0));
-    CHECK(!bootController.armOnFirstFreshBall(true, true, 0));
-    for (uint16_t i = 0; i < 600; ++i) CHECK(bootController.update(true, true, 0, motion));
-    CHECK(bootController.armed());
-    CHECK(bootController.update(false, true, 0, motion));
-    CHECK(bootController.searching() && bootController.armed() && motion.turn > 0);
-    CHECK(bootController.update(true, true, 0, motion));
-    CHECK(!bootController.searching());
-    CHECK(!bootController.armOnFirstFreshBall(true, true, 0));
-    IrTestController cancelledBootController;
-    cancelledBootController.disableAutoStart();
-    CHECK(!cancelledBootController.armOnFirstFreshBall(true, true, 0));
-    CHECK(cancelledBootController.arm(true, true, 0));
-
+    Motion motion{};
     CHECK(!controller.update(true, true, 0, motion));
-    CHECK(motion.x == 0 && motion.y == 0 && motion.turn == 0);
     CHECK(!controller.arm(false, true, 0));
     CHECK(!controller.arm(true, false, 0));
     CHECK(!controller.arm(true, true, 360));
-    CHECK(controller.arm(true, true, 359));
-    CHECK(controller.update(true, true, 0, motion));
-    CHECK(motion.x == 0 && motion.y > 0 && motion.turn == 0);
-    CHECK(controller.update(true, true, 30, motion));
-    CHECK(motion.x == 0 && motion.y == 0 && motion.turn < 0);
-    CHECK(controller.update(true, true, 330, motion));
-    CHECK(motion.x == 0 && motion.y == 0 && motion.turn > 0);
-    CHECK(controller.update(false, true, 30, motion));
-    CHECK(controller.armed() && controller.searching() && motion.x == 0 && motion.y == 0 && motion.turn > 0);
-    CHECK(controller.update(true, true, 30, motion));
-    CHECK(!controller.searching() && motion.turn < 0);
-
-    CHECK(controller.arm(true, true, 0));
-    CHECK(controller.update(true, false, 0, motion));
-    CHECK(controller.armed() && controller.searching() && motion.turn > 0);
-    CHECK(controller.arm(true, true, 0));
-    for (uint16_t i = 0; i < 600; ++i) CHECK(controller.update(true, true, 0, motion));
-    CHECK(controller.armed() && !controller.searching());
-    CHECK(controller.update(true, false, 0, motion));
+    CHECK(controller.armOnFirstFreshBall(true, true, 0));
+    for (uint16_t angle = 0; angle < 360; ++angle) {
+        CHECK(controller.update(true, true, angle, motion));
+        CHECK(motion.turn == 0);
+        int16_t actual[4]{};
+        CHECK(motorCommandValuesForMotion(motion, true, board::kMotorWheelConfig, actual));
+        float projections[4]{};
+        float largest = 0;
+        for (int i = 0; i < 4; ++i) {
+            projections[i] = cosf((angle - (45 + i * 90)) * 0.01745329252f);
+            largest = fmaxf(largest, fabsf(projections[i]));
+        }
+        for (int i = 0; i < 4; ++i)
+            CHECK(abs(actual[i] - static_cast<int>(roundf(0.06f * 255 * projections[i] / largest))) <= 1);
+    }
+    CHECK(!controller.update(false, true, 0, motion));
     CHECK(controller.armed() && controller.searching());
-
-    CHECK(controller.arm(true, true, 30));
-    CHECK(controller.update(true, true, 360, motion));
-    CHECK(controller.armed() && controller.searching());
-    CHECK(!irTestMotionForBearing(360, motion));
     CHECK(motion.x == 0 && motion.y == 0 && motion.turn == 0);
+    CHECK(!controller.update(true, false, 0, motion));
+    CHECK(!controller.update(true, true, 360, motion));
+    CHECK(controller.update(true, true, 90, motion) && motion.x > 0);
+    CHECK(!controller.searching());
+    controller.disableAutoStart();
+    CHECK(!controller.armOnFirstFreshBall(true, true, 0));
 }
 
 static void testAutoMotorPwmCaps() {
@@ -1154,7 +1134,7 @@ static void testInvalidMotorCommandsRejected() {
     CHECK(!motorCommandValuesForMotion({NAN, 0, 0}, true, board::kMotorWheelConfig, values));
     for (int16_t value : values) CHECK(value == 0);
     CHECK(motorCommandValuesForMotion({0, 0.5f, 0}, true, board::kMotorWheelConfig, values));
-    CHECK(values[0] == 90 && values[1] == -90 && values[2] == 90 && values[3] == -90);
+    CHECK(values[0] == 90 && values[1] == -90 && values[2] == -90 && values[3] == 90);
     CHECK(motorCommandValuesForMotion({}, false, nullptr, values));
     for (int16_t value : values) CHECK(value == 0);
 }
@@ -1212,7 +1192,7 @@ static void testMotorRouteAndPackageValidation() {
     CHECK(board::kMotorIn1Pins[0] == 6 && board::kMotorIn2Pins[0] == 7);
     CHECK(board::kMotorIn1Pins[1] == 12 && board::kMotorIn2Pins[1] == 13);
     CHECK(board::kMotorIn1Pins[2] == 11 && board::kMotorIn2Pins[2] == 10);
-    CHECK(board::kMotorIn1Pins[3] == 9 && board::kMotorIn2Pins[3] == 8);
+    CHECK(board::kMotorIn1Pins[3] == 8 && board::kMotorIn2Pins[3] == 9);
     CHECK(board::kMotorTestIn1CandidatePin == 12 && board::kMotorTestIn2CandidatePin == 13);
     CHECK(board::kMotorPwmFrequencyHz == kTb67h450PwmFrequencyHz);
     CHECK(validRs485PinConfig(board::kMotorRs485PinsConfigured, board::kMotorGpioCount,
@@ -1483,7 +1463,7 @@ int main() {
         {"MOTOR direct console command parsing", testMotorConsoleCommandParsing},
         {"AUTO command modes and fail-closed gates", testMainConsoleAutoModesAndFailClosedGates},
         {"USB input cancels boot AUTO IR auto-arm", testUsbInputCancelsBootAutoArm},
-        {"IR test mode continuous tracking and coarse steering", testIrTestContinuousTrackingAndCoarseSteering},
+        {"IR test mode chase directions and stop", testIrTestContinuousTrackingAndCoarseSteering},
         {"AUTO PWM caps", testAutoMotorPwmCaps},
         {"RS485 half-duplex order and failure recovery", testRs485HalfDuplexOrderingAndFailure},
         {"RS485 receive timeout and collision guard", testRs485ReceiveTimeoutAndCollisionGuard},

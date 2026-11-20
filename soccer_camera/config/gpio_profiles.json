@@ -71,8 +71,8 @@
         "UART_TX": 0,
         "UART_RX": 1,
         "RS485_DE": 2,
-        "PWM_A": [6, 12, 11, 9],
-        "PWM_B": [7, 13, 10, 8]
+        "PWM_A": [6, 12, 11, 8],
+        "PWM_B": [7, 13, 10, 9]
       }
     }
   },
@@ -89,7 +89,7 @@
     "channels": {
       "LEFT_FRONT": {"connector": "J2", "IN1": 12, "IN2": 13},
       "RIGHT_FRONT": {"connector": "J6", "IN1": 11, "IN2": 10},
-      "LEFT_REAR": {"connector": "J7", "IN1": 9, "IN2": 8},
+      "LEFT_REAR": {"connector": "J7", "IN1": 8, "IN2": 9},
       "RIGHT_REAR": {"connector": "J1", "IN1": 6, "IN2": 7}
     },
     "wheel_diameter_mm": 60,

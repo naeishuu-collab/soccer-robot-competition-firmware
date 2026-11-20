@@ -238,9 +238,11 @@ constexpr float kIrTestSearchTurn = 0.12f;
 inline bool irTestMotionForBearing(uint16_t directionDeg, Motion& motion) {
     motion = {};
     if (directionDeg >= 360) return false;
-    const uint16_t sector = static_cast<uint16_t>(((directionDeg + 15u) / 30u * 30u) % 360u);
-    if (sector == 0) motion.y = 0.1f;
-    else motion.turn = sector <= 180 ? -0.1f : 0.1f;
+    const float angle = directionDeg * 0.01745329252f;
+    const float x = sinf(angle), y = cosf(angle);
+    const float projection = fmaxf(fabsf(x + y), fabsf(x - y)) * 0.70710678f;
+    motion.x = x * (0.06f / projection);
+    motion.y = y * (0.06f / projection);
     return true;
 }
 
@@ -273,10 +275,9 @@ public:
             searching_ = false;
             return true;
         }
-        // IRロストでもARMを維持し、その場でゆっくり旋回してボールを探す。
+        // ボール消失・通信断では停止し、再検出時に追跡を再開する。
         searching_ = true;
-        motion.turn = kIrTestSearchTurn;
-        return true;
+        return false;
     }
 
     void disarm() { armed_ = false; searching_ = false; }

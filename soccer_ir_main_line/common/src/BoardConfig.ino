@@ -38,8 +38,8 @@ constexpr int8_t kMotorRs485RxPin = 1;
 constexpr int8_t kMotorRs485DePin = 2;
 constexpr int8_t kMotorRs485SharedDePin = -1;
 // ユーザー報告の動作MOTORテストコードに一致 (RP2354B + TB67H450 x4)。
-constexpr int8_t kMotorIn1Pins[4] = {6, 12, 11, 9};
-constexpr int8_t kMotorIn2Pins[4] = {7, 13, 10, 8};
+constexpr int8_t kMotorIn1Pins[4] = {6, 12, 11, 8};
+constexpr int8_t kMotorIn2Pins[4] = {7, 13, 10, 9};
 // ユーザー報告のJ2左前ピンは、テストの来歴として残している。
 constexpr int8_t kMotorTestIn1CandidatePin = 12;
 constexpr int8_t kMotorTestIn2CandidatePin = 13;
@@ -52,9 +52,9 @@ constexpr uint64_t kMotorSafetyReservedPinMask = kMotorPwmPinMask | kMotorReserv
 
 constexpr float kMotorWheelRadiusMm = 30.0f;
 constexpr float kMotorCenterToWheelMm = 94.762f;
-// ホスト統合モデルで使う候補マッピング。極性とローラー方向は4輪実機試験で要確認。
+// chase.zipの移動方向とPWM極性。統合後の回転方向は実機で要確認。
 constexpr WheelConfig kMotorWheelConfig[4] = {
-    {1, -1, 45, 1}, {-1, 1, 225, 1}, {1, 1, 135, 1}, {-1, -1, 315, 1}
+    {1, -1, 45, 1}, {-1, -1, 315, 1}, {-1, 1, 225, 1}, {1, 1, 135, 1}
 };
 constexpr bool kMotorWheelConfigConfigured = false;
 
