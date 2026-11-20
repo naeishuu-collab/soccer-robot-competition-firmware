@@ -250,8 +250,10 @@ def verify_active_sources():
            "parseMainConsoleCommand" not in (ROOT / "common/src/RobotProtocol.ino").read_text(encoding="utf-8") or \
            "kMotorConsoleTimeoutMs = 300" not in main_source:
             errors.append("MAIN must accept validated direct/AUTO commands and keep the 300 ms manual timeout")
-        if not re.search(r"void pollMotorConsole\(uint32_t nowMs\)\s*\{.*?if \(Serial\.available\(\) > 0\).*?disableAutoStart\(\)", main_source, re.S):
-            errors.append("any USB byte must cancel boot AUTO IR auto-arm before a full line is received")
+        if "irTestController.armOnFirstFreshBall(" in main_source:
+            errors.append("MAIN must require explicit ARM IR")
+        if "manualMotorCommandExpired(motorConsoleCommandSeen" not in main_source:
+            errors.append("MAIN must expire manual motor commands")
     except ValueError as error:
         errors.append(str(error))
     sketches = (ROOT / "main/main.ino", ROOT / "ir/ir.ino", ROOT / "line/line.ino", ROOT / "motor/motor.ino")

@@ -789,7 +789,7 @@ struct Motion {
     float turn = 0.0f; // 反時計回り、正規化 -1..1。
 };
 
-constexpr uint8_t kIrTestPwmCap = 16;
+constexpr uint8_t kIrTestPwmCap = 180;
 constexpr float kIrTestSearchTurn = 0.12f;
 
 // 暫定: 車輪ジオメトリは仮値。4輪の方向確認後に差し替える。
@@ -799,8 +799,8 @@ inline bool irTestMotionForBearing(uint16_t directionDeg, Motion& motion) {
     const float angle = directionDeg * 0.01745329252f;
     const float x = sinf(angle), y = cosf(angle);
     const float projection = fmaxf(fabsf(x + y), fabsf(x - y)) * 0.70710678f;
-    motion.x = x * (0.06f / projection);
-    motion.y = y * (0.06f / projection);
+    motion.x = x * ((180.0f / 255.0f) / projection);
+    motion.y = y * ((180.0f / 255.0f) / projection);
     return true;
 }
 
@@ -1630,8 +1630,8 @@ constexpr int8_t kMainArmActiveLevel = -1;
 constexpr int8_t kMainEStopActiveLevel = -1;
 constexpr int8_t kMainClearFaultActiveLevel = -1;
 constexpr bool kMainSafetyInputBiasVerified = false;
-constexpr uint32_t kMainSafetyReservedPinMask = (1u << 0) | (1u << 1) | (1u << 4) |
-                                                (1u << 5) | (1u << 8) | (1u << 11);
+constexpr uint32_t kMainSafetyReservedPinMask = (1u << 0) | (1u << 1) | (1u << 2) | (1u << 3) |
+                                                (1u << 4) | (1u << 5) | (1u << 8) | (1u << 11);
 
 // ir&main 回路図では BNO055 の信号は MAIN プロセッサ側に接続されている。
 constexpr int8_t kBnoSdaPin = 4;
@@ -2117,7 +2117,6 @@ int16_t motorConsoleValues[kMotorCommandWheelCount]{};
 char motorConsoleLine[kMotorConsoleLineCapacity]{};
 uint8_t motorConsoleLineLength = 0;
 bool motorConsoleOverflow = false;
-bool bootAutoArmNoticeSent = false;
 bool motorConsoleCommandSeen = false;
 uint32_t lastMotorConsoleCommandMs = 0;
 uint32_t lastIrPacketMs = 0;
@@ -2464,7 +2463,7 @@ bool sendLinePoll(uint32_t nowUs) {
 bool sendMotorCommand(uint32_t nowMs, uint32_t nowUs) {
     if (!rs485.canTransmit(nowUs)) return false;
     int16_t values[kMotorCommandWheelCount]{};
-    // ソフトウェアタイムアウトなし。新しい命令か'S'が来るまで手動指令は有効。
+    // 手動指令はUSBから定期的に更新する。
     if (!motorStopPending && motorConsoleCommandSeen) {
         for (uint8_t i = 0; i < kMotorCommandWheelCount; ++i) values[i] = motorConsoleValues[i];
     } else if (!motorStopPending) {
@@ -2473,6 +2472,7 @@ bool sendMotorCommand(uint32_t nowMs, uint32_t nowUs) {
         } else if (motorEnabled) {
             const uint8_t pwmCap = autoMode == kAutoIrTest ? kIrTestPwmCap
                                     : autoMode == kAutoFloor ? kAutoFloorPwmCap : kAutoWheelLiftPwmCap;
+            if (autoMode == kAutoIrTest) raiseMotionPeak(values, 150);
             capMotorCommandValues(values, pwmCap);
         }
     }
@@ -2490,16 +2490,6 @@ bool sendMotorCommand(uint32_t nowMs, uint32_t nowUs) {
 }
 
 void pollMotorConsole(uint32_t nowMs) {
-    // USBから1バイトでも受信すると、起動時の一度だけのAUTO IR自動ARMを即座に解除する。
-    // 以前は改行('\n')で終わる完全な行を受信した時だけ解除された。
-    if (Serial.available() > 0) {
-        irTestController.disableAutoStart();
-        if (!bootAutoArmNoticeSent) {
-            bootAutoArmNoticeSent = true;
-            if (Serial && Serial.availableForWrite() >= 64)
-                Serial.println("USB input received; boot AUTO IR auto-arm disabled");
-        }
-    }
     while (Serial.available()) {
         const int readValue = Serial.read();
         if (readValue < 0) break;
@@ -2518,7 +2508,6 @@ void pollMotorConsole(uint32_t nowMs) {
         const MainConsoleCommand command = motorConsoleOverflow
                                                ? kConsoleInvalid
                                                : parseMainConsoleCommand(motorConsoleLine, parsed);
-        // 起動時の自動ARMは、上の最初の1バイト受信時点で既に解除されている。
         if (command == kConsoleAutoWheelLift || command == kConsoleAutoFloor ||
             command == kConsoleAutoIrTest) {
             autoMode = autoModeForCommand(command, board::kAutoWheelLiftReady, board::kAutoFloorReady);
@@ -2565,7 +2554,11 @@ void pollMotorConsole(uint32_t nowMs) {
         motorConsoleLineLength = 0;
         motorConsoleOverflow = false;
     }
-    // ソフトウェアコマンドタイムアウトは意図的に削除。手動停止は'S'のみ。
+    if (manualMotorCommandExpired(motorConsoleCommandSeen, nowMs, lastMotorConsoleCommandMs, kMotorConsoleTimeoutMs)) {
+        motorConsoleCommandSeen = false;
+        motorStopPending = true;
+        for (int16_t& value : motorConsoleValues) value = 0;
+    }
 }
 
 void pollSharedBus(uint32_t nowMs) {
@@ -2657,9 +2650,9 @@ void setup() {
     if (Serial && Serial.availableForWrite() >= 64)
         Serial.println("USB: AUTO [FLOAT] / AUTO FLOOR / AUTO IR; ARM IR; S=stop; M <v0> <v1> <v2> <v3>");
     if (Serial && Serial.availableForWrite() >= 64)
-        Serial.println("MOTOR M range -255..255, 256=brake; no command timeout (S / power switch only)");
+        Serial.println("MOTOR M range -255..255, 256=brake; refresh within 300 ms");
     if (Serial && Serial.availableForWrite() >= 96)
-        Serial.println("IR TEST: no LINE; auto-arm; PWM 16; IR loss -> search; S stops; wheels up");
+        Serial.println("IR TEST: no LINE; ARM IR required; PWM 180; IR loss stops; wheels up");
 
     pinMode(board::kMainRs485DePin, OUTPUT);
     digitalWrite(board::kMainRs485DePin, LOW);
@@ -2750,8 +2743,6 @@ void loop() {
     OpenMvDecision cameraDecision{kCameraStop, false};
     if (autoMode == kAutoIrTest) {
         const bool cameraReady = openMvFresh;
-        if (cameraReady && openMvMode != kOpenMvWait)
-            irTestController.armOnFirstFreshBall(input.irFresh, input.ballFound, irDirection);
         const bool emergency = safetyInputsReady && emergencyStopActive;
         if (emergency) irTestController.disarm();
         const bool ballCloseAndFront = irBallCloseAndFront(input.irFresh, input.ballFound,

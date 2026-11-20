@@ -354,7 +354,7 @@ static void testIrTestContinuousTrackingAndCoarseSteering() {
             largest = fmaxf(largest, fabsf(projections[i]));
         }
         for (int i = 0; i < 4; ++i)
-            CHECK(abs(actual[i] - static_cast<int>(roundf(0.06f * 255 * projections[i] / largest))) <= 1);
+            CHECK(abs(actual[i] - static_cast<int>(roundf(180.0f * projections[i] / largest))) <= 1);
     }
     CHECK(!controller.update(false, true, 0, motion));
     CHECK(controller.armed() && controller.searching());
@@ -368,9 +368,19 @@ static void testIrTestContinuousTrackingAndCoarseSteering() {
 }
 
 static void testAutoMotorPwmCaps() {
+    CHECK(!manualMotorCommandExpired(false, 500, 0, 300));
+    CHECK(!manualMotorCommandExpired(true, 300, 0, 300));
+    CHECK(manualMotorCommandExpired(true, 301, 0, 300));
+    CHECK(manualMotorCommandExpired(true, 50, 0xFFFFFF00u, 300));
+    int16_t scaled[4] = {50, -25, 0, 10};
+    raiseMotionPeak(scaled, 150);
+    CHECK(scaled[0] == 150 && scaled[1] == -75 && scaled[2] == 0 && scaled[3] == 30);
+    int16_t stopped[4] = {};
+    raiseMotionPeak(stopped, 150);
+    CHECK(stopped[0] == 0 && stopped[1] == 0 && stopped[2] == 0 && stopped[3] == 0);
     int16_t values[4] = {255, -255, 24, -24};
     capMotorCommandValues(values, kIrTestPwmCap);
-    CHECK(values[0] == 16 && values[1] == -16 && values[2] == 16 && values[3] == -16);
+    CHECK(values[0] == 180 && values[1] == -180 && values[2] == 24 && values[3] == -24);
     values[0] = 255; values[1] = -255; values[2] = 24; values[3] = -24;
     capMotorCommandValues(values, 48);
     CHECK(values[0] == 48 && values[1] == -48 && values[2] == 24 && values[3] == -24);

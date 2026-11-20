@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <math.h>
 
 enum OpenMvMode : uint8_t {
     kOpenMvWait, kOpenMvAvoid, kOpenMvTrackIr, kOpenMvAlign, kOpenMvAimed
@@ -41,4 +42,20 @@ inline OpenMvDecision decideOpenMvControl(bool armed, bool cameraFresh, bool irF
     if (!irBallCloseAndFront) return {kIrFollow, false};
     if (mode == kOpenMvTrackIr) return {kSearchGoal, false};
     return {kCameraAim, mode == kOpenMvAimed && aimed};
+}
+
+inline bool manualMotorCommandExpired(bool active, uint32_t nowMs, uint32_t lastMs, uint32_t timeoutMs) {
+    return active && static_cast<uint32_t>(nowMs - lastMs) > timeoutMs;
+}
+
+// Preserve wheel ratios; a zero vector remains stopped.
+inline void raiseMotionPeak(int16_t values[4], int16_t minimum) {
+    int16_t peak = 0;
+    for (uint8_t i = 0; i < 4; ++i) {
+        const int16_t magnitude = values[i] < 0 ? -values[i] : values[i];
+        if (magnitude > peak) peak = magnitude;
+    }
+    if (peak == 0 || peak >= minimum) return;
+    for (uint8_t i = 0; i < 4; ++i)
+        values[i] = static_cast<int16_t>(roundf(static_cast<float>(values[i]) * minimum / peak));
 }
