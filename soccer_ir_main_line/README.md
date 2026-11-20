@@ -17,22 +17,11 @@ IR方位ベースに書き換えています。元の `main/` `openmv/` など�
 
 `openmv/` は含みません。
 
-## 変更点（`soccer_camera/` との違い）
+## カメラ版との違い
 
-`soccer_ir_main_line/main/main.ino` のみ、次の2点を変更しました：
-
-1. **キック判定をIR方位だけで行う**
-   - IRが新鮮で、ボール方位が正面 **±5°** 以内のときだけキック
-   - カメラの `flags bit4` / `kick` は使用しない
-2. **カメラ指令による運動制御の上書きを削除**
-   - `openMvFresh` の判定を外し、IRによる追従で動作し、ボールが見えなければ停止
-
-```cpp
-const bool irBallFront = input.irFresh && input.ballFound && input.ballAngleDeg < 360 &&
-    fabsf(shortestAngleError(static_cast<float>(input.ballAngleDeg), 0.0f)) <= 5.0f;
-kickerInput.ballAligned = irBallFront;
-kickerInput.request = irBallFront;
-```
+- `AUTO IR` はIRでボールを追い、ボール消失・IR通信断では停止します。LINEもカメラも使わず、境界を検知できません。
+- キックには正面±5°とIR近接信号が必要です。`main/main.ino` の `kIrKickCloseSignal` は初期値0で、キックを無効にします。実球で測定し、キッカーを無効にした状態で値と判定を確認してから設定してください。ゴール方向は判別できません。
+- 詳細は[動作ガイド](../soccer_camera/docs/CONTROL_GUIDE_JA.md)を参照してください。
 
 ## 書き込み手順
 
@@ -48,8 +37,8 @@ kickerInput.request = irBallFront;
 ## 補足
 
 - カメラが無いため、壁／仮想白線／ペナルティエリアの推定は行いません
-- 白線は `line/` 基板の実センサーを使います
-- キックの角度許容（±5°）は `main.ino` の `5.0f` を変更すると調整できます
+- `AUTO IR` は故障中の `line/` 基板を使いません
+- キック近接しきい値は `main/main.ino` の `kIrKickCloseSignal` です
 
 ## chase.zip の実機確認結果の統合
 

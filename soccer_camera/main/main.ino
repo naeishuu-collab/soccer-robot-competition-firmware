@@ -1777,6 +1777,12 @@ enum KickerEvent : uint8_t {
     kKickerInhibited, kKickerFaultLatched, kKickerFaultCleared
 };
 
+inline bool irBallCloseAndFront(bool fresh, bool found, uint16_t angle, uint16_t signal,
+                                uint16_t closeThreshold) {
+    return fresh && found && closeThreshold != 0 && signal >= closeThreshold &&
+           angle < 360 && (angle <= 5 || angle >= 355);
+}
+
 struct KickerInput {
     bool request = false;
     bool commandFresh = false;
@@ -2743,25 +2749,24 @@ void loop() {
                                                 output.state == kApproachBall, kickerInput);
     OpenMvDecision cameraDecision{kCameraStop, false};
     if (autoMode == kAutoIrTest) {
-        const bool cameraReady = openMvFresh && kOpenMvCloseIrSignal != 0;
+        const bool cameraReady = openMvFresh;
         if (cameraReady && openMvMode != kOpenMvWait)
             irTestController.armOnFirstFreshBall(input.irFresh, input.ballFound, irDirection);
         const bool emergency = safetyInputsReady && emergencyStopActive;
         if (emergency) irTestController.disarm();
-        const bool irBallCloseAndFront = kOpenMvCloseIrSignal != 0 && input.ballFound &&
-            input.relativeSignal >= kOpenMvCloseIrSignal && input.ballAngleDeg < 360 &&
-            fabsf(shortestAngleError(static_cast<float>(input.ballAngleDeg), 0.0f)) <= 5.0f;
+        const bool ballCloseAndFront = irBallCloseAndFront(input.irFresh, input.ballFound,
+            input.ballAngleDeg, input.relativeSignal, kOpenMvCloseIrSignal);
         if (input.irFresh && (!input.ballFound ||
             static_cast<uint32_t>(input.relativeSignal) * 5 < static_cast<uint32_t>(kOpenMvCloseIrSignal) * 4))
             openMvKickedForBall = false;
         cameraDecision = decideOpenMvControl(irTestController.armed(), cameraReady, input.irFresh,
-                                            openMvMode, irBallCloseAndFront, openMvAimed);
+                                            openMvMode, ballCloseAndFront, openMvAimed);
         kickerInput.commandFresh = input.irFresh && cameraReady;
         kickerInput.armed = irTestController.armed();
         kickerInput.emergencyStop = emergency;
         kickerInput.fault = false;
         kickerInput.lineClear = cameraReady && openMvMode != kOpenMvWait && openMvMode != kOpenMvAvoid;
-        kickerInput.ballAligned = irBallCloseAndFront;
+        kickerInput.ballAligned = ballCloseAndFront;
         kickerInput.headingValid = cameraReady;
         kickerInput.headingAligned = openMvAimed;
         // The kicker requires one Ready cycle before accepting a rising request.

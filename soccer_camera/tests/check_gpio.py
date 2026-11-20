@@ -293,6 +293,16 @@ class GpioCheckerTests(unittest.TestCase):
             self.assertNotIn("if (magnitude <= 200)", motor)
             self.assertIn("nowMs - lastRampMs[index]", motor)
 
+    def test_auto_ir_stop_and_kicker_wiring(self):
+        camera = (ROOT / "main/main.ino").read_text(encoding="utf-8")
+        ir_only = (ROOT.parent / "soccer_ir_main_line/main/main.ino").read_text(encoding="utf-8")
+        self.assertIn("const bool cameraReady = openMvFresh;", camera)
+        self.assertIn("irBallCloseAndFront(input.irFresh", camera)
+        self.assertIn("constexpr uint16_t kIrKickCloseSignal = 0;", ir_only)
+        self.assertIn("irBallCloseAndFront(input.irFresh", ir_only)
+        self.assertIn("if (wasMotorEnabled && !motorEnabled) motorStopPending = true;", ir_only)
+        self.assertNotIn("if (wasArmed && !motorEnabled)", ir_only)
+
     def test_custom_rp2354_package_ranges_have_no_collisions(self):
         self.assertEqual(validate_profile(CUSTOM), [])
 

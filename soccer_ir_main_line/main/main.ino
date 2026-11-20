@@ -1776,6 +1776,12 @@ enum KickerEvent : uint8_t {
     kKickerInhibited, kKickerFaultLatched, kKickerFaultCleared
 };
 
+inline bool irBallCloseAndFront(bool fresh, bool found, uint16_t angle, uint16_t signal,
+                                uint16_t closeThreshold) {
+    return fresh && found && closeThreshold != 0 && signal >= closeThreshold &&
+           angle < 360 && (angle <= 5 || angle >= 355);
+}
+
 struct KickerInput {
     bool request = false;
     bool commandFresh = false;
@@ -2047,6 +2053,8 @@ constexpr uint32_t kIrPollPeriodMs = 20;
 constexpr uint32_t kIrReplyTimeoutUs = 15000;
 constexpr uint32_t kLineReplyTimeoutUs = 8000;
 constexpr uint32_t kIrFreshTimeoutMs = 60;
+// 実球の近接信号を測定するまでキックしない。
+constexpr uint16_t kIrKickCloseSignal = 0;
 constexpr uint32_t kLineFreshTimeoutMs = 100;
 constexpr uint32_t kHeadingPollPeriodMs = 20;
 constexpr uint32_t kHeadingFreshTimeoutMs = 100;
@@ -2756,25 +2764,24 @@ void loop() {
             board::kKickerBallAngleToleranceDeg;
     kickerInput.request = kickerRequestAllowed(board::kKickerRequestPolicyConfigured,
                                                 output.state == kApproachBall, kickerInput);
-    // LINEは故障中: AUTO IRはLINEなしで動作。キック判定はカメラが行う。
+    // AUTO IRはLINEなしで動作する。
     if (autoMode == kAutoIrTest) {
-        kickerInput.commandFresh = input.irFresh || openMvFresh;
-        kickerInput.armed = irTestController.armed() || openMvFresh;
+        kickerInput.commandFresh = input.irFresh;
+        kickerInput.armed = irTestController.armed();
         kickerInput.emergencyStop = false;
         kickerInput.fault = false;
-        // 故障したLINEセンサーの代わりに、カメラから推定した仮想白線とペナルティエリアを使う。
-        kickerInput.lineClear = !(openMvFresh && (openMvVirtualLine || openMvPenaltyArea));
-        // カメラ無し構成: キック判断はIR方位だけで行う。
-        // IRが新鮮で、ボールが正面±5度にあるときだけキックする。
-        const bool irBallFront = input.irFresh && input.ballFound && input.ballAngleDeg < 360 &&
-            fabsf(shortestAngleError(static_cast<float>(input.ballAngleDeg), 0.0f)) <= 5.0f;
+        // LINEとカメラは使わない。近接信号と正面方位が必要。
+        kickerInput.lineClear = true;
+        const bool irBallFront = irBallCloseAndFront(input.irFresh, input.ballFound,
+            input.ballAngleDeg, input.relativeSignal, kIrKickCloseSignal);
         kickerInput.ballFresh = input.irFresh;
         kickerInput.ballDetected = input.ballFound;
         kickerInput.ballAligned = irBallFront;
         // ジャイロ方位ゲートは使わず、IR方位が合ったら蹴る。
         kickerInput.headingValid = true;
         kickerInput.headingAligned = true;
-        kickerInput.request = irBallFront;
+        kickerInput.request = irBallFront &&
+            (kickerController.state() == kKickerReady || kickerController.state() == kKickerFiring);
     }
     const KickerOutput kickerOutput = kickerController.update(kickerInput, nowMs,
                                                               board::kKickerPulseMs,
@@ -2783,14 +2790,14 @@ void loop() {
 
     if (output.state == kFault) operatorArm.reset();
     else clearFaultAction.reset();
+    const bool wasMotorEnabled = motorEnabled;
     motorMotion = output.motion;
     motorEnabled = autoConfigured && input.armed && output.state != kFault;
     if (autoMode == kAutoIrTest) {
         // 台上試験専用の例外。LINEガードもMAIN非常停止も使わない。MOTORの電源遮断には手が届く状態を保つ。
         irTestController.armOnFirstFreshBall(input.irFresh, input.ballFound, irDirection);
-        const bool wasArmed = irTestController.armed();
         motorEnabled = irTestController.update(input.irFresh, input.ballFound, irDirection, motorMotion);
-        if (wasArmed && !motorEnabled) motorStopPending = true;
+        if (wasMotorEnabled && !motorEnabled) motorStopPending = true;
     }
 
     const uint32_t elapsed = micros() - startedUs;

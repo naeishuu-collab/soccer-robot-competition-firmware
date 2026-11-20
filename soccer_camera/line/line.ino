@@ -1774,6 +1774,12 @@ enum KickerEvent : uint8_t {
     kKickerInhibited, kKickerFaultLatched, kKickerFaultCleared
 };
 
+inline bool irBallCloseAndFront(bool fresh, bool found, uint16_t angle, uint16_t signal,
+                                uint16_t closeThreshold) {
+    return fresh && found && closeThreshold != 0 && signal >= closeThreshold &&
+           angle < 360 && (angle <= 5 || angle >= 355);
+}
+
 struct KickerInput {
     bool request = false;
     bool commandFresh = false;

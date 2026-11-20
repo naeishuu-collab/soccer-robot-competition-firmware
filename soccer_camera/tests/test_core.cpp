@@ -915,6 +915,24 @@ static KickerInput readyKickerInput() {
     return input;
 }
 
+static void testIrKickProximityAndReadyTransition() {
+    CHECK(!irBallCloseAndFront(true, true, 0, 500, 0));
+    CHECK(!irBallCloseAndFront(false, true, 0, 500, 100));
+    CHECK(!irBallCloseAndFront(true, false, 0, 500, 100));
+    CHECK(!irBallCloseAndFront(true, true, 0, 99, 100));
+    CHECK(!irBallCloseAndFront(true, true, 6, 100, 100));
+    CHECK(!irBallCloseAndFront(true, true, 354, 100, 100));
+    CHECK(!irBallCloseAndFront(true, true, 360, 100, 100));
+    CHECK(irBallCloseAndFront(true, true, 5, 100, 100));
+    CHECK(irBallCloseAndFront(true, true, 355, 100, 100));
+    KickerController kicker;
+    KickerInput in = readyKickerInput();
+    in.request = (kicker.state() == kKickerReady || kicker.state() == kKickerFiring);
+    CHECK(!kicker.update(in, 0).pulseActive());
+    in.request = (kicker.state() == kKickerReady || kicker.state() == kKickerFiring);
+    CHECK(kicker.update(in, 1).pulseActive());
+}
+
 static void testMainKickerRequestPolicyGates() {
     CHECK(board::kKickerRequestPolicyConfigured);
     CHECK(!board::kKickerHeadingWindowConfigured); // BNOゲートは閉じたまま。代わりにIR方位を使う。
@@ -1498,6 +1516,7 @@ int main() {
         {"BNO init, disconnect, validation and recovery", testBnoInitFailureDisconnectInvalidDataAndRecovery},
         {"Kicker front-bearing timing and pulse override", testKickerFrontBearingTimingAndPulseOverride},
         {"Kicker and dribbler gates", testKickerAndDribblerOutputGates},
+        {"IR kick proximity and ready transition", testIrKickProximityAndReadyTransition},
         {"MAIN kicker request policy gates", testMainKickerRequestPolicyGates},
         {"Disarm, approach and search", testSearchApproachAndDisarmedStates},
         {"Sensor communication loss", testLineSensorCommunicationLossLatchesFault},
