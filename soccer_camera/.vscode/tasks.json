@@ -1,4 +1,3 @@
-
 {
   "version": "2.0.0",
   "tasks": [
@@ -11,7 +10,7 @@
         "--clean",
         "--export-binaries",
         "--fqbn",
-        "rp2040:rp2040:generic_rp2350:variantchip=RP2350A",
+        "rp2040:rp2040:generic_rp2350:variantchip=RP2350B",
         "${workspaceFolder}\\main"
       ],
       "problemMatcher": []
@@ -80,7 +79,7 @@
       "args": [
         "upload",
         "--fqbn",
-        "rp2040:rp2040:generic_rp2350:variantchip=RP2350A",
+        "rp2040:rp2040:generic_rp2350:variantchip=RP2350B",
         "--port",
         "${input:uploadPort}",
         "${workspaceFolder}\\main"

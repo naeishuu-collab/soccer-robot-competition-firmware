@@ -311,4 +311,4 @@ def main_loop(send_uart=True, display=False):
 
 
 if __name__ == "__main__":
-    main_loop(send_uart=True, display=False)
+    main_loop(send_uart=True, display=True)

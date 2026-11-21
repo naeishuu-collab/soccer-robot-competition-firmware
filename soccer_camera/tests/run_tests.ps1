@@ -5,17 +5,20 @@ $build = Join-Path $env:TEMP 'soccer-competition-tests'
 $results = Join-Path $PSScriptRoot 'results_last_run.txt'
 New-Item -ItemType Directory -Force -Path $build | Out-Null
 $logic = foreach ($sketch in @('main/main.ino', 'ir/ir.ino', 'motor/motor.ino')) {
-    $source = Get-Content -Raw -Encoding UTF8 (Join-Path $root $sketch)
+    $source = Get-Content -Raw -Encoding UTF8 (Join-Path (Join-Path $root 'legacy_before_chase') $sketch)
     if ($source -notmatch '(?s)// BEGIN HOST-TESTED SKETCH LOGIC?
 (.*?)?
 // END HOST-TESTED SKETCH LOGIC') { throw "Missing testable sketch logic: $sketch" }
     $Matches[1]
 }
 $logic | Set-Content -Encoding UTF8 (Join-Path $build 'integrated_sketch_logic.h')
+$mainSource = Get-Content -Raw -Encoding UTF8 (Join-Path $root 'main/main.ino')
+if ($mainSource -notmatch '(?s)// BEGIN HOST-TESTED CAMERA LOGIC\s*(.*?)\s*// END HOST-TESTED CAMERA LOGIC') { throw 'Missing testable camera logic' }
+$Matches[1] | Set-Content -Encoding UTF8 (Join-Path $build 'chase_camera_logic.h')
 
 "Host tests started at $([DateTime]::UtcNow.ToString('yyyy-MM-dd HH:mm:ss')) UTC" | Set-Content -Encoding Unicode $results
 
-$sources = @('test_core.cpp', 'test_integration.cpp')
+$sources = @('test_core.cpp', 'test_integration.cpp', 'test_chase_camera.cpp')
 $gpp = Get-Command g++ -ErrorAction SilentlyContinue
 $cl = Get-Command cl -ErrorAction SilentlyContinue
 

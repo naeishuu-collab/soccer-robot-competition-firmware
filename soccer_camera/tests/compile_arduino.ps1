@@ -9,7 +9,7 @@ if ($cli) {
 if (-not (Test-Path -LiteralPath $cliPath)) { throw "arduino-cli not found: $cliPath" }
 
 $builds = @(
-    @{Name='MAIN RP2354A'; Variant='RP2350A'; Sketch=(Join-Path $root 'main')},
+    @{Name='MAIN RP2354B'; Variant='RP2350B'; Sketch=(Join-Path $root 'main')},
     @{Name='IR RP2354A'; Variant='RP2350A'; Sketch=(Join-Path $root 'ir')},
     @{Name='LINE RP2354B'; Variant='RP2350B'; Sketch=(Join-Path $root 'line')},
     @{Name='MOTOR RP2354A'; Variant='RP2350A'; Sketch=(Join-Path $root 'motor')}
