@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "openmv"))
 import goal_wall_navigation as nav
+import wall_only
 
 
 def edge(angle, color="WHITE", cm=15):
@@ -74,6 +75,19 @@ class OpenMvNavigationTests(unittest.TestCase):
             visible, _ = nav.scan_field(frame, Mirror())
         self.assertEqual(visible, {0})
         self.assertIn(("pixel", (1, 2)), frame.calls)
+
+    def test_wall_tracking_hysteresis_and_no_stale_detection(self):
+        class Blob:
+            def __init__(self, x, y, pixels):
+                self.cx, self.cy, self.pixels = x, y, pixels
+        track = wall_only.WallTrack()
+        self.assertIsNone(track.update(Blob(10, 10, 149), 100, 100))
+        self.assertEqual(track.update(Blob(20, 20, 150), 100, 100), (51, 51, 150))
+        self.assertEqual(track.update(Blob(30, 20, 110), 100, 100), (61, 51, 110))
+        self.assertIsNone(track.update(Blob(80, 80, 110), 100, 100))
+        self.assertEqual(track.update(Blob(80, 80, 200), 100, 100), (204, 204, 200))
+        self.assertIsNone(track.update(None, 100, 100))
+        self.assertIsNone(track.update(Blob(80, 80, 110), 100, 100))
 
     def test_green_to_white_or_black_boundary_and_noise(self):
         samples = [(i, 0, i + 10) for i in range(5)]
