@@ -43,4 +43,15 @@ int main() {
   camera.x = 0;
   chooseChaseMotion(camera, 10, true, 270, 180, direction, power);
   assert(power == 0);
+  camera.mode = 2; camera.receivedMs = UINT32_MAX - 50;
+  assert(cameraAllowsMotion(camera, 149));
+  assert(!cameraAllowsMotion(camera, 150));
+  chooseChaseMotion(camera, 149, true, 360, 180, direction, power);
+  assert(power == 0);
+  frame[5] = 5; frame[6] = 0x20; seal(frame);
+  assert(!validCameraFrame(frame));
+  frame[5] = 1; frame[6] = 0x20; seal(frame);
+  assert(!validCameraFrame(frame));
+  frame[6] = 0x21; frame[3] = 1; seal(frame);
+  assert(!validCameraFrame(frame));
 }

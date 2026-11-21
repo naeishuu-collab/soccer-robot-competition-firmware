@@ -22,6 +22,11 @@ class ChaseConfiguration(unittest.TestCase):
         self.assertRegex(source, r"Serial2\.setRX\(3\)")
         self.assertNotRegex(source, re.compile(r"\bAUTO\b|\bARM\b", re.I))
 
+    def test_kicker_output_is_initialized_low(self):
+        source = (ROOT / "main/main.ino").read_text(encoding="utf-8")
+        self.assertRegex(source, r"digitalWrite\(11,\s*LOW\);\s*pinMode\(11,\s*OUTPUT\);")
+        self.assertNotRegex(source, r"digitalWrite\(11,\s*HIGH\)")
+
 
 if __name__ == "__main__":
     unittest.main()

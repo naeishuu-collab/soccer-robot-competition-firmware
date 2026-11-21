@@ -280,8 +280,8 @@ void setup() {
   Serial2.setTX(2);
   Serial2.setRX(3);
   Serial2.begin(9600);
-  pinMode(11, OUTPUT);
   digitalWrite(11, LOW);
+  pinMode(11, OUTPUT);
 
   Serial.begin(115200);
 
