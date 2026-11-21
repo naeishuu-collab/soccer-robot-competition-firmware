@@ -91,25 +91,18 @@ class OpenMvNavigationTests(unittest.TestCase):
 
     def test_rectangular_wall_selection_and_cropped_candidate(self):
         class Blob:
-            def __init__(self, rect, pixels):
-                self.rect, self.pixels = rect, pixels
-        class Rect:
-            x, y, w, h = 10, 20, 30, 20
+            def __init__(self, corners, pixels):
+                self.corners, self.pixels = corners, pixels
         class Frame:
-            def __init__(self, blobs, rects):
-                self.blobs, self.rects = blobs, rects
-            def width(self): return 100
-            def height(self): return 100
+            def __init__(self, blobs): self.blobs = blobs
             def find_blobs(self, *args, **kwargs): return self.blobs
-            def find_rects(self, **kwargs): return self.rects
-        matched = Blob((10, 20, 30, 20), 400)
-        unrelated = Blob((50, 40, 20, 20), 390)
-        cropped = Blob((0, 10, 20, 20), 300)
-        sparse = Blob((0, 10, 20, 20), 150)
-        self.assertIs(wall_only.find_rectangular_wall(Frame([unrelated, matched], [Rect()]))[0], matched)
-        self.assertIs(wall_only.find_rectangular_wall(Frame([cropped], []))[0], cropped)
-        self.assertIsNone(wall_only.find_rectangular_wall(Frame([sparse], []))[0])
-        self.assertIsNone(wall_only.find_rectangular_wall(Frame([unrelated], []))[0])
+        rectangular = Blob([(10, 10), (30, 10), (30, 30), (10, 30)], 300)
+        cropped = Blob([(0, 10), (20, 10), (20, 30), (0, 30)], 250)
+        sparse = Blob([(10, 10), (30, 10), (30, 30), (10, 30)], 150)
+        degenerate = Blob([(0, 0)] * 4, 200)
+        self.assertIs(wall_only.find_rectangular_wall(Frame([sparse, rectangular]))[0], rectangular)
+        self.assertIs(wall_only.find_rectangular_wall(Frame([cropped]))[0], cropped)
+        self.assertIsNone(wall_only.find_rectangular_wall(Frame([sparse, degenerate]))[0])
 
     def test_green_to_white_or_black_boundary_and_noise(self):
         samples = [(i, 0, i + 10) for i in range(5)]
