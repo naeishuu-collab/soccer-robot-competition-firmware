@@ -9,7 +9,7 @@
 | LINE | `line/line.ino` |
 | MOTOR | `motor/motor.ino` |
 
-4基板の各`.ino`に共通ロジックを直接統合しました。`common/src/*.ino`はホストテスト用の原本として残しています。各スケッチ内のヘッダー（IRの `IrSensors.h`、MOTORの `MotorPwm.h`、MAINの `OpenMvNavigation.h`）も同じフォルダーに置いてください。追加インクルードパスは不要です。`Arduino.h`、`Wire.h`、センサーライブラリのヘッダーは引き続き使います。
+4基板の各`.ino`に共通ロジックを直接統合しました。`common/src/*.ino`はホストテスト用の原本として残しています。各基板の処理は対応する `.ino` に統合されています。追加インクルードパスは不要です。`Arduino.h`、`Wire.h`、センサーライブラリのヘッダーは引き続き使います。
 
 ## Arduino-Pico環境
 

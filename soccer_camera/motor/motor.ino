@@ -1,5 +1,14 @@
 #include <Arduino.h>
-#include "MotorPwm.h"
+#include <math.h>
+
+// BEGIN HOST-TESTED SKETCH LOGIC
+inline int16_t limitMotorPwm(int16_t value) {
+    if (value == 0 || value == 256) return value;
+    const int16_t magnitude = value < 0 ? -value : value;
+    const int16_t limited = magnitude < 120 ? 120 : (magnitude > 200 ? 200 : magnitude);
+    return value < 0 ? -limited : limited;
+}
+// END HOST-TESTED SKETCH LOGIC
 
 // 暫定: 共通モジュールは4スケッチに複製している。差が出たら同期を自動化する。
 // BEGIN INTEGRATED COMMON CODE

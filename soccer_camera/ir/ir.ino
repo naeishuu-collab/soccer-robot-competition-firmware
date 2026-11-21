@@ -1,6 +1,16 @@
 
 #include <Arduino.h>
-#include "IrSensors.h"
+#include <math.h>
+
+// BEGIN HOST-TESTED SKETCH LOGIC
+constexpr uint8_t kIrSensorCount = 12;
+constexpr int16_t kIrCosTable[kIrSensorCount] = {
+    1000, 866, 500, 0, -500, -866, -1000, -866, -500, 0, 500, 866
+};
+constexpr int16_t kIrSinTable[kIrSensorCount] = {
+    0, -500, -866, -1000, -866, -500, 0, 500, 866, 1000, 866, 500
+};
+// END HOST-TESTED SKETCH LOGIC
 #include <math.h>
 
 // 暫定: 共通モジュールは4スケッチに複製している。差が出たら同期を自動化する。

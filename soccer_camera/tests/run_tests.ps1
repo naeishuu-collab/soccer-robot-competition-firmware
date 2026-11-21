@@ -4,6 +4,15 @@ $common = Join-Path $root 'common/src'
 $build = Join-Path $env:TEMP 'soccer-competition-tests'
 $results = Join-Path $PSScriptRoot 'results_last_run.txt'
 New-Item -ItemType Directory -Force -Path $build | Out-Null
+$logic = foreach ($sketch in @('main/main.ino', 'ir/ir.ino', 'motor/motor.ino')) {
+    $source = Get-Content -Raw -Encoding UTF8 (Join-Path $root $sketch)
+    if ($source -notmatch '(?s)// BEGIN HOST-TESTED SKETCH LOGIC?
+(.*?)?
+// END HOST-TESTED SKETCH LOGIC') { throw "Missing testable sketch logic: $sketch" }
+    $Matches[1]
+}
+$logic | Set-Content -Encoding UTF8 (Join-Path $build 'integrated_sketch_logic.h')
+
 "Host tests started at $([DateTime]::UtcNow.ToString('yyyy-MM-dd HH:mm:ss')) UTC" | Set-Content -Encoding Unicode $results
 
 $sources = @('test_core.cpp', 'test_integration.cpp')
@@ -15,7 +24,7 @@ if ($gpp) {
         $name = [IO.Path]::GetFileNameWithoutExtension($source)
         $exe = Join-Path $build "$name.exe"
         "=== BUILD $source ===" | Tee-Object -FilePath $results -Append
-        $output = & $gpp.Source -finput-charset=UTF-8 -std=c++17 -Wall -Wextra -I $common (Join-Path $PSScriptRoot $source) -o $exe 2>&1
+        $output = & $gpp.Source -finput-charset=UTF-8 -std=c++17 -Wall -Wextra -I $common -I $build (Join-Path $PSScriptRoot $source) -o $exe 2>&1
         $exitCode = $LASTEXITCODE
         $output | Tee-Object -FilePath $results -Append
         if ($exitCode -ne 0) { throw "Compile failed: $source" }
@@ -66,7 +75,7 @@ try {
     foreach ($source in $sources) {
         $name = [IO.Path]::GetFileNameWithoutExtension($source)
         "=== BUILD $source ===" | Tee-Object -FilePath $results -Append
-        $output = & $clPath /nologo /EHsc /utf-8 /std:c++17 /W4 "/I$common" (Join-Path $PSScriptRoot $source) "/Fe:$name.exe" 2>&1
+        $output = & $clPath /nologo /EHsc /utf-8 /std:c++17 /W4 "/I$common" "/I$build" (Join-Path $PSScriptRoot $source) "/Fe:$name.exe" 2>&1
         $exitCode = $LASTEXITCODE
         $output | Tee-Object -FilePath $results -Append
         if ($exitCode -ne 0) { throw "Compile failed: $source" }

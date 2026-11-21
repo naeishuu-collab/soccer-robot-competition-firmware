@@ -113,5 +113,5 @@
 3. `common/src/RobotProtocol.ino`（フレーム形式）
 4. `main/main.ino` の `loop()`
 5. `common/src/RobotControl.ino` の `MainController::step()` / `IrTestController`
-6. `openmv/goal_wall_navigation.py` の `decide_navigation()` と `main/OpenMvNavigation.h`
+6. `openmv/goal_wall_navigation.py` の `decide_navigation()` と `main/main.ino のOpenMV受信・判定処理`
 7. `motor/motor.ino` の `motorOutput()` / `receiveCommands()`

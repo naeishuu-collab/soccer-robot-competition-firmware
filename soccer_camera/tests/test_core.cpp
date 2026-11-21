@@ -2,9 +2,7 @@
 #include "../common/src/BoardConfig.ino"
 #include "../common/src/RobotDevices.ino"
 #include "../common/src/Rs485.ino"
-#include "../main/OpenMvNavigation.h"
-#include "../ir/IrSensors.h"
-#include "../motor/MotorPwm.h"
+#include "integrated_sketch_logic.h"
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
