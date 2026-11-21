@@ -2099,7 +2099,17 @@ uint32_t lastDebugMs = 0;
 uint32_t commandTimeouts = 0;
 uint16_t rejectedPackets = 0;
 
+// BEGIN HOST-TESTED SKETCH LOGIC
+inline int16_t limitMotorPwm(int16_t value) {
+    if (value == 0 || value == 256) return value;
+    const int16_t magnitude = value < 0 ? -value : value;
+    const int16_t limited = magnitude < 120 ? 120 : (magnitude > 200 ? 200 : magnitude);
+    return value < 0 ? -limited : limited;
+}
+// END HOST-TESTED SKETCH LOGIC
+
 void motorOutput(uint8_t index, int16_t value) {
+    value = limitMotorPwm(value);
     const int8_t in1 = kDriver[index].pinIn1;
     const int8_t in2 = kDriver[index].pinIn2;
     if (value == kMotorBrakeCommand) {

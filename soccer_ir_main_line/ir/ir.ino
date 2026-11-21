@@ -2093,15 +2093,15 @@ const uint8_t sensorPins[SENSOR_COUNT] = {
   24,25,26,27,28,29
 };
 
-const int16_t cosTable[SENSOR_COUNT] = {
-  1000,866,500,0,-500,-866,
-  -1000,-866,-500,0,500,866
+// BEGIN HOST-TESTED SKETCH LOGIC
+constexpr uint8_t kIrSensorCount = 12;
+constexpr int16_t kIrCosTable[kIrSensorCount] = {
+    1000, 866, 500, 0, -500, -866, -1000, -866, -500, 0, 500, 866
 };
-
-const int16_t sinTable[SENSOR_COUNT] = {
-  0,500,866,1000,866,500,
-  0,-500,-866,-1000,-866,-500
+constexpr int16_t kIrSinTable[kIrSensorCount] = {
+    0, -500, -866, -1000, -866, -500, 0, 500, 866, 1000, 866, 500
 };
+// END HOST-TESTED SKETCH LOGIC
 
 // ========================================
 // センサー履歴
@@ -2239,11 +2239,11 @@ void updateSensorHistory() {
 
 void calculateDirection() {
   const IrDirectionEstimate estimate = estimateIrDirection(
-    detectCount, cosTable, sinTable, SENSOR_COUNT, MIN_TOTAL_DETECT);
+    detectCount, kIrCosTable, kIrSinTable, SENSOR_COUNT, MIN_TOTAL_DETECT);
   totalDetect = estimate.totalWeight;
   directionCoherence = estimate.coherence;
   ballFound = estimate.valid;
-  if (ballFound) rawAngle = normalizeDegrees(estimate.angleDeg + 180.0f);
+  if (ballFound) rawAngle = normalizeDegrees(estimate.angleDeg);
 }
 
 // ========================================
