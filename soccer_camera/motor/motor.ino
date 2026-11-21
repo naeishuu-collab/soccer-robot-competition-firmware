@@ -287,6 +287,7 @@ void applyAllMotors() {
 // Receive DRIVE
 // ============================================================
 
+// BEGIN HOST-TESTED DRIVE HANDLER
 void handleDrive(const uint8_t *frame) {
   if (frame[1] == MSG_POLL ||
       frame[1] == MSG_BALL) {
@@ -326,7 +327,13 @@ void handleDrive(const uint8_t *frame) {
 
   for (uint8_t i = 0; i < 4; ++i) {
     targetPWM[i] = nextTarget[i];
+    if (power == 0 && currentPWM[i] != 0) {
+      currentPWM[i] = 0;
+      reverseUntil[i] = millis() + REVERSE_PAUSE_MS;
+      if (reverseUntil[i] == 0) reverseUntil[i] = 1;
+    }
   }
+  if (power == 0) applyAllMotors();
 
   receivedDirection = direction;
   receivedPower = power;
@@ -339,6 +346,7 @@ void handleDrive(const uint8_t *frame) {
 
   ++receivedFrames;
 }
+// END HOST-TESTED DRIVE HANDLER
 
 // ============================================================
 // Communication timeout

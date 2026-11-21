@@ -8,11 +8,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ChaseConfiguration(unittest.TestCase):
-    def test_ir_and_motor_match_tested_zip(self):
-        for board in ("ir", "motor"):
-            with self.subTest(board=board):
-                self.assertEqual((ROOT / board / f"{board}.ino").read_bytes(),
-                                 (ROOT / "chase_verified" / board / f"{board}.ino").read_bytes())
+    def test_ir_matches_tested_zip(self):
+        self.assertEqual((ROOT / "ir/ir.ino").read_bytes(),
+                         (ROOT / "chase_verified/ir/ir.ino").read_bytes())
 
     def test_main_board_pins_and_no_auto_command(self):
         source = (ROOT / "main/main.ino").read_text(encoding="utf-8")

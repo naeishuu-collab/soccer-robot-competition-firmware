@@ -15,10 +15,13 @@ $logic | Set-Content -Encoding UTF8 (Join-Path $build 'integrated_sketch_logic.h
 $mainSource = Get-Content -Raw -Encoding UTF8 (Join-Path $root 'main/main.ino')
 if ($mainSource -notmatch '(?s)// BEGIN HOST-TESTED CAMERA LOGIC\s*(.*?)\s*// END HOST-TESTED CAMERA LOGIC') { throw 'Missing testable camera logic' }
 $Matches[1] | Set-Content -Encoding UTF8 (Join-Path $build 'chase_camera_logic.h')
+$motorSource = Get-Content -Raw -Encoding UTF8 (Join-Path $root 'motor/motor.ino')
+if ($motorSource -notmatch '(?s)// BEGIN HOST-TESTED DRIVE HANDLER\s*(.*?)\s*// END HOST-TESTED DRIVE HANDLER') { throw 'Missing testable drive handler' }
+$Matches[1] | Set-Content -Encoding UTF8 (Join-Path $build 'chase_drive_handler.h')
 
 "Host tests started at $([DateTime]::UtcNow.ToString('yyyy-MM-dd HH:mm:ss')) UTC" | Set-Content -Encoding Unicode $results
 
-$sources = @('test_core.cpp', 'test_integration.cpp', 'test_chase_camera.cpp')
+$sources = @('test_core.cpp', 'test_integration.cpp', 'test_chase_camera.cpp', 'test_chase_motor.cpp')
 $gpp = Get-Command g++ -ErrorAction SilentlyContinue
 $cl = Get-Command cl -ErrorAction SilentlyContinue
 
