@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include "MotorPwm.h"
 
 // 暫定: 共通モジュールは4スケッチに複製している。差が出たら同期を自動化する。
 // BEGIN INTEGRATED COMMON CODE
@@ -2100,6 +2101,7 @@ uint32_t commandTimeouts = 0;
 uint16_t rejectedPackets = 0;
 
 void motorOutput(uint8_t index, int16_t value) {
+    value = limitMotorPwm(value);
     const int8_t in1 = kDriver[index].pinIn1;
     const int8_t in2 = kDriver[index].pinIn2;
     if (value == kMotorBrakeCommand) {

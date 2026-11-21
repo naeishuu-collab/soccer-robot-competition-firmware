@@ -3,6 +3,8 @@
 #include "../common/src/RobotDevices.ino"
 #include "../common/src/Rs485.ino"
 #include "../main/OpenMvNavigation.h"
+#include "../ir/IrSensors.h"
+#include "../motor/MotorPwm.h"
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -790,6 +792,24 @@ static void testMotorSlewLimit() {
     CHECK(!wheel.update(NAN, 0.1f, 501, 200, reversing) && reversing == 0.0f);
 }
 
+static void testIrSensorOrderAndMotorPwm() {
+    for (uint8_t i = 0; i < kIrSensorCount; ++i) {
+        uint16_t counts[kIrSensorCount]{};
+        counts[i] = 3;
+        const IrDirectionEstimate estimate = estimateIrDirection(counts, kIrCosTable, kIrSinTable, kIrSensorCount, 3);
+        CHECK(estimate.valid);
+        CHECK(fabsf(shortestAngleError(estimate.angleDeg, static_cast<float>((360 - 30 * i) % 360))) < 0.1f);
+    }
+    CHECK(limitMotorPwm(0) == 0 && limitMotorPwm(kMotorBrakeCommand) == kMotorBrakeCommand);
+    CHECK(limitMotorPwm(1) == 120 && limitMotorPwm(-1) == -120);
+    CHECK(limitMotorPwm(119) == 120 && limitMotorPwm(-119) == -120);
+    CHECK(limitMotorPwm(120) == 120 && limitMotorPwm(-120) == -120);
+    CHECK(limitMotorPwm(150) == 150 && limitMotorPwm(-150) == -150);
+    CHECK(limitMotorPwm(200) == 200 && limitMotorPwm(-200) == -200);
+    CHECK(limitMotorPwm(201) == 200 && limitMotorPwm(-201) == -200);
+    CHECK(limitMotorPwm(255) == 200 && limitMotorPwm(-255) == -200);
+}
+
 static void testTb67h450TruthTableAndDutyLimits() {
     Tb67h450Output output{};
     CHECK(tb67h450Encode(kTb67h450Stop, 0, 128, output));
@@ -1516,6 +1536,7 @@ int main() {
         {"Omni clockwise and counter-clockwise", testOmniClockwiseAndCounterclockwise},
         {"Omni blend and normalization", testOmniBlendNormalization},
         {"Motor acceleration limit", testMotorSlewLimit},
+        {"IR sensor order and motor PWM", testIrSensorOrderAndMotorPwm},
         {"TB67H450 truth table and PWM limits", testTb67h450TruthTableAndDutyLimits},
         {"MOTOR STOP command priority", testMotorStopPriority},
         {"Heading boundaries and jump", testHeadingBoundaryAndJumpRejection},

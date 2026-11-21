@@ -1,5 +1,6 @@
 
 #include <Arduino.h>
+#include "IrSensors.h"
 #include <math.h>
 
 // 暫定: 共通モジュールは4スケッチに複製している。差が出たら同期を自動化する。
@@ -2062,7 +2063,7 @@ using namespace soccer;
 // AA PRED_H PRED_L DIST_H DIST_L 55
 // ========================================
 
-#define SENSOR_COUNT 12
+#define SENSOR_COUNT kIrSensorCount
 #define RS485 Serial1
 #define RS485_DE_PIN board::kIrRs485DePin
 #define RS485_BAUD 115200
@@ -2091,16 +2092,6 @@ uint32_t rs485TxErrors = 0;
 const uint8_t sensorPins[SENSOR_COUNT] = {
   18,19,20,21,22,23,
   24,25,26,27,28,29
-};
-
-const int16_t cosTable[SENSOR_COUNT] = {
-  1000,866,500,0,-500,-866,
-  -1000,-866,-500,0,500,866
-};
-
-const int16_t sinTable[SENSOR_COUNT] = {
-  0,500,866,1000,866,500,
-  0,-500,-866,-1000,-866,-500
 };
 
 // ========================================
@@ -2239,11 +2230,11 @@ void updateSensorHistory() {
 
 void calculateDirection() {
   const IrDirectionEstimate estimate = estimateIrDirection(
-    detectCount, cosTable, sinTable, SENSOR_COUNT, MIN_TOTAL_DETECT);
+    detectCount, kIrCosTable, kIrSinTable, SENSOR_COUNT, MIN_TOTAL_DETECT);
   totalDetect = estimate.totalWeight;
   directionCoherence = estimate.coherence;
   ballFound = estimate.valid;
-  if (ballFound) rawAngle = normalizeDegrees(estimate.angleDeg + 180.0f);
+  if (ballFound) rawAngle = normalizeDegrees(estimate.angleDeg);
 }
 
 // ========================================
