@@ -66,6 +66,14 @@ def omni_outputs(motion: tuple[float, float, float]) -> list[float]:
 
 
 class DirectionMappingTests(unittest.TestCase):
+    def test_ir_drive_is_testable_at_known_motor_pwm_and_requires_arm(self):
+        for path in CONTROL_SOURCES:
+            with self.subTest(path=path.relative_to(PROJECT)):
+                source = path.read_text(encoding="utf-8")
+                self.assertIn("constexpr uint8_t kIrTestPwmCap = 128;", source)
+                self.assertIn("motion.x = x * (0.50f / projection);", source)
+                self.assertIn("bool autoStartPending_ = false;", source)
+
     def test_all_inlined_wheel_tables_match_zip_based_mapping(self):
         for path in SKETCHES:
             with self.subTest(path=path.relative_to(PROJECT)):

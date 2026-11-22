@@ -788,7 +788,7 @@ struct Motion {
     float turn = 0.0f; // 反時計回り、正規化 -1..1。
 };
 
-constexpr uint8_t kIrTestPwmCap = 16;
+constexpr uint8_t kIrTestPwmCap = 128;
 constexpr float kIrTestSearchTurn = 0.12f;
 
 // 暫定: 車輪ジオメトリは仮値。4輪の方向確認後に差し替える。
@@ -798,8 +798,8 @@ inline bool irTestMotionForBearing(uint16_t directionDeg, Motion& motion) {
     const float angle = directionDeg * 0.01745329252f;
     const float x = sinf(angle), y = cosf(angle);
     const float projection = fmaxf(fabsf(x + y), fabsf(x - y)) * 0.70710678f;
-    motion.x = x * (0.06f / projection);
-    motion.y = y * (0.06f / projection);
+    motion.x = x * (0.50f / projection);
+    motion.y = y * (0.50f / projection);
     return true;
 }
 
@@ -842,7 +842,7 @@ public:
     bool searching() const { return searching_; }
 
 private:
-    bool autoStartPending_ = true;
+    bool autoStartPending_ = false;
     bool armed_ = false;
     bool searching_ = false;
 };
@@ -2600,13 +2600,13 @@ void printLineLevels() {
 void setup() {
     Serial.begin(115200);
     if (Serial && Serial.availableForWrite() >= 48)
-        Serial.println("BOOT MAIN; AUTO IR wait; diagnostics active");
+        Serial.println("BOOT MAIN; IR test disarmed; diagnostics active");
     if (Serial && Serial.availableForWrite() >= 64)
         Serial.println("USB: AUTO [FLOAT] / AUTO FLOOR / AUTO IR; ARM IR; S=stop; M <v0> <v1> <v2> <v3>");
     if (Serial && Serial.availableForWrite() >= 64)
         Serial.println("MOTOR M range -255..255, 256=brake; no command timeout (S / power switch only)");
     if (Serial && Serial.availableForWrite() >= 96)
-        Serial.println("IR TEST: no LINE; auto-arm; PWM 16; IR loss -> search; S stops; wheels up");
+        Serial.println("IR TEST: AUTO IR then ARM IR; PWM <=128; IR loss -> stop; wheels up");
 
     pinMode(board::kMainRs485DePin, OUTPUT);
     digitalWrite(board::kMainRs485DePin, LOW);
