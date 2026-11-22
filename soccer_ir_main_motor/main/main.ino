@@ -2127,6 +2127,7 @@ Rs485MasterArbiter busArbiter;
 enum BusPhase : uint8_t { kBusIdle, kBusNeedLine };
 BusPhase busPhase = kBusIdle;
 MainController controller;
+HeadingController irTestHeadingController;
 AutoMode autoMode = kAutoIrTest;
 IrTestController irTestController;
 KickerController kickerController;
@@ -2770,6 +2771,22 @@ void loop() {
         // 台上試験専用の例外。LINEガードもMAIN非常停止も使わない。MOTORの電源遮断には手が届く状態を保つ。
         irTestController.armOnFirstFreshBall(input.irFresh, input.ballFound, irDirection);
         motorEnabled = irTestController.update(input.irFresh, input.ballFound, irDirection, motorMotion);
+        float headingTurn = 0.0f;
+        if (motorEnabled && (!input.headingValid ||
+            !irTestHeadingController.update(input.headingDeg, 0.0f, true, headingTurn))) {
+            motorEnabled = false;
+        }
+        if (motorEnabled) {
+            const float relativeHeading = shortestAngleError(input.headingDeg, 0.0f);
+            if ((relativeHeading >= 90.0f && headingTurn > 0.0f) ||
+                (relativeHeading <= -90.0f && headingTurn < 0.0f)) {
+                headingTurn = 0.0f;
+            }
+            motorMotion.turn = headingTurn;
+        } else {
+            motorMotion = {};
+            irTestHeadingController.reset();
+        }
         if (wasMotorEnabled && !motorEnabled) motorStopPending = true;
     }
 

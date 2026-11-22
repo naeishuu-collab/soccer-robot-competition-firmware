@@ -2101,8 +2101,8 @@ constexpr Tb67h450ChannelConfig kDriver[4] = {
     {board::kMotorIn1Pins[3], board::kMotorIn2Pins[3], kTb67h450MaxDuty}
 };
 // [RR, LF, RF, LR]. Keep ZIP kinematics signs separate; apply the latest RR hardware inversion once here.
-constexpr int8_t kMotorOutputPolarity[4] = {-1, 1, 1, 1};
-static_assert(kMotorOutputPolarity[0] == -1 && kMotorOutputPolarity[1] == 1 &&
+constexpr int8_t kMotorOutputPolarity[4] = {1, 1, 1, 1};
+static_assert(kMotorOutputPolarity[0] == 1 && kMotorOutputPolarity[1] == 1 &&
               kMotorOutputPolarity[2] == 1 && kMotorOutputPolarity[3] == 1,
               "RR output inversion/order must remain [-1, +1, +1, +1].");
 constexpr bool kDriverTableConfigured = true;
