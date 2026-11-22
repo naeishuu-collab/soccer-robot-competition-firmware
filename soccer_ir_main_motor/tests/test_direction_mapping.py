@@ -89,7 +89,20 @@ class DirectionMappingTests(unittest.TestCase):
                 source = path.read_text(encoding="utf-8")
                 self.assertIn("constexpr uint8_t kIrTestPwmCap = 210;", source)
                 self.assertIn("constexpr uint8_t kIrTestPwmFloor = 120;", source)
-                self.assertIn("motion.x = x * (0.50f / projection);", source)
+                if path == PROJECT / "main" / "main.ino":
+                    self.assertIn(
+                        "inline bool cardinalMotionForBearing(float directionDeg, float magnitude, Motion& motion)",
+                        source,
+                    )
+                    self.assertIn("if (directionDeg < 45.0f || directionDeg >= 315.0f)", source)
+                    self.assertIn("else if (directionDeg < 135.0f)", source)
+                    self.assertIn("else if (directionDeg < 225.0f)", source)
+                    self.assertIn(
+                        "return cardinalMotionForBearing(static_cast<float>(directionDeg), 0.50f, motion);",
+                        source,
+                    )
+                else:
+                    self.assertIn("motion.x = x * (0.50f / projection);", source)
                 self.assertIn("bool autoStartPending_ = false;", source)
                 self.assertIn("inline void floorMotorCommandValues(int16_t values[4], uint8_t minPwm)", source)
                 self.assertIn("inline void scaleMotorCommandValuesToPeak(int16_t values[4], uint8_t peakPwm)", source)

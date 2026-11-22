@@ -791,18 +791,20 @@ struct Motion {
 constexpr uint8_t kIrTestPwmCap = 210;
 constexpr uint8_t kIrTestPwmFloor = 120;
 static_assert(kIrTestPwmFloor <= kIrTestPwmCap, "IR test PWM floor must not exceed cap");
-constexpr float kIrTestSearchTurn = 0.12f;
 
-// 暫定: 車輪ジオメトリは仮値。4輪の方向確認後に差し替える。
-inline bool irTestMotionForBearing(uint16_t directionDeg, Motion& motion) {
+inline bool cardinalMotionForBearing(float directionDeg, float magnitude, Motion& motion) {
     motion = {};
-    if (directionDeg >= 360) return false;
-    const float angle = directionDeg * 0.01745329252f;
-    const float x = sinf(angle), y = cosf(angle);
-    const float projection = fmaxf(fabsf(x + y), fabsf(x - y)) * 0.70710678f;
-    motion.x = x * (0.50f / projection);
-    motion.y = y * (0.50f / projection);
+    if (!isfinite(directionDeg) || directionDeg < 0.0f || directionDeg >= 360.0f ||
+        !isfinite(magnitude) || magnitude < 0.0f || magnitude > 1.0f) return false;
+    if (directionDeg < 45.0f || directionDeg >= 315.0f) motion.y = magnitude;
+    else if (directionDeg < 135.0f) motion.x = magnitude;
+    else if (directionDeg < 225.0f) motion.y = -magnitude;
+    else motion.x = -magnitude;
     return true;
+}
+
+inline bool irTestMotionForBearing(uint16_t directionDeg, Motion& motion) {
+    return cardinalMotionForBearing(static_cast<float>(directionDeg), 0.50f, motion);
 }
 
 class IrTestController {
@@ -1532,9 +1534,7 @@ public:
             if (in.line.detected && in.line.directionValid && !in.line.ambiguous &&
                 in.line.angleCdeg != kNoLineAngle) {
                 const float escape = normalizeDegrees(in.line.angleCdeg / 100.0f + 180.0f);
-                out.motion.x = sinf(escape * 0.01745329252f) * 0.35f;
-                out.motion.y = cosf(escape * 0.01745329252f) * 0.35f;
-                out.motion.turn = headingOk ? headingTurn : 0.0f;
+                cardinalMotionForBearing(escape, 0.35f, out.motion);
             }
             return out;
         }
@@ -1548,23 +1548,15 @@ public:
             ballAngleInitialized_ = true;
             // 暫定: 200カウントを中点として使用。ARM前にセンサーログで調整する。
             const float magnitude = 0.2f + 0.35f * (in.relativeSignal / (in.relativeSignal + 200.0f));
-            out.motion.x = sinf(filtered * 0.01745329252f) * magnitude;
-            out.motion.y = cosf(filtered * 0.01745329252f) * magnitude;
-            out.motion.turn = headingOk ? headingTurn : 0.0f;
+            cardinalMotionForBearing(filtered, magnitude, out.motion);
             return out;
         }
         ballAngleInitialized_ = false;
         if (in.irFresh) {
             out.state = kSearchBall;
-            if (headingOk) {
-                out.motion.x = (in.nowMs % 1400 < 700) ? 0.15f : -0.15f;
-                out.motion.turn = headingTurn;
-            } else if (!in.headingRequired) {
-                out.motion.turn = 0.12f;
-            }
+            out.motion.x = (in.nowMs % 1400 < 700) ? 0.15f : -0.15f;
         } else {
             out.state = kIdle;
-            out.motion.turn = headingOk ? headingTurn : 0.0f;
         }
         return out;
     }
@@ -2565,7 +2557,7 @@ void pollMotorConsole(uint32_t nowMs) {
             if (autoMode == kAutoIrTest &&
                 irTestController.arm(irFresh, irBallFound, irDirection)) {
                 if (Serial && Serial.availableForWrite() >= 72)
-                    Serial.println("IR TEST armed; IR loss -> search; S stops");
+                    Serial.println("IR TEST armed; 4-way translation; IR loss -> stop; S stops");
             } else {
                 autoMode = kAutoStopped;
                 motorConsoleCommandSeen = false;
