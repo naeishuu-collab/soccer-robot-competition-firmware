@@ -2185,6 +2185,18 @@ bool ballFound = false;
 
 uint32_t lastDebugTime = 0;
 
+// USBシリアル校正ログ。CAL START 中だけ通常デバッグ表示を停止する。
+bool calibrationStreamEnabled = false;
+const char* calibrationCondition = "UNSET";
+int16_t calibrationAngleDeg = -1;
+char calibrationCommandBuffer[32] = {};
+uint8_t calibrationCommandLength = 0;
+bool calibrationCommandOverflow = false;
+uint32_t calibrationSampleSequence = 0;
+uint32_t lastCalibrationPrintMs = 0;
+uint32_t sensorSampleWindowUs = 0;
+uint32_t sensorSampleSweeps = 0;
+
 // ========================================
 // 追跡状態のリセット
 // ========================================
@@ -2226,6 +2238,7 @@ void sampleSensors() {
   }
 
   uint32_t start = micros();
+  uint32_t sweeps = 0;
 
   while ((uint32_t)(micros() - start) < SAMPLE_TIME_US) {
     for (int i = 0; i < SENSOR_COUNT; i++) {
@@ -2235,7 +2248,11 @@ void sampleSensors() {
         }
       }
     }
+    ++sweeps;
   }
+
+  sensorSampleWindowUs = micros() - start;
+  sensorSampleSweeps = sweeps;
 }
 
 // ========================================
@@ -2490,7 +2507,104 @@ void handleRS485() {
 // デバッグ出力
 // ========================================
 
+bool parseCalibrationAngle(const char* command, int16_t& angleDeg) {
+  const char prefix[] = "CAL ANGLE ";
+  for (uint8_t i = 0; i < sizeof(prefix) - 1; ++i) {
+    if (command[i] != prefix[i]) return false;
+  }
+
+  const char* p = command + sizeof(prefix) - 1;
+  if (*p < '0' || *p > '9') return false;
+  int16_t value = 0;
+  do {
+    value = static_cast<int16_t>(value * 10 + (*p - '0'));
+    if (value >= 360) return false;
+    ++p;
+  } while (*p >= '0' && *p <= '9');
+  if (*p != '\0') return false;
+  angleDeg = value;
+  return true;
+}
+
+void processCalibrationCommand(char* command) {
+  if (calibrationCommandOverflow) return;
+
+  // コマンドはASCII大文字小文字を区別しない。
+  for (char* p = command; *p; ++p) {
+    if (*p >= 'a' && *p <= 'z') *p = static_cast<char>(*p - 'a' + 'A');
+  }
+
+  if (strcmp(command, "CAL START") == 0) {
+    calibrationStreamEnabled = true;
+    calibrationSampleSequence = 0;
+    lastCalibrationPrintMs = millis() - 100;
+    Serial.println("CAL_HEADER,condition,angle_deg,sample_ms,seq,window_us,sweeps,total_low,s0,s1,s2,s3,s4,s5,s6,s7,s8,s9,s10,s11");
+  } else if (strcmp(command, "CAL STOP") == 0) {
+    calibrationStreamEnabled = false;
+  } else if (strcmp(command, "CAL DARK") == 0) {
+    calibrationCondition = "DARK";
+  } else if (strcmp(command, "CAL SIGNAL") == 0) {
+    calibrationCondition = "SIGNAL";
+  } else {
+    int16_t angleDeg = -1;
+    if (parseCalibrationAngle(command, angleDeg)) calibrationAngleDeg = angleDeg;
+  }
+}
+
+void pollCalibrationConsole() {
+  if (!Serial) return;
+  while (Serial.available() > 0) {
+    const int incoming = Serial.read();
+    if (incoming < 0) break;
+    const char ch = static_cast<char>(incoming);
+    if (ch == '\r') continue;
+    if (ch == '\n') {
+      calibrationCommandBuffer[calibrationCommandLength] = '\0';
+      processCalibrationCommand(calibrationCommandBuffer);
+      calibrationCommandLength = 0;
+      calibrationCommandOverflow = false;
+      continue;
+    }
+    if (calibrationCommandLength + 1 < sizeof(calibrationCommandBuffer)) {
+      calibrationCommandBuffer[calibrationCommandLength++] = ch;
+    } else {
+      calibrationCommandOverflow = true;
+    }
+  }
+}
+
+void printCalibrationSample() {
+  if (!calibrationStreamEnabled || !Serial) return;
+  const uint32_t nowMs = millis();
+  if (static_cast<uint32_t>(nowMs - lastCalibrationPrintMs) < 100) return;
+  lastCalibrationPrintMs = nowMs;
+
+  uint32_t totalLow = 0;
+  for (uint8_t i = 0; i < SENSOR_COUNT; ++i) totalLow += detectCount[i];
+
+  Serial.print("CAL,");
+  Serial.print(calibrationCondition);
+  Serial.print(',');
+  Serial.print(calibrationAngleDeg);
+  Serial.print(',');
+  Serial.print(nowMs);
+  Serial.print(',');
+  Serial.print(calibrationSampleSequence++);
+  Serial.print(',');
+  Serial.print(sensorSampleWindowUs);
+  Serial.print(',');
+  Serial.print(sensorSampleSweeps);
+  Serial.print(',');
+  Serial.print(totalLow);
+  for (uint8_t i = 0; i < SENSOR_COUNT; ++i) {
+    Serial.print(',');
+    Serial.print(detectCount[i]);
+  }
+  Serial.println();
+}
+
 void printDebug() {
+  if (calibrationStreamEnabled) return;
   const uint32_t nowMs = millis();
   if (static_cast<uint32_t>(nowMs - lastDebugTime) < 100) return;
   lastDebugTime = nowMs;
@@ -2557,8 +2671,10 @@ void setup() {
 // ========================================
 
 void loop() {
+  pollCalibrationConsole();
   handleRS485();
   updateIR();
   handleRS485();
+  printCalibrationSample();
   printDebug();
 }
