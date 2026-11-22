@@ -65,14 +65,42 @@ def omni_outputs(motion: tuple[float, float, float]) -> list[float]:
     return outputs
 
 
+def floor_nonzero_pwm(values: list[int], floor: int) -> list[int]:
+    return [0 if value == 0 else (1 if value > 0 else -1) * max(abs(value), floor) for value in values]
+
+
+def scale_to_peak(values: list[int], peak: int) -> list[int]:
+    largest = max((abs(value) for value in values), default=0)
+    if largest == 0:
+        return values[:]
+    return [0 if value == 0 else (1 if value > 0 else -1) * math.floor(abs(value) * peak / largest + 0.5) for value in values]
+
+
 class DirectionMappingTests(unittest.TestCase):
     def test_ir_drive_is_testable_at_known_motor_pwm_and_requires_arm(self):
         for path in CONTROL_SOURCES:
             with self.subTest(path=path.relative_to(PROJECT)):
                 source = path.read_text(encoding="utf-8")
-                self.assertIn("constexpr uint8_t kIrTestPwmCap = 128;", source)
+                self.assertIn("constexpr uint8_t kIrTestPwmCap = 210;", source)
+                self.assertIn("constexpr uint8_t kIrTestPwmFloor = 120;", source)
                 self.assertIn("motion.x = x * (0.50f / projection);", source)
                 self.assertIn("bool autoStartPending_ = false;", source)
+                self.assertIn("inline void floorMotorCommandValues(int16_t values[4], uint8_t minPwm)", source)
+                self.assertIn("inline void scaleMotorCommandValuesToPeak(int16_t values[4], uint8_t peakPwm)", source)
+        self.assertIn("scaleMotorCommandValuesToPeak(values, kIrTestPwmCap);", (PROJECT / "main/main.ino").read_text(encoding="utf-8"))
+
+    def test_pwm_floor_preserves_zero_and_sign(self):
+        values = [0, 1, 119, 120, 210, -1, -119, -120, -210]
+        self.assertEqual(
+            floor_nonzero_pwm(values, 120),
+            [0, 120, 120, 120, 210, -120, -120, -120, -210],
+        )
+        self.assertIn("floorMotorCommandValues(values, kIrTestPwmFloor);", (PROJECT / "main/main.ino").read_text(encoding="utf-8"))
+
+    def test_pwm_scaling_reaches_cap_before_floor(self):
+        scaled = scale_to_peak([64, -32, 0, 16], 210)
+        self.assertEqual(scaled, [210, -105, 0, 53])
+        self.assertEqual(floor_nonzero_pwm(scaled, 120), [210, -120, 0, 120])
 
     def test_all_inlined_wheel_tables_match_zip_based_mapping(self):
         for path in SKETCHES:

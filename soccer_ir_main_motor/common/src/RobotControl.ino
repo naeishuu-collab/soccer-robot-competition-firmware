@@ -231,7 +231,9 @@ struct Motion {
     float turn = 0.0f; // 反時計回り、正規化 -1..1。
 };
 
-constexpr uint8_t kIrTestPwmCap = 128;
+constexpr uint8_t kIrTestPwmCap = 210;
+constexpr uint8_t kIrTestPwmFloor = 120;
+static_assert(kIrTestPwmFloor <= kIrTestPwmCap, "IR test PWM floor must not exceed cap");
 constexpr float kIrTestSearchTurn = 0.12f;
 
 // 暫定: 車輪ジオメトリは仮値。4輪の方向確認後に差し替える。
@@ -304,6 +306,33 @@ inline void capMotorCommandValues(int16_t values[4], uint8_t maxPwm) {
     for (uint8_t i = 0; i < 4; ++i) {
         if (values[i] > maxPwm) values[i] = maxPwm;
         else if (values[i] < -static_cast<int16_t>(maxPwm)) values[i] = -static_cast<int16_t>(maxPwm);
+    }
+}
+
+inline void floorMotorCommandValues(int16_t values[4], uint8_t minPwm) {
+    if (!values || minPwm == 0) return;
+    for (uint8_t i = 0; i < 4; ++i) {
+        if (values[i] > 0 && values[i] < minPwm) values[i] = minPwm;
+        else if (values[i] < 0 && values[i] > -static_cast<int16_t>(minPwm))
+            values[i] = -static_cast<int16_t>(minPwm);
+    }
+}
+
+inline void scaleMotorCommandValuesToPeak(int16_t values[4], uint8_t peakPwm) {
+    if (!values || peakPwm == 0) return;
+    int16_t largest = 0;
+    for (uint8_t i = 0; i < 4; ++i) {
+        if (values[i] == kMotorBrakeCommand) continue;
+        const int16_t magnitude = values[i] < 0 ? -values[i] : values[i];
+        if (magnitude > largest) largest = magnitude;
+    }
+    if (largest == 0) return;
+    for (uint8_t i = 0; i < 4; ++i) {
+        if (values[i] == 0 || values[i] == kMotorBrakeCommand) continue;
+        const int16_t magnitude = values[i] < 0 ? -values[i] : values[i];
+        const int16_t scaled = static_cast<int16_t>(roundf(
+            static_cast<float>(magnitude) * peakPwm / largest));
+        values[i] = values[i] < 0 ? -scaled : scaled;
     }
 }
 
