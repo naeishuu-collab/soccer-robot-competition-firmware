@@ -2200,6 +2200,17 @@ bool updateMotorOutput(uint8_t index, uint32_t nowMs) {
         return true;
     }
 
+    // For requested AUTO IR / normal running values, skip the slow 0-to-floor ramp.
+    // Keep lower manual commands on the configured gradual ramp.
+    const int16_t startFloor = static_cast<int16_t>(kIrTestPwmFloor);
+    if (current == 0 && (requested >= startFloor || requested <= -startFloor)) {
+        current = requested > 0 ? startFloor : -startFloor;
+        motorCurrent[index] = current;
+        lastRampMs[index] = nowMs;
+        motorOutput(index, current);
+        return true;
+    }
+
     if (static_cast<uint32_t>(nowMs - lastRampMs[index]) < kRampIntervalMs) return true;
     lastRampMs[index] = nowMs;
     if (current < requested) {

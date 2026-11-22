@@ -76,6 +76,12 @@ def scale_to_peak(values: list[int], peak: int) -> list[int]:
     return [0 if value == 0 else (1 if value > 0 else -1) * math.floor(abs(value) * peak / largest + 0.5) for value in values]
 
 
+def first_ramp_output(requested: int, floor: int, step: int) -> int:
+    if abs(requested) >= floor:
+        return (1 if requested > 0 else -1) * floor
+    return (1 if requested > 0 else -1) * min(abs(requested), step) if requested else 0
+
+
 class DirectionMappingTests(unittest.TestCase):
     def test_ir_drive_is_testable_at_known_motor_pwm_and_requires_arm(self):
         for path in CONTROL_SOURCES:
@@ -101,6 +107,15 @@ class DirectionMappingTests(unittest.TestCase):
         scaled = scale_to_peak([64, -32, 0, 16], 210)
         self.assertEqual(scaled, [210, -105, 0, 53])
         self.assertEqual(floor_nonzero_pwm(scaled, 120), [210, -120, 0, 120])
+
+    def test_motor_skips_the_ramp_below_start_floor(self):
+        motor_source = (PROJECT / "motor" / "motor.ino").read_text(encoding="utf-8")
+        self.assertIn("if (current == 0 && (requested >= startFloor || requested <= -startFloor))", motor_source)
+        self.assertIn("motorOutput(index, current);", motor_source)
+        self.assertEqual(first_ramp_output(210, 120, 5), 120)
+        self.assertEqual(first_ramp_output(-210, 120, 5), -120)
+        self.assertEqual(first_ramp_output(80, 120, 5), 5)
+        self.assertEqual(first_ramp_output(0, 120, 5), 0)
 
     def test_all_inlined_wheel_tables_match_zip_based_mapping(self):
         for path in SKETCHES:
