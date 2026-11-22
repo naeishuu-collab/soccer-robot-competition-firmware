@@ -2088,6 +2088,8 @@ constexpr Tb67h450ChannelConfig kDriver[4] = {
     {board::kMotorIn1Pins[2], board::kMotorIn2Pins[2], kTb67h450MaxDuty},
     {board::kMotorIn1Pins[3], board::kMotorIn2Pins[3], kTb67h450MaxDuty}
 };
+// chase MOTORの順番は [0]=RR, [1]=LF, [2]=RF, [3]=LR。RRだけ実出力極性を反転する。
+constexpr int8_t kMotorOutputPolarity[4] = {-1, 1, 1, 1};
 constexpr bool kDriverTableConfigured = true;
 int16_t motorCurrent[4]{};
 uint32_t reverseUntil[4]{};
@@ -2129,6 +2131,9 @@ uint32_t commandTimeouts = 0;
 uint16_t rejectedPackets = 0;
 
 void motorOutput(uint8_t index, int16_t value) {
+    if (value != kMotorBrakeCommand) {
+        value = static_cast<int16_t>(value * kMotorOutputPolarity[index]);
+    }
     const int8_t in1 = kDriver[index].pinIn1;
     const int8_t in2 = kDriver[index].pinIn2;
     if (value == kMotorBrakeCommand) {
