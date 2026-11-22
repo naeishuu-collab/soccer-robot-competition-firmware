@@ -822,6 +822,12 @@ public:
         return arm(irFresh, ballFound, directionDeg);
     }
 
+    void enableAutoStart() {
+        autoStartPending_ = true;
+        armed_ = false;
+        searching_ = false;
+    }
+
     void disableAutoStart() { autoStartPending_ = false; }
 
     bool update(bool irFresh, bool ballFound, uint16_t directionDeg, Motion& motion) {
@@ -2632,14 +2638,15 @@ void printLineLevels() {
 
 void setup() {
     Serial.begin(115200);
+    irTestController.enableAutoStart();
     if (Serial && Serial.availableForWrite() >= 48)
-        Serial.println("BOOT MAIN; IR test disarmed; diagnostics active");
+        Serial.println("BOOT MAIN; AUTO IR waits for first fresh ball; diagnostics active");
     if (Serial && Serial.availableForWrite() >= 64)
         Serial.println("USB: AUTO [FLOAT] / AUTO FLOOR / AUTO IR; ARM IR; S=stop; M <v0> <v1> <v2> <v3>");
     if (Serial && Serial.availableForWrite() >= 64)
         Serial.println("MOTOR M range -255..255, 256=brake; no command timeout (S / power switch only)");
     if (Serial && Serial.availableForWrite() >= 96)
-        Serial.println("IR TEST: AUTO IR then ARM IR; PWM <=128; IR loss -> stop; wheels up");
+        Serial.println("BOOT AUTO IR: no USB command needed; fresh ball starts; IR loss -> stop; PWM 120..210");
 
     pinMode(board::kMainRs485DePin, OUTPUT);
     digitalWrite(board::kMainRs485DePin, LOW);
