@@ -36,6 +36,16 @@ inline uint16_t cameraAvoidDirection(int8_t x, int8_t y) {
   return uint16_t(angle + 0.5f) % 360;
 }
 
+inline uint16_t chooseIrDirection(uint16_t measured, const uint8_t *frame) {
+  if (frame[9] != 1 || frame[10] != 0) return measured;
+  const uint16_t predicted = (uint16_t(frame[7]) << 7) | frame[8];
+  if (predicted >= 360) return measured;
+  int delta = int(predicted) - int(measured);
+  if (delta > 180) delta -= 360;
+  if (delta < -180) delta += 360;
+  return delta >= -5 && delta <= 5 ? predicted : measured;
+}
+
 inline void chooseChaseMotion(const CameraState &camera, uint32_t nowMs, bool ballFound,
                               uint16_t ballDirection, uint16_t movePower,
                               uint16_t &direction, uint16_t &power) {
@@ -343,7 +353,7 @@ void loop() {
     }
 
     received = true;
-    angle = candidateAngle;
+    angle = chooseIrDirection(candidateAngle, reply);
     strength = candidateStrength;
     // Allow the IR transceiver to release the shared RS485 bus.
     delayMicroseconds(40);

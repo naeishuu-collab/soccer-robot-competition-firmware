@@ -54,6 +54,51 @@ constexpr uint16_t MIN_TOTAL_DETECT = 1;
 // Convert calculated angle to clockwise.
 constexpr bool REVERSE_DIRECTION = true;
 
+// BEGIN HOST-TESTED IR PREDICTION
+inline uint16_t vectorCoherencePermille(int32_t x, int32_t y, uint32_t total) {
+  if (!total) return 0;
+  const float ratio = sqrtf(float(x) * float(x) + float(y) * float(y)) / float(total);
+  return uint16_t(ratio >= 1000.0f ? 1000 : lroundf(ratio));
+}
+
+struct IrPredictor {
+  uint16_t angles[3] = {};
+  uint32_t times[3] = {};
+  uint8_t count = 0;
+
+  void reset() { count = 0; }
+
+  bool update(uint16_t angle, uint32_t now, uint16_t &predicted) {
+    predicted = angle;
+    if (angle >= 360) { reset(); return false; }
+    if (count == 3) {
+      angles[0] = angles[1]; angles[1] = angles[2];
+      times[0] = times[1]; times[1] = times[2];
+      count = 2;
+    }
+    angles[count] = angle;
+    times[count++] = now;
+    if (count < 3) return false;
+    const uint32_t dt1 = times[1] - times[0], dt2 = times[2] - times[1];
+    if (dt1 < 4000 || dt1 > 40000 || dt2 < 4000 || dt2 > 40000) return false;
+    int16_t d1 = int16_t(angles[1]) - int16_t(angles[0]);
+    int16_t d2 = int16_t(angles[2]) - int16_t(angles[1]);
+    if (d1 > 180) d1 -= 360; else if (d1 < -180) d1 += 360;
+    if (d2 > 180) d2 -= 360; else if (d2 < -180) d2 += 360;
+    const float v1 = float(d1) * 1000000.0f / float(dt1);
+    const float v2 = float(d2) * 1000000.0f / float(dt2);
+    if (d1 == 0 || d2 == 0 || (d1 > 0) != (d2 > 0) ||
+        fabsf(v1) > 720.0f || fabsf(v2) > 720.0f || fabsf(v1 - v2) > 300.0f) return false;
+    float lead = (v1 + v2) * 0.005f;
+    if (lead > 5.0f) lead = 5.0f;
+    if (lead < -5.0f) lead = -5.0f;
+    int value = int(angle) + int(lroundf(lead));
+    predicted = uint16_t((value + 360) % 360);
+    return true;
+  }
+};
+// END HOST-TESTED IR PREDICTION
+
 // ------------------------------------------------------------
 // RS485
 // ------------------------------------------------------------
@@ -91,8 +136,12 @@ uint16_t detectCount[SENSOR_COUNT] = {};
 
 uint16_t ballDirection = 0;
 uint16_t ballStrength = 0;
+uint16_t predictedDirection = 0;
+bool predictionValid = false;
+IrPredictor predictor;
 
 uint32_t totalDetectRaw = 0;
+uint16_t directionCoherence = 0;
 
 uint32_t lastDebugMs = 0;
 
@@ -199,6 +248,11 @@ void sendBall(uint8_t sequence) {
   packValue(&frame[3], ballDirection);
   packValue(&frame[5], ballStrength);
 
+  if (ballStrength && predictionValid) {
+    packValue(&frame[7], predictedDirection);
+    frame[9] = 1;
+  }
+
   frame[11] = frameCrc(frame);
 
   digitalWrite(RS485_DE_PIN, HIGH);
@@ -265,11 +319,14 @@ void calculateDirection() {
   }
 
   totalDetectRaw = total;
+  directionCoherence = vectorCoherencePermille(vectorX, vectorY, total);
 
   if (total < MIN_TOTAL_DETECT ||
       (vectorX == 0 && vectorY == 0)) {
     ballDirection = 0;
     ballStrength = 0;
+    predictionValid = false;
+    predictor.reset();
     return;
   }
 
@@ -298,6 +355,7 @@ void calculateDirection() {
   // Keep within MAIN's accepted range.
   ballStrength =
       uint16_t(min(total, uint32_t(1200)));
+  predictionValid = predictor.update(ballDirection, micros(), predictedDirection);
 }
 
 // ============================================================
@@ -306,44 +364,27 @@ void calculateDirection() {
 
 void printDebug() {
   if (!Serial) return;
-
-  Serial.print("IR DIR=");
-
-  if (ballStrength == 0) {
-    Serial.print("---");
+  static uint8_t phase = 0;
+  char line[96];
+  int length;
+  if (phase == 0) {
+    length = snprintf(line, sizeof(line), "IR DIR=%u PRED=%u VALID=%u STR=%u COH=%u TOTAL=%lu\n",
+        unsigned(ballDirection), unsigned(predictedDirection), unsigned(predictionValid),
+        unsigned(ballStrength), unsigned(directionCoherence), static_cast<unsigned long>(totalDetectRaw));
+  } else if (phase < 3) {
+    const uint8_t first = phase == 1 ? 0 : 6;
+    length = snprintf(line, sizeof(line), "IR COUNT%u=%u,%u,%u,%u,%u,%u\n", unsigned(first),
+        unsigned(detectCount[first]), unsigned(detectCount[first + 1]), unsigned(detectCount[first + 2]),
+        unsigned(detectCount[first + 3]), unsigned(detectCount[first + 4]), unsigned(detectCount[first + 5]));
   } else {
-    Serial.print(ballDirection);
+    length = snprintf(line, sizeof(line), "IR POLL=%lu REPLY=%lu CRC=%lu BAD=%lu\n",
+        static_cast<unsigned long>(pollCount), static_cast<unsigned long>(replyCount),
+        static_cast<unsigned long>(crcErrors), static_cast<unsigned long>(invalidFrames));
   }
-
-  Serial.print(" STR=");
-  Serial.print(ballStrength);
-
-  Serial.print(" TOTAL=");
-  Serial.print(totalDetectRaw);
-
-  Serial.print(" POLL=");
-  Serial.print(pollCount);
-
-  Serial.print(" REPLY=");
-  Serial.print(replyCount);
-
-  Serial.print(" CRC=");
-  Serial.print(crcErrors);
-
-  Serial.print(" BAD=");
-  Serial.print(invalidFrames);
-
-  Serial.print(" COUNT=");
-
-  for (uint8_t i = 0; i < SENSOR_COUNT; ++i) {
-    Serial.print(detectCount[i]);
-
-    if (i + 1 < SENSOR_COUNT) {
-      Serial.print(',');
-    }
+  if (length > 0 && length < int(sizeof(line)) && Serial.availableForWrite() >= length) {
+    Serial.write(reinterpret_cast<const uint8_t *>(line), size_t(length));
   }
-
-  Serial.println();
+  phase = (phase + 1) % 4;
 }
 
 // ============================================================

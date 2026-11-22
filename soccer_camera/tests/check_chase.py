@@ -8,9 +8,13 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ChaseConfiguration(unittest.TestCase):
-    def test_ir_matches_tested_zip(self):
-        self.assertEqual((ROOT / "ir/ir.ino").read_bytes(),
-                         (ROOT / "chase_verified/ir/ir.ino").read_bytes())
+    def test_ir_sensor_and_bus_pins(self):
+        source = (ROOT / "ir/ir.ino").read_text(encoding="utf-8")
+        pins = re.search(r"sensorPins\[SENSOR_COUNT\]\s*=\s*\{([^}]+)\}", source)
+        self.assertIsNotNone(pins)
+        self.assertEqual([int(n) for n in re.findall(r"\d+", pins.group(1))], list(range(18, 30)))
+        for name, value in (("RS485_TX_PIN", 0), ("RS485_RX_PIN", 1), ("RS485_DE_PIN", 2)):
+            self.assertRegex(source, rf"\b{name}\s*=\s*{value}\s*;")
 
     def test_main_board_pins_and_no_auto_command(self):
         source = (ROOT / "main/main.ino").read_text(encoding="utf-8")

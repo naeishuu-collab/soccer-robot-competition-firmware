@@ -54,4 +54,14 @@ int main() {
   assert(!validCameraFrame(frame));
   frame[6] = 0x21; frame[3] = 1; seal(frame);
   assert(!validCameraFrame(frame));
+  uint8_t reply[12] = {};
+  assert(chooseIrDirection(359, reply) == 359);
+  reply[7] = 0; reply[8] = 1; reply[9] = 1;
+  assert(chooseIrDirection(359, reply) == 1);
+  reply[8] = 10;
+  assert(chooseIrDirection(359, reply) == 359);
+  reply[9] = 0;
+  assert(chooseIrDirection(359, reply) == 359);
+  reply[9] = 1; reply[7] = 3; reply[8] = 0;
+  assert(chooseIrDirection(359, reply) == 359);
 }
