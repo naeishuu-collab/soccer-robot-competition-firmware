@@ -1,6 +1,10 @@
 
 #include <Arduino.h>
 #include <math.h>
+#include <string.h>
+#include <hardware/gpio.h>
+#include "ir_low_window.h"
+#include "ir_match.h"
 
 // 暫定: 共通モジュールは4スケッチに複製している。差が出たら同期を自動化する。
 // BEGIN INTEGRATED COMMON CODE
@@ -2108,6 +2112,7 @@ SharedBusIrRequestParser irRequestParser;
 uint32_t rs485TxErrors = 0;
 
 #define SAMPLE_TIME_US 2000
+#define CALIBRATION_BATCH_US 50000
 #define SENSOR_HISTORY_SIZE 16
 #define RELATIVE_SIGNAL_HISTORY_SIZE 16
 #define PRED_HISTORY_SIZE 6
@@ -2137,6 +2142,12 @@ const int16_t sinTable[SENSOR_COUNT] = {
 // ========================================
 
 uint16_t detectCount[SENSOR_COUNT] = {};
+uint16_t calibrationWindowCounts[SENSOR_COUNT] = {};
+uint16_t calibrationWindowReads = 0;
+uint16_t calibrationBatchCounts[SENSOR_COUNT] = {};
+uint16_t calibrationBatchReads = 0;
+uint32_t calibrationBatchStartUs = 0;
+int calibratedDirection = -1;
 
 uint16_t sensorHistory
   [SENSOR_COUNT][SENSOR_HISTORY_SIZE] = {};
@@ -2232,27 +2243,59 @@ void resetTracking() {
 // センサーサンプリング
 // ========================================
 
+uint16_t activeSensorMask(uint32_t gpioLevels) {
+  return static_cast<uint16_t>((~gpioLevels >> 18) & 0x0FFFu);
+}
+
 void sampleSensors() {
   for (int i = 0; i < SENSOR_COUNT; i++) {
     detectCount[i] = 0;
   }
+  memset(calibrationWindowCounts, 0, sizeof(calibrationWindowCounts));
+  calibrationWindowReads = 0;
 
   uint32_t start = micros();
   uint32_t sweeps = 0;
+  IrLowWindow calibrationWindow;
 
-  while ((uint32_t)(micros() - start) < SAMPLE_TIME_US) {
+  for (;;) {
+    const uint32_t elapsed = static_cast<uint32_t>(micros() - start);
+    if (elapsed >= SAMPLE_TIME_US) break;
+
+    // 全センサーを同時刻に読む。校正窓もZIPの10 us LOW確認方式に合わせる。
+    const uint16_t active = activeSensorMask(gpio_get_all());
     for (int i = 0; i < SENSOR_COUNT; i++) {
-      if (digitalRead(sensorPins[i]) == LOW) {
+      if (active & (1u << i)) {
         if (detectCount[i] < 65535) {
           detectCount[i]++;
         }
       }
     }
+    calibrationWindow.sample(elapsed, active, calibrationWindowCounts, calibrationWindowReads);
     ++sweeps;
   }
 
+  calibrationWindow.finish(calibrationWindowCounts);
   sensorSampleWindowUs = micros() - start;
   sensorSampleSweeps = sweeps;
+}
+
+void updateCalibrationProfile() {
+  if (!calibrationBatchStartUs) calibrationBatchStartUs = micros();
+
+  for (uint8_t i = 0; i < SENSOR_COUNT; ++i) {
+    const uint32_t sum = static_cast<uint32_t>(calibrationBatchCounts[i]) + calibrationWindowCounts[i];
+    calibrationBatchCounts[i] = static_cast<uint16_t>(min(sum, 65535u));
+  }
+  calibrationBatchReads = static_cast<uint16_t>(min(
+    static_cast<uint32_t>(calibrationBatchReads) + calibrationWindowReads, 65535u));
+
+  const uint32_t nowUs = micros();
+  if (static_cast<uint32_t>(nowUs - calibrationBatchStartUs) < CALIBRATION_BATCH_US) return;
+  calibratedDirection = matchIr(calibrationBatchCounts, calibrationBatchReads);
+  memset(calibrationBatchCounts, 0, sizeof(calibrationBatchCounts));
+  calibrationBatchReads = 0;
+  calibrationBatchStartUs = nowUs;
 }
 
 // ========================================
@@ -2290,7 +2333,11 @@ void calculateDirection() {
   totalDetect = estimate.totalWeight;
   directionCoherence = estimate.coherence;
   ballFound = estimate.valid;
-  if (ballFound) rawAngle = normalizeDegrees(360.0f - estimate.angleDeg);
+  if (ballFound) {
+    rawAngle = calibratedDirection >= 0
+      ? static_cast<float>(calibratedDirection)
+      : normalizeDegrees(360.0f - estimate.angleDeg);
+  }
 }
 
 // ========================================
@@ -2437,11 +2484,16 @@ void calculatePrediction() {
 
 void updateIR() {
   sampleSensors();
+  updateCalibrationProfile();
   lastSensorSampleMs = millis();
   sensorSampled = true;
   calculateDirection();
 
   if (!ballFound) {
+    calibratedDirection = -1;
+    memset(calibrationBatchCounts, 0, sizeof(calibrationBatchCounts));
+    calibrationBatchReads = 0;
+    calibrationBatchStartUs = micros();
     resetTracking();
     return;
   }
@@ -2617,6 +2669,8 @@ void printDebug() {
     Serial.print(rawAngle, 1);
     Serial.print(" PRED_ANG:");
     Serial.print(predictedAngle, 1);
+    Serial.print(" CAL_DIR:");
+    Serial.print(calibratedDirection);
     Serial.print(" TOTAL:");
     Serial.println(totalDetect);
   }
@@ -2649,6 +2703,7 @@ void printDebug() {
 
 void setup() {
   Serial.begin(115200);
+  calibrationBatchStartUs = micros();
 
   for (int i = 0; i < SENSOR_COUNT; i++) {
     pinMode(sensorPins[i], INPUT);
