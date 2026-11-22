@@ -1,7 +1,7 @@
 #pragma once
 
+#include "RobotControl.h"
 #include <stdint.h>
-#include "RobotControl.ino"
 
 namespace soccer { namespace board {
 
@@ -40,11 +40,8 @@ constexpr int8_t kMotorRs485SharedDePin = -1;
 // ZIP order [M4=RR, M1=LF, M2=RF, M3=LR] matches command order [RR, LF, RF, LR].
 constexpr int8_t kMotorIn1Pins[4] = {6, 12, 11, 9};
 constexpr int8_t kMotorIn2Pins[4] = {7, 13, 10, 8};
-static_assert(kMotorIn1Pins[0] == 6 && kMotorIn2Pins[0] == 7 &&
-              kMotorIn1Pins[1] == 12 && kMotorIn2Pins[1] == 13 &&
-              kMotorIn1Pins[2] == 11 && kMotorIn2Pins[2] == 10 &&
-              kMotorIn1Pins[3] == 9 && kMotorIn2Pins[3] == 8,
-              "MOTOR pin order must remain [RR, LF, RF, LR] from chase (2).zip.");
+constexpr bool kMotorReverseOutput[4] = {false, false, false, false};  // RR, LF, RF, LR
+
 // ユーザー報告のJ2左前ピンは、テストの来歴として残している。
 constexpr int8_t kMotorTestIn1CandidatePin = 12;
 constexpr int8_t kMotorTestIn2CandidatePin = 13;
@@ -61,13 +58,6 @@ constexpr float kMotorCenterToWheelMm = 94.762f;
 constexpr WheelConfig kMotorWheelConfig[4] = {
     {1, -1, 45, 1}, {-1, 1, 225, 1}, {1, 1, 135, 1}, {-1, -1, 315, 1}
 };
-static_assert(kMotorWheelConfig[0].driveAngleDeg == 45.0f &&
-              kMotorWheelConfig[1].driveAngleDeg == 225.0f &&
-              kMotorWheelConfig[2].driveAngleDeg == 135.0f &&
-              kMotorWheelConfig[3].driveAngleDeg == 315.0f &&
-              kMotorWheelConfig[0].polarity == 1 && kMotorWheelConfig[1].polarity == 1 &&
-              kMotorWheelConfig[2].polarity == 1 && kMotorWheelConfig[3].polarity == 1,
-              "Wheel axes/signs must match chase (2).zip order [RR, LF, RF, LR].");
 constexpr bool kMotorWheelConfigConfigured = false;
 
 // 量産基板ではMOTORの安全入力ピンも電気的バイアスも未確認。

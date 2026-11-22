@@ -12,6 +12,8 @@ constexpr uint8_t kMaxFrame = 2 + 4 + kMaxPayload + 2;
 constexpr uint32_t kFrameTimeoutMs = 8;
 constexpr uint8_t kMotorCommandStart = 0xAA;
 constexpr uint8_t kMotorCommandWheelCount = 4;
+constexpr uint8_t kMotorMotionCommand = 0x05;
+constexpr int16_t kMotorMotionScale = 16384;
 constexpr uint8_t kMotorCommandEnd = 0x55;
 constexpr uint8_t kMotorCommandFrameSize = 12;
 constexpr int16_t kMotorBrakeCommand = 256;
@@ -128,6 +130,8 @@ private:
     ParserStats stats_{};
 };
 
+enum AutoMode : uint8_t { kAutoStopped = 0, kAutoWheelLift = 1, kAutoFloor = 2, kAutoIrTest = 3 };
+
 enum MotorFrameStatus : uint8_t { kMotorFramePending, kMotorFrameReady, kMotorFrameInvalid };
 
 struct MotorFrameStats {
@@ -237,13 +241,28 @@ inline MainConsoleCommand parseMainConsoleCommand(const char* line,
     return (*p == 'S' || *p == 's') ? kConsoleStop : kConsoleManualMotor;
 }
 
-inline uint8_t encodeMotorCommandFrame(const int16_t values[kMotorCommandWheelCount],
-                                       uint8_t* out, uint8_t capacity) {
-    if (!values || !out || capacity < kMotorCommandFrameSize) return 0;
-    out[0] = kMotorCommandStart;
-    out[1] = kMotorCommandWheelCount;
+inline bool validMotorFrameValues(uint8_t type, const int16_t values[kMotorCommandWheelCount]) {
+    if (type == kMotorMotionCommand) {
+        for (uint8_t i = 0; i < 3; ++i) {
+            if (values[i] < -kMotorMotionScale || values[i] > kMotorMotionScale) return false;
+        }
+        return values[3] >= kAutoWheelLift && values[3] <= kAutoIrTest;
+    }
+    if (type != kMotorCommandWheelCount) return false;
     for (uint8_t i = 0; i < kMotorCommandWheelCount; ++i) {
-        if (!validMotorCommandValue(values[i])) return 0;
+        if (!validMotorCommandValue(values[i])) return false;
+    }
+    return true;
+}
+
+inline uint8_t encodeMotorCommandFrame(const int16_t values[kMotorCommandWheelCount],
+                                       uint8_t* out, uint8_t capacity,
+                                       uint8_t type = kMotorCommandWheelCount) {
+    if (!values || !out || capacity < kMotorCommandFrameSize ||
+        !validMotorFrameValues(type, values)) return 0;
+    out[0] = kMotorCommandStart;
+    out[1] = type;
+    for (uint8_t i = 0; i < kMotorCommandWheelCount; ++i) {
         const uint16_t raw = static_cast<uint16_t>(values[i]);
         out[2 + 2 * i] = static_cast<uint8_t>(raw);
         out[3 + 2 * i] = static_cast<uint8_t>(raw >> 8);
@@ -258,7 +277,7 @@ inline uint8_t encodeMotorCommandFrame(const int16_t values[kMotorCommandWheelCo
 class MotorCommandFrameParser {
 public:
     MotorFrameStatus feed(uint8_t byte, uint32_t nowMs,
-                          int16_t values[kMotorCommandWheelCount]) {
+                          int16_t values[kMotorCommandWheelCount], uint8_t& type) {
         if (!values) {
             ++stats_.formatErrors;
             reset();
@@ -299,7 +318,7 @@ public:
             if (byte == kMotorCommandStart) buffer_[used_++] = byte;
             return kMotorFramePending;
         }
-        if (used_ == 1 && byte != kMotorCommandWheelCount) {
+        if (used_ == 1 && byte != kMotorCommandWheelCount && byte != kMotorMotionCommand) {
             if (byte > 1) {
                 ++stats_.formatErrors;
                 reset();
@@ -340,12 +359,13 @@ public:
                                  (static_cast<uint16_t>(buffer_[3 + 2 * i]) << 8);
             decoded[i] = raw < 0x8000 ? static_cast<int16_t>(raw)
                                       : static_cast<int16_t>(static_cast<int32_t>(raw) - 65536);
-            if (!validMotorCommandValue(decoded[i])) {
-                ++stats_.rangeErrors;
-                reset();
-                return kMotorFrameInvalid;
-            }
         }
+        if (!validMotorFrameValues(buffer_[1], decoded)) {
+            ++stats_.rangeErrors;
+            reset();
+            return kMotorFrameInvalid;
+        }
+        type = buffer_[1];
         for (uint8_t i = 0; i < kMotorCommandWheelCount; ++i) values[i] = decoded[i];
         reset();
         return kMotorFrameReady;
@@ -392,7 +412,7 @@ public:
         }
         if (motorStartPending_) {
             motorStartPending_ = false;
-            if (byte == kMotorCommandWheelCount) {
+            if (byte == kMotorCommandWheelCount || byte == kMotorMotionCommand) {
                 motorSkipRemaining_ = kMotorCommandFrameSize - 2;
                 return false;
             }
