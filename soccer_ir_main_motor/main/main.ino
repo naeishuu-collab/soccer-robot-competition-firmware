@@ -1591,7 +1591,7 @@ constexpr int8_t kMotorRs485TxPin = 0;
 constexpr int8_t kMotorRs485RxPin = 1;
 constexpr int8_t kMotorRs485DePin = 2;
 constexpr int8_t kMotorRs485SharedDePin = -1;
-// ユーザー報告の動作MOTORテストコードに一致 (RP2354B + TB67H450 x4)。
+// chase ZIPのMOTORチャンネル順を採用。GPIOと型番はこのGPIOプロファイルに従う。
 constexpr int8_t kMotorIn1Pins[4] = {6, 12, 11, 8};
 constexpr int8_t kMotorIn2Pins[4] = {7, 13, 10, 9};
 // ユーザー報告のJ2左前ピンは、テストの来歴として残している。
@@ -1606,9 +1606,9 @@ constexpr uint64_t kMotorSafetyReservedPinMask = kMotorPwmPinMask | kMotorReserv
 
 constexpr float kMotorWheelRadiusMm = 30.0f;
 constexpr float kMotorCenterToWheelMm = 94.762f;
-// chase.zipの移動方向とPWM極性。統合後の回転方向は実機で要確認。
+// chase ZIPの45,225,315,135度（前から時計回り）をMotion座標へ変換。極性・実進行方向は未確認。
 constexpr WheelConfig kMotorWheelConfig[4] = {
-    {1, -1, 45, 1}, {-1, -1, 315, 1}, {-1, 1, 225, 1}, {1, 1, 135, 1}
+    {1, -1, 45, 1}, {-1, 1, 225, 1}, {1, 1, 135, 1}, {-1, -1, 315, 1}
 };
 constexpr bool kMotorWheelConfigConfigured = false;
 
@@ -1671,7 +1671,7 @@ constexpr const int16_t (&kLineSensorAngleCdeg)[24] = kLineAngleTable.v;
 constexpr bool kLineAnglesConfigured = false; // 前方オフセット実測後に kLineFrontOffsetConfigured と同時に true にする。
 constexpr uint32_t kLineSensorAngleValidMask = kLineSensorEnabledMask;
 static_assert(!kLineAnglesConfigured || kLineFrontOffsetConfigured, "LINE angles need a measured front offset");
-constexpr bool kMotorHardwareConfigured = true; // ユーザーが4輪で動作確認したTB67H450ピン配置を使用。
+constexpr bool kMotorHardwareConfigured = true; // 動作報告あり。車体の進行方向は未確認。
 constexpr bool kCompetitionArmed = false;
 constexpr uint32_t kMotorPwmFrequencyHz = kTb67h450PwmFrequencyHz;
 // コンパイル時の設定ゲート。実行時のセンサー鮮度と物理ARM/非常停止の経路も別途必要。
@@ -2146,32 +2146,10 @@ uint32_t maxControlUs = 0;
 uint16_t controlOverruns = 0;
 uint8_t diagnosticPhase = 0;
 
-// OpenMVナビゲーション回線: UART2 / 9600bps (TX=GP2, RX=GP3)。
-// 0x20 [vx][vy][turn][kick][mode][xor] - 符号付き値/100 を Motion の -1..1 に変換。
-constexpr int8_t kOpenMvTxPin = 2;
-constexpr int8_t kOpenMvRxPin = 3;
-constexpr uint32_t kOpenMvBaud = 9600;
-constexpr uint8_t kOpenMvNavHeader = 0x20;
-constexpr uint8_t kOpenMvNavFrameSize = 8;
-constexpr uint32_t kOpenMvFreshTimeoutMs = 500;
-uint8_t openMvFrame[kOpenMvNavFrameSize]{};
-uint8_t openMvUsed = 0;
-Motion openMvMotion{};
-bool openMvKick = false;
-bool openMvVirtualLine = false;
-bool openMvPenaltyArea = false;
-bool openMvBallSeen = false;
-bool openMvBallAligned = false;
-bool openMvBallInKicker = false;
-bool openMvFresh = false;
-uint8_t openMvMode = 0;
 // 方位ホールド探索時の旋回量制限（クラス外からも使うためグローバルに定義）。
 static float constrainValue(float v, float lo, float hi) {
     return v < lo ? lo : (v > hi ? hi : v);
 }
-
-// キック判断はカメラに委ねるため、MAIN側のIR／ジャイロ方位ゲートは使用しない。
-uint32_t lastOpenMvMs = 0;
 
 Adafruit_BNO055 bnoSensor(kBnoSensorId, board::kBnoAddress, &Wire);
 struct ArduinoBnoDevices {
@@ -2619,51 +2597,6 @@ void printLineLevels() {
     for (uint8_t i = 0; i < 24; ++i) Serial.print((lineData.rawLevels & (1u << i)) ? 'H' : 'L');
 }
 
-// OpenMVから想定形式の0x20ナビゲーションパケットを受信（LINEは使わない）。
-void receiveOpenMv(uint32_t nowMs) {
-    while (Serial2.available()) {
-        const int readValue = Serial2.read();
-        if (readValue < 0) break;
-        const uint8_t byte = static_cast<uint8_t>(readValue);
-        if (openMvUsed == 0) {
-            if (byte == kOpenMvNavHeader) openMvFrame[openMvUsed++] = byte;
-            continue;
-        }
-        openMvFrame[openMvUsed++] = byte;
-        if (openMvUsed < kOpenMvNavFrameSize) continue;
-        uint8_t checksum = 0;
-        for (uint8_t i = 0; i < kOpenMvNavFrameSize - 1; ++i) checksum ^= openMvFrame[i];
-        openMvUsed = 0;
-        if (checksum != openMvFrame[kOpenMvNavFrameSize - 1]) continue;
-        const auto decode = [](uint8_t raw) {
-            return static_cast<float>(static_cast<int8_t>(raw)) / 100.0f;
-        };
-        const Motion motion{decode(openMvFrame[1]), decode(openMvFrame[2]), decode(openMvFrame[3])};
-        if (!validMotion(motion)) continue;
-        openMvMotion = motion;
-        openMvMode = openMvFrame[5];
-        openMvKick = (openMvFrame[4] & 0x01) != 0;
-        openMvVirtualLine = (openMvFrame[6] & 0x01) != 0;
-        openMvPenaltyArea = (openMvFrame[6] & 0x02) != 0;
-        openMvBallSeen = (openMvFrame[6] & 0x04) != 0;
-        openMvBallAligned = (openMvFrame[6] & 0x08) != 0;
-        openMvBallInKicker = (openMvFrame[6] & 0x10) != 0;
-        openMvFresh = true;
-        lastOpenMvMs = nowMs;
-    }
-    if (openMvFresh && static_cast<uint32_t>(nowMs - lastOpenMvMs) > kOpenMvFreshTimeoutMs) {
-        openMvFresh = false;
-        openMvMotion = {};
-        openMvKick = false;
-        openMvMode = 0;
-        openMvVirtualLine = false;
-        openMvPenaltyArea = false;
-        openMvBallSeen = false;
-        openMvBallAligned = false;
-        openMvBallInKicker = false;
-    }
-}
-
 void setup() {
     Serial.begin(115200);
     if (Serial && Serial.availableForWrite() >= 48)
@@ -2684,9 +2617,6 @@ void setup() {
     Serial1.setTX(board::kMainRs485TxPin);
     Serial1.setRX(board::kMainRs485RxPin);
     Serial1.begin(115200);
-    Serial2.setTX(kOpenMvTxPin);
-    Serial2.setRX(kOpenMvRxPin);
-    Serial2.begin(kOpenMvBaud);
 
     Wire.setSDA(board::kBnoSdaPin);
     Wire.setSCL(board::kBnoSclPin);
@@ -2700,7 +2630,6 @@ void loop() {
     pollMotorConsole(nowMs);
     pollSharedBus(nowMs);
     pollHeading(nowMs);
-    receiveOpenMv(nowMs);
     if (static_cast<uint32_t>(nowUs - lastControlUs) < kControlPeriodUs) return;
 
     const uint32_t startedUs = micros();

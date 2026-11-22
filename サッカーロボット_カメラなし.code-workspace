@@ -1,28 +1,8 @@
 {
   "folders": [
     {
-      "path": "soccer_ir_main_motor/main",
-      "name": "01 MAIN - 司令"
-    },
-    {
-      "path": "soccer_ir_main_motor/ir",
-      "name": "02 IR - ボール検出"
-    },
-    {
-      "path": "soccer_ir_main_motor/motor",
-      "name": "03 MOTOR - 駆動"
-    },
-    {
-      "path": "soccer_ir_main_motor/line",
-      "name": "04 LINE - 現在未使用"
-    },
-    {
-      "path": "soccer_ir_main_motor/common/src",
-      "name": "05 共通コード"
-    },
-    {
-      "path": "soccer_ir_main_motor/config",
-      "name": "06 設定"
+      "path": "soccer_ir_main_motor",
+      "name": "サッカーロボット（カメラなし）"
     }
   ],
   "settings": {
@@ -33,7 +13,8 @@
     },
     "search.exclude": {
       "**/build": true,
-      "**/__pycache__": true
+      "**/__pycache__": true,
+      "**/*.pyc": true
     }
   },
   "tasks": {
@@ -47,7 +28,7 @@
           "compile",
           "--fqbn",
           "rp2040:rp2040:generic_rp2350:variantchip=RP2350B,flash=2097152_0",
-          "${workspaceFolder:01 MAIN - 司令}"
+          "${workspaceFolder}/main"
         ],
         "problemMatcher": [
           "$gcc"
@@ -61,7 +42,7 @@
           "compile",
           "--fqbn",
           "rp2040:rp2040:generic_rp2350:variantchip=RP2350A,flash=2097152_0",
-          "${workspaceFolder:02 IR - ボール検出}"
+          "${workspaceFolder}/ir"
         ],
         "problemMatcher": [
           "$gcc"
@@ -75,7 +56,7 @@
           "compile",
           "--fqbn",
           "rp2040:rp2040:generic_rp2350:variantchip=RP2350A,flash=2097152_0",
-          "${workspaceFolder:03 MOTOR - 駆動}"
+          "${workspaceFolder}/motor"
         ],
         "problemMatcher": [
           "$gcc"
@@ -89,14 +70,28 @@
           "compile",
           "--fqbn",
           "rp2040:rp2040:generic_rp2350:variantchip=RP2350B,flash=2097152_0",
-          "${workspaceFolder:04 LINE - 現在未使用}"
+          "${workspaceFolder}/line"
         ],
         "problemMatcher": [
           "$gcc"
         ]
       },
       {
-        "label": "コンパイル: ４基板すべて",
+        "label": "コンパイル: 基本3基板 (MAIN + IR + MOTOR)",
+        "dependsOn": [
+          "コンパイル: MAIN (RP2350B)",
+          "コンパイル: IR (RP2350A)",
+          "コンパイル: MOTOR (RP2350A)"
+        ],
+        "dependsOrder": "sequence",
+        "group": {
+          "kind": "build",
+          "isDefault": true
+        },
+        "problemMatcher": []
+      },
+      {
+        "label": "コンパイル: 4基板すべて (LINE含む)",
         "dependsOn": [
           "コンパイル: MAIN (RP2350B)",
           "コンパイル: IR (RP2350A)",
@@ -104,10 +99,20 @@
           "コンパイル: LINE (RP2350B)"
         ],
         "dependsOrder": "sequence",
-        "group": {
-          "kind": "build",
-          "isDefault": true
-        },
+        "problemMatcher": []
+      },
+      {
+        "label": "テスト: 方位・車輪設定",
+        "type": "process",
+        "command": "python",
+        "args": [
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "${workspaceFolder}/tests",
+          "-v"
+        ],
         "problemMatcher": []
       }
     ]

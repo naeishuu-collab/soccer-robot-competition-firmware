@@ -1,13 +1,13 @@
 {
   "custom_rp2354": {
-    "status": "MOTOR parent-board routing and RP2354A come from the supplied final ZIP; user-reported TB67H450 drivers differ from its child-board circuit. Physical continuity and RS485 operation remain unverified.",
+    "status": "MAIN RP2354B follows the attached chase/main_chase sketch header; IR and MOTOR are RP2354A, LINE is RP2354B per this profile. The attached ZIP supplied IR angle and wheel-axis references, while this project keeps its own RS485 protocol. Board markings, GPIO continuity, RS485 wiring, wheel polarity, and actual chassis travel direction are not fully verified.",
     "chip_gpio_count": {
       "RP2354A": 30,
       "RP2354B": 48
     },
     "nodes": {
       "MAIN": {
-        "chip": "RP2354A",
+        "chip": "RP2354B",
         "UART_TX": 0,
         "UART_RX": 1,
         "RS485_DE": 8,

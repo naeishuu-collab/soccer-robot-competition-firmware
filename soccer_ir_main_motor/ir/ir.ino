@@ -1591,7 +1591,7 @@ constexpr int8_t kMotorRs485TxPin = 0;
 constexpr int8_t kMotorRs485RxPin = 1;
 constexpr int8_t kMotorRs485DePin = 2;
 constexpr int8_t kMotorRs485SharedDePin = -1;
-// ユーザー報告の動作MOTORテストコードに一致 (RP2354B + TB67H450 x4)。
+// chase ZIPのMOTORチャンネル順を採用。GPIOと型番はこのGPIOプロファイルに従う。
 constexpr int8_t kMotorIn1Pins[4] = {6, 12, 11, 8};
 constexpr int8_t kMotorIn2Pins[4] = {7, 13, 10, 9};
 // ユーザー報告のJ2左前ピンは、テストの来歴として残している。
@@ -1606,9 +1606,9 @@ constexpr uint64_t kMotorSafetyReservedPinMask = kMotorPwmPinMask | kMotorReserv
 
 constexpr float kMotorWheelRadiusMm = 30.0f;
 constexpr float kMotorCenterToWheelMm = 94.762f;
-// chase.zipの移動方向とPWM極性。統合後の回転方向は実機で要確認。
+// chase ZIPの45,225,315,135度（前から時計回り）をMotion座標へ変換。極性・実進行方向は未確認。
 constexpr WheelConfig kMotorWheelConfig[4] = {
-    {1, -1, 45, 1}, {-1, -1, 315, 1}, {-1, 1, 225, 1}, {1, 1, 135, 1}
+    {1, -1, 45, 1}, {-1, 1, 225, 1}, {1, 1, 135, 1}, {-1, -1, 315, 1}
 };
 constexpr bool kMotorWheelConfigConfigured = false;
 
@@ -1671,7 +1671,7 @@ constexpr const int16_t (&kLineSensorAngleCdeg)[24] = kLineAngleTable.v;
 constexpr bool kLineAnglesConfigured = false; // 前方オフセット実測後に kLineFrontOffsetConfigured と同時に true にする。
 constexpr uint32_t kLineSensorAngleValidMask = kLineSensorEnabledMask;
 static_assert(!kLineAnglesConfigured || kLineFrontOffsetConfigured, "LINE angles need a measured front offset");
-constexpr bool kMotorHardwareConfigured = true; // ユーザーが4輪で動作確認したTB67H450ピン配置を使用。
+constexpr bool kMotorHardwareConfigured = true; // 動作報告あり。車体の進行方向は未確認。
 constexpr bool kCompetitionArmed = false;
 constexpr uint32_t kMotorPwmFrequencyHz = kTb67h450PwmFrequencyHz;
 // コンパイル時の設定ゲート。実行時のセンサー鮮度と物理ARM/非常停止の経路も別途必要。
@@ -2238,12 +2238,13 @@ void updateSensorHistory() {
 // ========================================
 
 void calculateDirection() {
+  // chase ZIPのセンサー表は反時計回り。通信方位は正面0度・時計回りに変換する。
   const IrDirectionEstimate estimate = estimateIrDirection(
     detectCount, cosTable, sinTable, SENSOR_COUNT, MIN_TOTAL_DETECT);
   totalDetect = estimate.totalWeight;
   directionCoherence = estimate.coherence;
   ballFound = estimate.valid;
-  if (ballFound) rawAngle = normalizeDegrees(estimate.angleDeg + 180.0f);
+  if (ballFound) rawAngle = normalizeDegrees(360.0f - estimate.angleDeg);
 }
 
 // ========================================
