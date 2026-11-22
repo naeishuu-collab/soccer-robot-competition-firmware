@@ -1618,9 +1618,14 @@ constexpr int8_t kMotorRs485TxPin = 0;
 constexpr int8_t kMotorRs485RxPin = 1;
 constexpr int8_t kMotorRs485DePin = 2;
 constexpr int8_t kMotorRs485SharedDePin = -1;
-// chase ZIPのMOTORチャンネル順を採用。GPIOと型番はこのGPIOプロファイルに従う。
-constexpr int8_t kMotorIn1Pins[4] = {9, 12, 10, 6};
-constexpr int8_t kMotorIn2Pins[4] = {8, 13, 11, 7};
+// ZIP order [M4=RR, M1=LF, M2=RF, M3=LR] matches command order [RR, LF, RF, LR].
+constexpr int8_t kMotorIn1Pins[4] = {6, 12, 11, 9};
+constexpr int8_t kMotorIn2Pins[4] = {7, 13, 10, 8};
+static_assert(kMotorIn1Pins[0] == 6 && kMotorIn2Pins[0] == 7 &&
+              kMotorIn1Pins[1] == 12 && kMotorIn2Pins[1] == 13 &&
+              kMotorIn1Pins[2] == 11 && kMotorIn2Pins[2] == 10 &&
+              kMotorIn1Pins[3] == 9 && kMotorIn2Pins[3] == 8,
+              "MOTOR pin order must remain [RR, LF, RF, LR] from chase (2).zip.");
 // ユーザー報告のJ2左前ピンは、テストの来歴として残している。
 constexpr int8_t kMotorTestIn1CandidatePin = 12;
 constexpr int8_t kMotorTestIn2CandidatePin = 13;
@@ -1633,10 +1638,17 @@ constexpr uint64_t kMotorSafetyReservedPinMask = kMotorPwmPinMask | kMotorReserv
 
 constexpr float kMotorWheelRadiusMm = 30.0f;
 constexpr float kMotorCenterToWheelMm = 94.762f;
-// chase ZIPの45,225,315,135度（前から時計回り）をMotion座標へ変換。極性・実進行方向は未確認。
+// ZIP wheel degrees [45,225,315,135] converted to Motion x=right/y=forward; ZIP wheel signs are +1.
 constexpr WheelConfig kMotorWheelConfig[4] = {
     {1, -1, 45, 1}, {-1, 1, 225, 1}, {1, 1, 135, 1}, {-1, -1, 315, 1}
 };
+static_assert(kMotorWheelConfig[0].driveAngleDeg == 45.0f &&
+              kMotorWheelConfig[1].driveAngleDeg == 225.0f &&
+              kMotorWheelConfig[2].driveAngleDeg == 135.0f &&
+              kMotorWheelConfig[3].driveAngleDeg == 315.0f &&
+              kMotorWheelConfig[0].polarity == 1 && kMotorWheelConfig[1].polarity == 1 &&
+              kMotorWheelConfig[2].polarity == 1 && kMotorWheelConfig[3].polarity == 1,
+              "Wheel axes/signs must match chase (2).zip order [RR, LF, RF, LR].");
 constexpr bool kMotorWheelConfigConfigured = false;
 
 // 量産基板ではMOTORの安全入力ピンも電気的バイアスも未確認。
@@ -2088,8 +2100,11 @@ constexpr Tb67h450ChannelConfig kDriver[4] = {
     {board::kMotorIn1Pins[2], board::kMotorIn2Pins[2], kTb67h450MaxDuty},
     {board::kMotorIn1Pins[3], board::kMotorIn2Pins[3], kTb67h450MaxDuty}
 };
-// chase MOTORの順番は [0]=RR, [1]=LF, [2]=RF, [3]=LR。RRだけ実出力極性を反転する。
+// [RR, LF, RF, LR]. Keep ZIP kinematics signs separate; apply the latest RR hardware inversion once here.
 constexpr int8_t kMotorOutputPolarity[4] = {-1, 1, 1, 1};
+static_assert(kMotorOutputPolarity[0] == -1 && kMotorOutputPolarity[1] == 1 &&
+              kMotorOutputPolarity[2] == 1 && kMotorOutputPolarity[3] == 1,
+              "RR output inversion/order must remain [-1, +1, +1, +1].");
 constexpr bool kDriverTableConfigured = true;
 int16_t motorCurrent[4]{};
 uint32_t reverseUntil[4]{};
