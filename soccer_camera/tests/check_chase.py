@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the deployed IR/MOTOR sketches and board pin assignments against the tested ZIP."""
+"""Check the deployed IR and MAIN pin assignments and command policy."""
 from pathlib import Path
 import re
 import unittest
@@ -22,6 +22,8 @@ class ChaseConfiguration(unittest.TestCase):
             self.assertRegex(source, rf"\b{name}\s*=\s*{value}\s*;")
         self.assertRegex(source, r"Serial2\.setTX\(2\)")
         self.assertRegex(source, r"Serial2\.setRX\(3\)")
+        self.assertRegex(source, r"IR_FRONT_DEGREES\s*=\s*0\s*;")
+        self.assertRegex(source, r"IR_ANGLE_SIGN\s*=\s*1\s*;")
         self.assertNotRegex(source, re.compile(r"\bAUTO\b|\bARM\b", re.I))
 
     def test_kicker_output_is_initialized_low(self):

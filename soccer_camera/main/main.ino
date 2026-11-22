@@ -85,7 +85,7 @@ constexpr uint32_t RX_INTERBYTE_TIMEOUT_US = 3000;
 
 // Timing
 constexpr uint32_t IR_REPLY_WINDOW_US = 10000;
-constexpr uint32_t CONTROL_CYCLE_US = 20000;
+constexpr uint32_t CONTROL_CYCLE_US = 10000;
 
 // Movement
 constexpr uint16_t MOVE_POWER = 180;

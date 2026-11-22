@@ -2,6 +2,7 @@
 #include <Arduino.h>
 #include <math.h>
 #include <string.h>
+#include <hardware/gpio.h>
 
 // ============================================================
 // IR SUB - RP2354A
@@ -21,6 +22,7 @@
 // IR sensors
 // ------------------------------------------------------------
 
+// BEGIN HOST-TESTED IR SENSOR CONFIG
 constexpr uint8_t SENSOR_COUNT = 12;
 
 const uint8_t sensorPins[SENSOR_COUNT] = {
@@ -53,6 +55,11 @@ constexpr uint16_t MIN_TOTAL_DETECT = 1;
 // Physical sensor arrangement is counterclockwise.
 // Convert calculated angle to clockwise.
 constexpr bool REVERSE_DIRECTION = true;
+
+inline uint16_t activeSensorMask(uint32_t pins) {
+  return uint16_t((~pins >> 18) & 0xFFFu);
+}
+// END HOST-TESTED IR SENSOR CONFIG
 
 // BEGIN HOST-TESTED IR PREDICTION
 inline bool irSampleFresh(bool sampled, uint32_t nowUs, uint32_t sampleUs) {
@@ -300,11 +307,9 @@ void sampleSensors() {
 
   while ((uint32_t)(micros() - startTime) <
          SAMPLE_TIME_US) {
-    for (uint8_t i = 0; i < SENSOR_COUNT; ++i) {
-      if (digitalRead(sensorPins[i]) == LOW) {
-        ++detectCount[i];
-      }
-    }
+    const uint16_t active = activeSensorMask(gpio_get_all());
+    for (uint8_t i = 0; i < SENSOR_COUNT; ++i)
+      if ((active & (1u << i)) && detectCount[i] != UINT16_MAX) ++detectCount[i];
   }
   lastSampleUs = micros();
 }
@@ -313,14 +318,18 @@ void sampleSensors() {
 // Calculate direction
 // ============================================================
 
+// BEGIN HOST-TESTED IR DIRECTION
 void calculateDirection() {
   int32_t vectorX = 0;
   int32_t vectorY = 0;
 
   uint32_t total = 0;
+  uint8_t activeSensors = 0;
 
   for (uint8_t i = 0; i < SENSOR_COUNT; ++i) {
     const uint16_t count = detectCount[i];
+
+    if (count) ++activeSensors;
 
     total += count;
 
@@ -365,8 +374,9 @@ void calculateDirection() {
   // Keep within MAIN's accepted range.
   ballStrength =
       uint16_t(min(total, uint32_t(1200)));
-  predictionValid = predictor.update(ballDirection, micros(), predictedDirection);
+  predictionValid = predictor.update(ballDirection, micros(), predictedDirection) && activeSensors > 1;
 }
+// END HOST-TESTED IR DIRECTION
 
 // ============================================================
 // USB debug
