@@ -1619,8 +1619,8 @@ constexpr int8_t kMotorRs485RxPin = 1;
 constexpr int8_t kMotorRs485DePin = 2;
 constexpr int8_t kMotorRs485SharedDePin = -1;
 // chase ZIPのMOTORチャンネル順を採用。GPIOと型番はこのGPIOプロファイルに従う。
-constexpr int8_t kMotorIn1Pins[4] = {6, 12, 11, 8};
-constexpr int8_t kMotorIn2Pins[4] = {7, 13, 10, 9};
+constexpr int8_t kMotorIn1Pins[4] = {9, 12, 10, 6};
+constexpr int8_t kMotorIn2Pins[4] = {8, 13, 11, 7};
 // ユーザー報告のJ2左前ピンは、テストの来歴として残している。
 constexpr int8_t kMotorTestIn1CandidatePin = 12;
 constexpr int8_t kMotorTestIn2CandidatePin = 13;
