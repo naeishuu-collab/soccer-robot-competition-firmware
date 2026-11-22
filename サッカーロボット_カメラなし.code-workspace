@@ -1,0 +1,115 @@
+{
+  "folders": [
+    {
+      "path": "soccer_ir_main_motor/main",
+      "name": "01 MAIN - 司令"
+    },
+    {
+      "path": "soccer_ir_main_motor/ir",
+      "name": "02 IR - ボール検出"
+    },
+    {
+      "path": "soccer_ir_main_motor/motor",
+      "name": "03 MOTOR - 駆動"
+    },
+    {
+      "path": "soccer_ir_main_motor/line",
+      "name": "04 LINE - 現在未使用"
+    },
+    {
+      "path": "soccer_ir_main_motor/common/src",
+      "name": "05 共通コード"
+    },
+    {
+      "path": "soccer_ir_main_motor/config",
+      "name": "06 設定"
+    }
+  ],
+  "settings": {
+    "files.exclude": {
+      "**/build": true,
+      "**/__pycache__": true,
+      "**/*.pyc": true
+    },
+    "search.exclude": {
+      "**/build": true,
+      "**/__pycache__": true
+    }
+  },
+  "tasks": {
+    "version": "2.0.0",
+    "tasks": [
+      {
+        "label": "コンパイル: MAIN (RP2350B)",
+        "type": "process",
+        "command": "arduino-cli",
+        "args": [
+          "compile",
+          "--fqbn",
+          "rp2040:rp2040:generic_rp2350:variantchip=RP2350B,flash=2097152_0",
+          "${workspaceFolder:01 MAIN - 司令}"
+        ],
+        "problemMatcher": [
+          "$gcc"
+        ]
+      },
+      {
+        "label": "コンパイル: IR (RP2350A)",
+        "type": "process",
+        "command": "arduino-cli",
+        "args": [
+          "compile",
+          "--fqbn",
+          "rp2040:rp2040:generic_rp2350:variantchip=RP2350A,flash=2097152_0",
+          "${workspaceFolder:02 IR - ボール検出}"
+        ],
+        "problemMatcher": [
+          "$gcc"
+        ]
+      },
+      {
+        "label": "コンパイル: MOTOR (RP2350A)",
+        "type": "process",
+        "command": "arduino-cli",
+        "args": [
+          "compile",
+          "--fqbn",
+          "rp2040:rp2040:generic_rp2350:variantchip=RP2350A,flash=2097152_0",
+          "${workspaceFolder:03 MOTOR - 駆動}"
+        ],
+        "problemMatcher": [
+          "$gcc"
+        ]
+      },
+      {
+        "label": "コンパイル: LINE (RP2350B)",
+        "type": "process",
+        "command": "arduino-cli",
+        "args": [
+          "compile",
+          "--fqbn",
+          "rp2040:rp2040:generic_rp2350:variantchip=RP2350B,flash=2097152_0",
+          "${workspaceFolder:04 LINE - 現在未使用}"
+        ],
+        "problemMatcher": [
+          "$gcc"
+        ]
+      },
+      {
+        "label": "コンパイル: ４基板すべて",
+        "dependsOn": [
+          "コンパイル: MAIN (RP2350B)",
+          "コンパイル: IR (RP2350A)",
+          "コンパイル: MOTOR (RP2350A)",
+          "コンパイル: LINE (RP2350B)"
+        ],
+        "dependsOrder": "sequence",
+        "group": {
+          "kind": "build",
+          "isDefault": true
+        },
+        "problemMatcher": []
+      }
+    ]
+  }
+}
