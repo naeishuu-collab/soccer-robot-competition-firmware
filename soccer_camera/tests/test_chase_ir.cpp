@@ -4,6 +4,11 @@
 #include "chase_ir_prediction.h"
 
 int main() {
+  assert(!irSampleFresh(false, 0, 0));
+  assert(irSampleFresh(true, 25000, 0));
+  assert(!irSampleFresh(true, 25001, 0));
+  assert(irSampleFresh(true, 14999, UINT32_MAX - 10000));
+  assert(!irSampleFresh(true, 15000, UINT32_MAX - 10000));
   assert(vectorCoherencePermille(0, 0, 0) == 0);
   assert(vectorCoherencePermille(1000, 0, 1) == 1000);
   assert(vectorCoherencePermille(0, 0, 2) == 0);
@@ -32,4 +37,11 @@ int main() {
   assert(!p.update(6, 60000, prediction));
   assert(!p.update(7, 70000, prediction));
   assert(!p.update(360, 80000, prediction) && p.count == 0);
+  for (unsigned start = 0; start < 360; ++start) {
+    p.reset();
+    assert(!p.update(uint16_t(start), 10000, prediction));
+    assert(!p.update(uint16_t((start + 1) % 360), 15000, prediction));
+    assert(p.update(uint16_t((start + 2) % 360), 20000, prediction));
+    assert(prediction == (start + 4) % 360);
+  }
 }

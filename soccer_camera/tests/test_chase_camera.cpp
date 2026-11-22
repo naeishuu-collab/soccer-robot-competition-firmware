@@ -64,4 +64,13 @@ int main() {
   assert(chooseIrDirection(359, reply) == 359);
   reply[9] = 1; reply[7] = 3; reply[8] = 0;
   assert(chooseIrDirection(359, reply) == 359);
+  for (int measured = 0; measured < 360; ++measured) {
+    for (int offset = -10; offset <= 10; ++offset) {
+      const int predicted = (measured + offset + 360) % 360;
+      reply[7] = uint8_t(predicted >> 7); reply[8] = uint8_t(predicted & 127);
+      reply[9] = 1; reply[10] = 0;
+      assert(chooseIrDirection(uint16_t(measured), reply) ==
+             (offset >= -5 && offset <= 5 ? predicted : measured));
+    }
+  }
 }

@@ -55,6 +55,10 @@ constexpr uint16_t MIN_TOTAL_DETECT = 1;
 constexpr bool REVERSE_DIRECTION = true;
 
 // BEGIN HOST-TESTED IR PREDICTION
+inline bool irSampleFresh(bool sampled, uint32_t nowUs, uint32_t sampleUs) {
+  return sampled && uint32_t(nowUs - sampleUs) <= 25000;
+}
+
 inline uint16_t vectorCoherencePermille(int32_t x, int32_t y, uint32_t total) {
   if (!total) return 0;
   const float ratio = sqrtf(float(x) * float(x) + float(y) * float(y)) / float(total);
@@ -139,6 +143,8 @@ uint16_t ballStrength = 0;
 uint16_t predictedDirection = 0;
 bool predictionValid = false;
 IrPredictor predictor;
+uint32_t lastSampleUs = 0;
+bool hasSample = false;
 
 uint32_t totalDetectRaw = 0;
 uint16_t directionCoherence = 0;
@@ -238,6 +244,7 @@ void packValue(uint8_t *destination,
 // Send BALL response
 // ============================================================
 
+// BEGIN HOST-TESTED BALL RESPONSE
 void sendBall(uint8_t sequence) {
   uint8_t frame[FRAME_SIZE] = {};
 
@@ -245,10 +252,11 @@ void sendBall(uint8_t sequence) {
   frame[1] = MSG_BALL;
   frame[2] = sequence & 0x7F;
 
-  packValue(&frame[3], ballDirection);
-  packValue(&frame[5], ballStrength);
+  const bool fresh = irSampleFresh(hasSample, micros(), lastSampleUs);
+  packValue(&frame[3], fresh ? ballDirection : 0);
+  packValue(&frame[5], fresh ? ballStrength : 0);
 
-  if (ballStrength && predictionValid) {
+  if (fresh && ballStrength && predictionValid) {
     packValue(&frame[7], predictedDirection);
     frame[9] = 1;
   }
@@ -266,6 +274,7 @@ void sendBall(uint8_t sequence) {
 
   ++replyCount;
 }
+// END HOST-TESTED BALL RESPONSE
 
 // ============================================================
 // Handle received frames
@@ -297,6 +306,7 @@ void sampleSensors() {
       }
     }
   }
+  lastSampleUs = micros();
 }
 
 // ============================================================
@@ -434,6 +444,7 @@ void loop() {
 
   // Calculate ball direction.
   calculateDirection();
+  hasSample = true;
 
   // Respond to POLL received during sampling.
   while (receiver.receive(frame)) {

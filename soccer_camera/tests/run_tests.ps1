@@ -21,10 +21,12 @@ $Matches[1] | Set-Content -Encoding UTF8 (Join-Path $build 'chase_drive_handler.
 $irSource = Get-Content -Raw -Encoding UTF8 (Join-Path $root 'ir/ir.ino')
 if ($irSource -notmatch '(?s)// BEGIN HOST-TESTED IR PREDICTION\s*(.*?)\s*// END HOST-TESTED IR PREDICTION') { throw 'Missing testable IR prediction' }
 $Matches[1] | Set-Content -Encoding UTF8 (Join-Path $build 'chase_ir_prediction.h')
+if ($irSource -notmatch '(?s)// BEGIN HOST-TESTED BALL RESPONSE\s*(.*?)\s*// END HOST-TESTED BALL RESPONSE') { throw 'Missing testable BALL response' }
+$Matches[1] | Set-Content -Encoding UTF8 (Join-Path $build 'chase_ir_response.h')
 
 "Host tests started at $([DateTime]::UtcNow.ToString('yyyy-MM-dd HH:mm:ss')) UTC" | Set-Content -Encoding Unicode $results
 
-$sources = @('test_core.cpp', 'test_integration.cpp', 'test_chase_camera.cpp', 'test_chase_motor.cpp', 'test_chase_ir.cpp')
+$sources = @('test_core.cpp', 'test_integration.cpp', 'test_chase_camera.cpp', 'test_chase_motor.cpp', 'test_chase_ir.cpp', 'test_chase_ir_response.cpp')
 $gpp = Get-Command g++ -ErrorAction SilentlyContinue
 $cl = Get-Command cl -ErrorAction SilentlyContinue
 
