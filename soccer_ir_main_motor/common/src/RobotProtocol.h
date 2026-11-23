@@ -191,7 +191,9 @@ enum MainConsoleCommand : uint8_t {
     kConsoleAutoWheelLift,
     kConsoleAutoFloor,
     kConsoleAutoIrTest,
-    kConsoleArmIrTest
+    kConsoleArmIrTest,
+    kConsoleDiagnosticsOn,
+    kConsoleDiagnosticsOff
 };
 
 inline void skipConsoleSpace(const char*& p) {
@@ -235,6 +237,17 @@ inline MainConsoleCommand parseMainConsoleCommand(const char* line,
         if (*p) return kConsoleInvalid;
         for (uint8_t i = 0; i < kMotorCommandWheelCount; ++i) values[i] = 0;
         return kConsoleArmIrTest;
+    }
+    if (consumeConsoleWord(p, "DIAG")) {
+        skipConsoleSpace(p);
+        MainConsoleCommand command;
+        if (consumeConsoleWord(p, "ON")) command = kConsoleDiagnosticsOn;
+        else if (consumeConsoleWord(p, "OFF")) command = kConsoleDiagnosticsOff;
+        else return kConsoleInvalid;
+        skipConsoleSpace(p);
+        if (*p) return kConsoleInvalid;
+        for (uint8_t i = 0; i < kMotorCommandWheelCount; ++i) values[i] = 0;
+        return command;
     }
     if (!parseMotorConsoleCommand(line, values)) return kConsoleInvalid;
     skipConsoleSpace(p);

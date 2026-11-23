@@ -19,9 +19,14 @@ constexpr uint32_t kHeadingPollPeriodMs = 20;
 constexpr uint32_t kHeadingFreshTimeoutMs = 100;
 constexpr uint32_t kDiagnosticPeriodMs = 250;
 constexpr uint32_t kMotorCommandPeriodMs = 40;
+constexpr uint32_t kMotorConsoleTimeoutMs = 300;
+// 旋回符号が実測未確認の間は補正を無効にする。実測後のみ -1 または +1。
+constexpr int8_t kBnoHeadingTurnSign = 0;
 constexpr float kIrTestDriveMagnitude = 0.50f;
 constexpr float kHeadingTurnGain = 0.012f;
 constexpr float kHeadingTurnLimit = 0.35f;
+static_assert(kBnoHeadingTurnSign >= -1 && kBnoHeadingTurnSign <= 1,
+              "BNO turn sign must be -1, 0 (unverified), or +1");
 
 // IR: サンプリング窓、検出しきい値、予測。
 constexpr uint32_t SAMPLE_TIME_US = 2000;

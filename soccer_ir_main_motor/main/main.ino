@@ -33,7 +33,7 @@ enum BusPhase : uint8_t { kBusIdle, kBusNeedLine };
 BusPhase busPhase = kBusIdle;
 MainController controller;
 HeadingController irTestHeadingController;
-AutoMode autoMode = kAutoIrTest;
+AutoMode autoMode = kAutoStopped;
 IrTestController irTestController;
 KickerController kickerController;
 ManualArmLatch operatorArm;
@@ -63,8 +63,10 @@ int16_t motorConsoleValues[kMotorCommandWheelCount]{};
 char motorConsoleLine[kMotorConsoleLineCapacity]{};
 uint8_t motorConsoleLineLength = 0;
 bool motorConsoleOverflow = false;
-bool bootAutoArmNoticeSent = false;
 bool motorConsoleCommandSeen = false;
+bool motorConsoleManualActive = false;
+uint32_t motorConsoleCommandStartedMs = 0;
+bool diagnosticsEnabled = true;
 uint32_t lastIrPacketMs = 0;
 uint32_t irRequests = 0;
 uint32_t irMatchedResponses = 0;
@@ -123,6 +125,11 @@ void stopIrTest() {
     motorMotion = {};
     motorEnabled = false;
     motorStopPending = true;
+}
+
+void clearMotorConsole() {
+    motorConsoleCommandSeen = motorConsoleManualActive = false;
+    for (int16_t& value : motorConsoleValues) value = 0;
 }
 
 constexpr int8_t kMainSafetyPins[3] = {board::kMainArmPin, board::kMainEStopPin,
@@ -424,14 +431,11 @@ bool sendMotorCommand(uint32_t nowMs, uint32_t nowUs) {
 }
 
 void pollMotorConsole(uint32_t nowMs) {
-    // USB入力が来たら起動時の自動ARMを取り消す。
-    if (Serial.available() > 0) {
-        irTestController.disableAutoStart();
-        if (!bootAutoArmNoticeSent) {
-            bootAutoArmNoticeSent = true;
-            if (Serial && Serial.availableForWrite() >= 64)
-                Serial.println("USB input received; boot AUTO IR auto-arm disabled");
-        }
+    if (motorConsoleManualActive &&
+        static_cast<uint32_t>(nowMs - motorConsoleCommandStartedMs) >= kMotorConsoleTimeoutMs) {
+        clearMotorConsole();
+        motorStopPending = true;
+        if (Serial && Serial.availableForWrite() >= 32) Serial.println("MOTOR_CMD_TIMEOUT; stopped");
     }
     while (Serial.available()) {
         const int readValue = Serial.read();
@@ -451,16 +455,19 @@ void pollMotorConsole(uint32_t nowMs) {
         const MainConsoleCommand command = motorConsoleOverflow
                                                ? kConsoleInvalid
                                                : parseMainConsoleCommand(motorConsoleLine, parsed);
-        // 起動時の自動ARMは、上の最初の1バイト受信時点で既に解除されている。
-        if (command == kConsoleAutoWheelLift || command == kConsoleAutoFloor ||
-            command == kConsoleAutoIrTest) {
+        if (command == kConsoleDiagnosticsOn || command == kConsoleDiagnosticsOff) {
+            diagnosticsEnabled = command == kConsoleDiagnosticsOn;
+            if (Serial && Serial.availableForWrite() >= 32)
+                Serial.println(diagnosticsEnabled ? "DIAG ON" : "DIAG OFF");
+        } else if (command == kConsoleAutoWheelLift || command == kConsoleAutoFloor ||
+                   command == kConsoleAutoIrTest) {
             autoMode = autoModeForCommand(command, board::kAutoWheelLiftReady, board::kAutoFloorReady);
             irTestController.disarm();
-            motorConsoleCommandSeen = false;
+            irTestHeadingController.reset();
+            clearMotorConsole();
             motorMotion = {};
             motorEnabled = false;
             motorStopPending = true;
-            for (int16_t& value : motorConsoleValues) value = 0;
             if (Serial && Serial.availableForWrite() >= 72) {
                 if (autoMode == kAutoStopped) Serial.println("AUTO_BLOCKED; hardware configuration gate closed");
                 else if (autoMode == kAutoIrTest) Serial.println("AUTO IR selected; stopped; send ARM IR with a fresh ball");
@@ -470,34 +477,49 @@ void pollMotorConsole(uint32_t nowMs) {
         } else if (command == kConsoleArmIrTest) {
             const bool irFresh = irPacketSeen &&
                                  static_cast<uint32_t>(nowMs - lastIrPacketMs) <= kIrFreshTimeoutMs;
-            if (autoMode == kAutoIrTest &&
+            const bool headingFresh = headingSample.headingValid &&
+                                      static_cast<uint32_t>(nowMs - lastHeadingSampleMs) <=
+                                          kHeadingFreshTimeoutMs;
+            if (autoMode == kAutoIrTest && headingFresh &&
                 irTestController.arm(irFresh, irBallFound, irDirection)) {
+                irTestHeadingController.reset();
+                clearMotorConsole();
                 if (Serial && Serial.availableForWrite() >= 72)
-                    Serial.println("IR TEST armed; 4-way translation; IR loss -> stop; S stops");
+                    Serial.println(kBnoHeadingTurnSign == 0
+                        ? "IR TEST armed; heading correction OFF; 4-way translation; S stops"
+                        : "IR TEST armed; heading correction ON; 4-way translation; S stops");
             } else {
-                autoMode = kAutoStopped;
-                motorConsoleCommandSeen = false;
-                for (int16_t& value : motorConsoleValues) value = 0;
+                clearMotorConsole();
                 stopIrTest();
-                if (Serial && Serial.availableForWrite() >= 64)
-                    Serial.println("IR TEST blocked; select AUTO IR and wait for a fresh ball");
+                irTestHeadingController.reset();
+                if (Serial && Serial.availableForWrite() >= 96) {
+                    if (autoMode != kAutoIrTest) Serial.println("IR TEST blocked; send AUTO IR first");
+                    else if (!headingFresh) Serial.println("IR TEST blocked; BNO heading is not fresh");
+                    else Serial.println("IR TEST blocked; wait for a fresh detected ball");
+                }
             }
         } else {
             autoMode = kAutoStopped;
             irTestController.disarm();
+            irTestHeadingController.reset();
             if (command == kConsoleManualMotor || command == kConsoleStop) {
                 for (uint8_t i = 0; i < kMotorCommandWheelCount; ++i) motorConsoleValues[i] = parsed[i];
+                motorConsoleManualActive = command == kConsoleManualMotor;
+                if (motorConsoleManualActive) motorConsoleCommandStartedMs = nowMs;
             } else {
-                for (int16_t& value : motorConsoleValues) value = 0;
+                clearMotorConsole();
                 if (Serial && Serial.availableForWrite() >= 32) Serial.println("MOTOR_CMD_INVALID; stopped");
             }
             motorConsoleCommandSeen = true;
             if (command == kConsoleStop || command == kConsoleInvalid) motorStopPending = true;
+            if (command == kConsoleStop && Serial && Serial.availableForWrite() >= 24)
+                Serial.println("STOP; zero command queued");
+            else if (command == kConsoleManualMotor && Serial && Serial.availableForWrite() >= 32)
+                Serial.println("MANUAL MOTOR; 300 ms timeout; S stops");
         }
         motorConsoleLineLength = 0;
         motorConsoleOverflow = false;
     }
-    // ソフトウェアコマンドタイムアウトは意図的に削除。手動停止は'S'のみ。
 }
 
 void pollSharedBus(uint32_t nowMs) {
@@ -545,15 +567,14 @@ void printLineLevels() {
 
 void setup() {
     Serial.begin(115200);
-    irTestController.enableAutoStart();
     if (Serial && Serial.availableForWrite() >= 48)
-        Serial.println("BOOT MAIN; AUTO IR waits for first fresh ball; diagnostics active");
+        Serial.println("BOOT MAIN; stopped; select AUTO IR then ARM IR; diagnostics active");
     if (Serial && Serial.availableForWrite() >= 64)
         Serial.println("USB: AUTO [FLOAT] / AUTO FLOOR / AUTO IR; ARM IR; S=stop; M <v0> <v1> <v2> <v3>");
     if (Serial && Serial.availableForWrite() >= 64)
-        Serial.println("MOTOR M range -255..255, 256=brake; no command timeout (S / power switch only)");
+        Serial.println("MOTOR M range -255..255, 256=brake; 300 ms timeout; S=stop");
     if (Serial && Serial.availableForWrite() >= 96) {
-        Serial.print("BOOT AUTO IR: fresh ball starts; IR loss -> stop; PWM ");
+        Serial.print("AUTO IR requires ARM IR and fresh BNO/IR; PWM ");
         Serial.print(kIrTestPwmFloor);
         Serial.print("..");
         Serial.println(kIrTestPwmCap);
@@ -619,6 +640,13 @@ void loop() {
     input.headingTargetDeg = board::kAttackHeadingConfigured ? board::kAttackHeadingDeg : NAN;
     input.emergencyStop = emergencyStopActive;
 
+    if (autoMode == kAutoIrTest && irTestController.armed() && !input.headingValid) {
+        stopIrTest();
+        irTestHeadingController.reset();
+        if (Serial && Serial.availableForWrite() >= 72)
+            Serial.println("IR TEST disarmed; BNO lost/reinitializing; wait for recovery then ARM IR");
+    }
+
     const MainOutput output = controller.step(input);
     previousControllerState = output.state;
 
@@ -675,14 +703,14 @@ void loop() {
     motorEnabled = autoConfigured && input.armed && output.state != kFault;
     if (autoMode == kAutoIrTest) {
         // 台上試験専用の例外。LINEガードもMAIN非常停止も使わない。MOTORの電源遮断には手が届く状態を保つ。
-        irTestController.armOnFirstFreshBall(input.irFresh, input.ballFound, irDirection);
         motorEnabled = irTestController.update(input.irFresh, input.ballFound, irDirection, motorMotion);
         float headingTurn = 0.0f;
-        if (motorEnabled && (!input.headingValid ||
-            !irTestHeadingController.update(input.headingDeg, 0.0f, true, headingTurn))) {
+        if (motorEnabled && kBnoHeadingTurnSign != 0 &&
+            !irTestHeadingController.update(input.headingDeg, 0.0f, true, headingTurn)) {
             motorEnabled = false;
         }
         if (motorEnabled) {
+            headingTurn *= kBnoHeadingTurnSign;
             const float relativeHeading = shortestAngleError(input.headingDeg, 0.0f);
             if ((relativeHeading >= 90.0f && headingTurn > 0.0f) ||
                 (relativeHeading <= -90.0f && headingTurn < 0.0f)) {
@@ -699,7 +727,7 @@ void loop() {
     const uint32_t elapsed = micros() - startedUs;
     if (elapsed > maxControlUs) maxControlUs = elapsed;
     if (elapsed > kControlPeriodUs) ++controlOverruns;
-    if (static_cast<uint32_t>(nowMs - lastDebugMs) >= kDiagnosticPeriodMs) {
+    if (diagnosticsEnabled && static_cast<uint32_t>(nowMs - lastDebugMs) >= kDiagnosticPeriodMs) {
         lastDebugMs = nowMs;
         if (Serial && Serial.availableForWrite() >= 240) {
             if (diagnosticPhase == 0) {
