@@ -33,7 +33,7 @@ enum BusPhase : uint8_t { kBusIdle, kBusNeedLine };
 BusPhase busPhase = kBusIdle;
 MainController controller;
 HeadingController irTestHeadingController;
-AutoMode autoMode = kAutoStopped;
+AutoMode autoMode = kAutoIrTest;
 IrTestController irTestController;
 KickerController kickerController;
 ManualArmLatch operatorArm;
@@ -462,7 +462,11 @@ void pollMotorConsole(uint32_t nowMs) {
         } else if (command == kConsoleAutoWheelLift || command == kConsoleAutoFloor ||
                    command == kConsoleAutoIrTest) {
             autoMode = autoModeForCommand(command, board::kAutoWheelLiftReady, board::kAutoFloorReady);
-            irTestController.disarm();
+            if (autoMode == kAutoIrTest) irTestController.enableAutoStart();
+            else {
+                irTestController.disableAutoStart();
+                irTestController.disarm();
+            }
             irTestHeadingController.reset();
             clearMotorConsole();
             motorMotion = {};
@@ -470,7 +474,7 @@ void pollMotorConsole(uint32_t nowMs) {
             motorStopPending = true;
             if (Serial && Serial.availableForWrite() >= 72) {
                 if (autoMode == kAutoStopped) Serial.println("AUTO_BLOCKED; hardware configuration gate closed");
-                else if (autoMode == kAutoIrTest) Serial.println("AUTO IR selected; stopped; send ARM IR with a fresh ball");
+                else if (autoMode == kAutoIrTest) Serial.println("AUTO IR selected; waiting for fresh BNO + ball");
                 else Serial.println(autoMode == kAutoFloor ? "AUTO FLOOR selected; physical ARM still required"
                                                            : "AUTO FLOAT selected; physical ARM still required");
             }
@@ -500,6 +504,7 @@ void pollMotorConsole(uint32_t nowMs) {
             }
         } else {
             autoMode = kAutoStopped;
+            irTestController.disableAutoStart();
             irTestController.disarm();
             irTestHeadingController.reset();
             if (command == kConsoleManualMotor || command == kConsoleStop) {
@@ -512,8 +517,8 @@ void pollMotorConsole(uint32_t nowMs) {
             }
             motorConsoleCommandSeen = true;
             if (command == kConsoleStop || command == kConsoleInvalid) motorStopPending = true;
-            if (command == kConsoleStop && Serial && Serial.availableForWrite() >= 24)
-                Serial.println("STOP; zero command queued");
+            if (command == kConsoleStop && Serial && Serial.availableForWrite() >= 32)
+                Serial.println("STOP; auto tracking off");
             else if (command == kConsoleManualMotor && Serial && Serial.availableForWrite() >= 32)
                 Serial.println("MANUAL MOTOR; 300 ms timeout; S stops");
         }
@@ -566,15 +571,16 @@ void printLineLevels() {
 }
 
 void setup() {
+    irTestController.enableAutoStart();
     Serial.begin(115200);
-    if (Serial && Serial.availableForWrite() >= 48)
-        Serial.println("BOOT MAIN; stopped; select AUTO IR then ARM IR; diagnostics active");
-    if (Serial && Serial.availableForWrite() >= 64)
-        Serial.println("USB: AUTO [FLOAT] / AUTO FLOOR / AUTO IR; ARM IR; S=stop; M <v0> <v1> <v2> <v3>");
+    if (Serial && Serial.availableForWrite() >= 80)
+        Serial.println("BOOT MAIN; auto IR waits for fresh BNO + ball; diagnostics active");
+    if (Serial && Serial.availableForWrite() >= 96)
+        Serial.println("USB: auto IR starts on fresh BNO + ball; S=stop; M <v0> <v1> <v2> <v3>");
     if (Serial && Serial.availableForWrite() >= 64)
         Serial.println("MOTOR M range -255..255, 256=brake; 300 ms timeout; S=stop");
     if (Serial && Serial.availableForWrite() >= 96) {
-        Serial.print("AUTO IR requires ARM IR and fresh BNO/IR; PWM ");
+        Serial.print("AUTO IR requires fresh BNO/IR; PWM ");
         Serial.print(kIrTestPwmFloor);
         Serial.print("..");
         Serial.println(kIrTestPwmCap);
@@ -642,9 +648,16 @@ void loop() {
 
     if (autoMode == kAutoIrTest && irTestController.armed() && !input.headingValid) {
         stopIrTest();
+        irTestController.enableAutoStart();
         irTestHeadingController.reset();
-        if (Serial && Serial.availableForWrite() >= 72)
-            Serial.println("IR TEST disarmed; BNO lost/reinitializing; wait for recovery then ARM IR");
+        if (Serial && Serial.availableForWrite() >= 96)
+            Serial.println("IR AUTO disarmed; BNO lost/reinitializing; wait for fresh BNO + IR ball");
+    }
+    if (autoMode == kAutoIrTest && input.headingValid &&
+        irTestController.armOnFirstFreshBall(input.irFresh, input.ballFound, irDirection)) {
+        irTestHeadingController.reset();
+        if (Serial && Serial.availableForWrite() >= 80)
+            Serial.println("IR AUTO armed; fresh BNO + detected ball; S stops");
     }
 
     const MainOutput output = controller.step(input);

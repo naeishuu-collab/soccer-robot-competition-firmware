@@ -78,14 +78,16 @@ def first_ramp_output(requested: int, floor: int, step: int) -> int:
 
 
 class DirectionMappingTests(unittest.TestCase):
-    def test_ir_test_requires_explicit_arm_without_marking_mapping_verified(self):
+    def test_ir_test_auto_arms_on_fresh_bno_and_ball(self):
         tuning = (COMMON / "RobotTuning.h").read_text(encoding="utf-8")
         control = (COMMON / "RobotControl.h").read_text(encoding="utf-8")
         main = (PROJECT / "main/main.ino").read_text(encoding="utf-8")
         board = (COMMON / "BoardConfig.h").read_text(encoding="utf-8")
+        setup = main.split("void setup()", 1)[1].split("void loop()", 1)[0]
         self.assertRegex(tuning, r"constexpr uint8_t kIrTestPwmCap = \d+;")
         self.assertRegex(tuning, r"constexpr uint8_t kIrTestPwmFloor = \d+;")
         self.assertIn("constexpr int8_t kBnoHeadingTurnSign = 0;", tuning)
+        self.assertIn("constexpr uint16_t kIrKickCloseSignal = 0;", tuning)
         self.assertIn("if (directionDeg < 45.0f || directionDeg >= 315.0f)", control)
         self.assertIn("else if (directionDeg < 135.0f)", control)
         self.assertIn("else if (directionDeg < 225.0f)", control)
@@ -93,10 +95,15 @@ class DirectionMappingTests(unittest.TestCase):
             "return cardinalMotionForBearing(static_cast<float>(directionDeg), kIrTestDriveMagnitude, motion);",
             control,
         )
-        self.assertIn("AutoMode autoMode = kAutoStopped;", main)
-        self.assertNotIn("irTestController.enableAutoStart()", main)
-        self.assertIn("autoMode == kAutoIrTest && headingFresh", main)
-        self.assertIn("irTestController.arm(irFresh, irBallFound, irDirection)", main)
+        self.assertIn("AutoMode autoMode = kAutoIrTest;", main)
+        self.assertIn("irTestController.enableAutoStart();", setup)
+        self.assertIn("if (autoMode == kAutoIrTest && input.headingValid &&", main)
+        self.assertIn("irTestController.armOnFirstFreshBall(input.irFresh, input.ballFound, irDirection)", main)
+        self.assertIn("if (!autoStartPending_ || !irFresh || !ballFound)", control)
+        self.assertIn("if (irFresh && ballFound && irTestMotionForBearing(directionDeg, motion))", control)
+        self.assertIn("if (autoMode == kAutoIrTest && irTestController.armed() && !input.headingValid)", main)
+        self.assertIn("autoMode = kAutoStopped;\n            irTestController.disableAutoStart();\n            irTestController.disarm();", main)
+        self.assertIn("if (autoMode == kAutoIrTest) irTestController.enableAutoStart();", main)
         self.assertIn("kMotorWheelConfigConfigured = false", board)
         self.assertIn("kCompetitionArmed = false", board)
         self.assertIn("scaleMotorCommandValuesToPeak(values, kIrTestPwmCap);", (PROJECT / "motor/motor.ino").read_text(encoding="utf-8"))
