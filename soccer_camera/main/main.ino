@@ -9,6 +9,8 @@ struct CameraState {
   uint8_t mode = 0;
   int8_t x = 0;
   int8_t y = 0;
+  uint8_t sectors = 0;
+  uint8_t sequence = 0;
   uint32_t receivedMs = 0;
   bool received = false;
 };
@@ -17,17 +19,24 @@ inline bool validCameraFrame(const uint8_t *f) {
   uint8_t crc = 0;
   for (uint8_t i = 0; i < 7; ++i) crc ^= f[i];
   if (f[0] != 0x20 || f[7] != crc) return false;
-  for (uint8_t i = 1; i <= 3; ++i)
-    if (f[i] > 100 && f[i] < 156) return false;
   const uint8_t mode = f[5];
-  if (mode > 4 || f[6] != (mode == 1 ? 0x21 : 0x20) || f[4] != (mode == 4)) return false;
-  if (mode == 1) return f[3] == 0;
-  if (mode == 3) return f[1] == 0 && f[2] == 0;
-  return f[1] == 0 && f[2] == 0 && f[3] == 0;
+  if (mode > 2 || f[6] != (mode == 1 ? 0x41 : 0x40)) return false;
+  if (mode == 0) return f[1] == 0 && f[2] == 0 && f[3] == 0;
+  if (!f[3]) return false;
+  if (mode == 2) return f[1] == 0 && f[2] == 0;
+  return abs(int(int8_t(f[1]))) <= 35 && abs(int(int8_t(f[2]))) <= 35 && (f[1] || f[2]);
+}
+
+inline bool cameraFresh(const CameraState &camera, uint32_t nowMs) {
+  return camera.received && uint32_t(nowMs - camera.receivedMs) <= 200;
 }
 
 inline bool cameraAllowsMotion(const CameraState &camera, uint32_t nowMs) {
-  return camera.received && uint32_t(nowMs - camera.receivedMs) <= 200 && camera.mode != 0;
+  return cameraFresh(camera, nowMs) && camera.mode != 0;
+}
+
+inline bool sectorClear(const CameraState &camera, uint16_t direction) {
+  return camera.sectors & (1u << (((direction + 22) / 45) % 8));
 }
 
 inline uint16_t cameraAvoidDirection(int8_t x, int8_t y) {
@@ -36,18 +45,38 @@ inline uint16_t cameraAvoidDirection(int8_t x, int8_t y) {
   return uint16_t(angle + 0.5f) % 360;
 }
 
-inline uint16_t chooseIrDirection(uint16_t measured, const uint8_t *frame) {
-  if (frame[9] != 1 || frame[10] != 0) return measured;
-  const uint16_t predicted = (uint16_t(frame[7]) << 7) | frame[8];
-  if (predicted >= 360) return measured;
-  int delta = int(predicted) - int(measured);
-  if (delta > 180) delta -= 360;
-  if (delta < -180) delta += 360;
-  return delta >= -5 && delta <= 5 ? predicted : measured;
-}
+// chase (3) reply: 0xAA, big-endian angle, big-endian count, 0x55.
+class IrReplyReceiver {
+public:
+  void reset() { used_ = 0; }
+
+  bool push(uint8_t byte, uint16_t &angle, uint16_t &strength) {
+    if (used_ == 0) {
+      if (byte == 0xAA) used_ = 1;
+      return false;
+    }
+    if (used_ <= sizeof(payload_)) {
+      payload_[used_++ - 1] = byte;
+      return false;
+    }
+
+    used_ = byte == 0xAA ? 1 : 0;
+    if (byte != 0x55) return false;
+
+    const uint16_t candidate = (uint16_t(payload_[0]) << 8) | payload_[1];
+    if (candidate >= 360) return false;
+    angle = candidate;
+    strength = (uint16_t(payload_[2]) << 8) | payload_[3];
+    return true;
+  }
+
+private:
+  uint8_t payload_[4] = {};
+  uint8_t used_ = 0;
+};
 
 inline void chooseChaseMotion(const CameraState &camera, uint32_t nowMs, bool ballFound,
-                              uint16_t ballDirection, uint16_t movePower,
+                              uint16_t ballDirection, uint16_t movePower, uint16_t avoidPower,
                               uint16_t &direction, uint16_t &power) {
   direction = 0;
   power = 0;
@@ -58,7 +87,7 @@ inline void chooseChaseMotion(const CameraState &camera, uint32_t nowMs, bool ba
   } else {
     direction = ballDirection;
   }
-  power = movePower;
+  if (sectorClear(camera, direction)) power = camera.mode == 1 ? avoidPower : movePower;
 }
 // END HOST-TESTED CAMERA LOGIC
 
@@ -77,26 +106,27 @@ constexpr uint32_t RS485_BAUD = 115200;
 constexpr uint8_t FRAME_START = 0xA5;
 constexpr uint8_t FRAME_SIZE = 12;
 
-constexpr uint8_t MSG_POLL = 1;
-constexpr uint8_t MSG_BALL = 2;
 constexpr uint8_t MSG_DRIVE = 3;
+constexpr uint8_t MSG_MOTOR_ENABLE = 4;
+constexpr uint8_t MSG_MOTOR_DISABLE = 5;
 
-constexpr uint32_t RX_INTERBYTE_TIMEOUT_US = 3000;
-
-// Timing
-constexpr uint32_t IR_REPLY_WINDOW_US = 10000;
-constexpr uint32_t CONTROL_CYCLE_US = 10000;
+// Match the timing of the field-tested IR poll.
+constexpr uint32_t IR_POLL_INTERVAL_MS = 30;
+constexpr uint32_t IR_REPLY_TIMEOUT_MS = 100;
 
 // Movement
-constexpr uint16_t MOVE_POWER = 180;
+// Initial commissioning limits. Verify that both settings move reliably on the floor.
+constexpr uint16_t MOVE_POWER = 160;
+constexpr uint16_t AVOID_POWER = 128;
 constexpr uint16_t MAX_POWER = 200;
 
-static_assert(MOVE_POWER <= MAX_POWER,
+static_assert(AVOID_POWER <= MOVE_POWER && MOVE_POWER <= MAX_POWER,
               "MOVE_POWER exceeds MAX_POWER");
 
 // IR orientation
 constexpr int16_t IR_FRONT_DEGREES = 0;
-constexpr int8_t IR_ANGLE_SIGN = 1;
+// The raw ZIP angle puts physical GPIO21 (left) at 90 degrees.
+constexpr int8_t IR_ANGLE_SIGN = -1;
 
 // ============================================================
 // CRC-7
@@ -117,71 +147,13 @@ uint8_t calculateCRC(const uint8_t *frame) {
   return crc;
 }
 
-// ============================================================
-// Frame receiver
-// ============================================================
-
-class FrameReceiver {
-public:
-  void reset() {
-    used_ = 0;
-
-    while (Serial1.available()) {
-      Serial1.read();
-    }
-  }
-
-  bool receive(uint8_t *output) {
-    while (Serial1.available()) {
-      const uint32_t now = micros();
-
-      if (used_ > 0 &&
-          now - lastByteUs_ > RX_INTERBYTE_TIMEOUT_US) {
-        used_ = 0;
-      }
-
-      const uint8_t value = Serial1.read();
-      lastByteUs_ = now;
-
-      if (value == FRAME_START) {
-        buffer_[0] = value;
-        used_ = 1;
-        continue;
-      }
-
-      if (value >= 0x80 || used_ == 0) {
-        used_ = 0;
-        continue;
-      }
-
-      buffer_[used_++] = value;
-
-      if (used_ == FRAME_SIZE) {
-        used_ = 0;
-
-        if (calculateCRC(buffer_) ==
-            buffer_[FRAME_SIZE - 1]) {
-          memcpy(output, buffer_, FRAME_SIZE);
-          return true;
-        }
-      }
-    }
-
-    return false;
-  }
-
-private:
-  uint8_t buffer_[FRAME_SIZE] = {};
-  uint8_t used_ = 0;
-  uint32_t lastByteUs_ = 0;
-};
-
-FrameReceiver receiver;
+IrReplyReceiver irReceiver;
 
 CameraState camera;
 uint8_t cameraFrame[8] = {};
 uint8_t cameraUsed = 0;
 uint32_t cameraLastByteMs = 0;
+bool cameraStopPending = false;
 
 void receiveCamera() {
   const uint32_t now = millis();
@@ -193,12 +165,17 @@ void receiveCamera() {
     cameraFrame[cameraUsed++] = byte;
     if (cameraUsed != sizeof(cameraFrame)) continue;
     if (validCameraFrame(cameraFrame)) {
-      camera.mode = cameraFrame[5];
+      cameraUsed = 0;
+      if (cameraFresh(camera, now) && cameraFrame[4] == camera.sequence) continue;
+      const uint8_t mode = cameraFrame[5];
+      if (mode == 0 || (mode == 1 && camera.mode != 1)) cameraStopPending = true;
+      camera.mode = mode;
       camera.x = int8_t(cameraFrame[1]);
       camera.y = int8_t(cameraFrame[2]);
+      camera.sectors = cameraFrame[3];
+      camera.sequence = cameraFrame[4];
       camera.receivedMs = now;
       camera.received = true;
-      cameraUsed = 0;
     } else {
       uint8_t next = 1;
       while (next < sizeof(cameraFrame) && cameraFrame[next] != 0x20) ++next;
@@ -217,21 +194,11 @@ void encodeValue(uint8_t *destination, uint16_t value) {
   destination[1] = value & 0x7F;
 }
 
-uint16_t decodeValue(const uint8_t *source) {
-  return (uint16_t(source[0]) << 7) | source[1];
-}
-
-// ============================================================
-// RS485 transmission
-// ============================================================
-
-void transmitFrame(uint8_t *frame) {
-  frame[FRAME_SIZE - 1] = calculateCRC(frame);
-
+void sendRs485(const uint8_t *data, uint8_t size) {
   digitalWrite(PIN_RS485_EN, HIGH);
   delayMicroseconds(20);
 
-  Serial1.write(frame, FRAME_SIZE);
+  Serial1.write(data, size);
   Serial1.flush();
 
   delayMicroseconds(20);
@@ -260,18 +227,17 @@ uint16_t convertDirection(uint16_t irAngle) {
 // DRIVE frame
 // ============================================================
 
-void createDriveFrame(uint8_t sequence,
-                      uint16_t direction,
-                      uint16_t power,
-                      uint8_t frame[]) {
-  memset(frame, 0, FRAME_SIZE);
-
+void sendMotorCommand(uint8_t type, uint8_t sequence, uint16_t direction,
+                      uint16_t power, bool avoid = false) {
+  uint8_t frame[FRAME_SIZE] = {};
   frame[0] = FRAME_START;
-  frame[1] = MSG_DRIVE;
+  frame[1] = type;
   frame[2] = sequence & 0x7F;
-
   encodeValue(&frame[3], direction);
   encodeValue(&frame[5], power);
+  frame[7] = power && avoid ? 1 : 0;
+  frame[FRAME_SIZE - 1] = calculateCRC(frame);
+  sendRs485(frame, sizeof(frame));
 }
 
 // ============================================================
@@ -294,8 +260,6 @@ void setup() {
   pinMode(11, OUTPUT);
 
   Serial.begin(115200);
-
-  receiver.reset();
 }
 
 // ============================================================
@@ -304,104 +268,113 @@ void setup() {
 
 void loop() {
   static uint8_t sequence = 0;
+  static uint32_t lastPollMs = 0;
   static uint32_t lastLogMs = 0;
+  static uint32_t lastIrReplyMs = 0;
+  static bool waitingForIr = false;
+  static bool irSeen = false;
+  static bool enabled = false;
+  static bool armRequested = false;
+  static bool disarmPending = true;
+  static bool startup = true;
+  static uint16_t lastDriveDirection = 0;
+  static uint16_t lastDrivePower = 0;
 
-  const uint32_t cycleStart = micros();
-
+  const bool cameraWasStale = !cameraFresh(camera, millis());
   receiveCamera();
+  const uint32_t now = millis();
+  // Accept only a single-letter USB command terminated by CR or LF.
+  static int consoleCommand = 0;
+  while (Serial.available()) {
+    const int byte = Serial.read();
+    if (byte != '\r' && byte != '\n') {
+      consoleCommand = consoleCommand ? -1 : byte;
+      continue;
+    }
+    if (consoleCommand == 'S' || consoleCommand == 's') {
+      enabled = false;
+      armRequested = false;
+      disarmPending = true;
+    } else if ((consoleCommand == 'A' || consoleCommand == 'a') && !disarmPending &&
+               !cameraWasStale && cameraAllowsMotion(camera, now) && irSeen &&
+               now - lastIrReplyMs < IR_REPLY_TIMEOUT_MS) {
+      armRequested = true;
+    }
+    consoleCommand = 0;
+  }
 
-  sequence = (sequence + 1) & 0x7F;
-
-  // 1. POLL IR
-  uint8_t poll[FRAME_SIZE] = {};
-
-  poll[0] = FRAME_START;
-  poll[1] = MSG_POLL;
-  poll[2] = sequence;
-
-  receiver.reset();
-  transmitFrame(poll);
-
-  // 2. Receive BALL
-  const uint32_t replyStart = micros();
-
-  bool received = false;
-  uint16_t angle = 0;
+  uint16_t rawAngle = 0;
   uint16_t strength = 0;
-
-  uint8_t reply[FRAME_SIZE];
-
-  while (micros() - replyStart < IR_REPLY_WINDOW_US) {
-    if (!receiver.receive(reply)) {
-      continue;
+  bool received = false;
+  const bool replyExpired = waitingForIr && now - lastPollMs >= IR_REPLY_TIMEOUT_MS;
+  while (Serial1.available()) {
+    const uint8_t byte = Serial1.read();
+    if (waitingForIr && !replyExpired && irReceiver.push(byte, rawAngle, strength)) {
+      received = true;
+      break;
     }
-
-    if (reply[1] != MSG_BALL ||
-        reply[2] != sequence) {
-      continue;
-    }
-
-    const uint16_t candidateAngle =
-        decodeValue(&reply[3]);
-
-    const uint16_t candidateStrength =
-        decodeValue(&reply[5]);
-
-    if (candidateAngle >= 360 ||
-        candidateStrength > 1200) {
-      continue;
-    }
-
-    received = true;
-    angle = chooseIrDirection(candidateAngle, reply);
-    strength = candidateStrength;
-    // Allow the IR transceiver to release the shared RS485 bus.
-    delayMicroseconds(40);
-    break;
   }
 
-  // 3. Decide movement direction and power
-  uint16_t direction = 0;
-  uint16_t power = 0;
-
-  receiveCamera();
-  chooseChaseMotion(camera, millis(), received && strength > 0, convertDirection(angle),
-                    MOVE_POWER, direction, power);
-
-  // 4. Send direction/power to MD
-  uint8_t drive[FRAME_SIZE];
-
-  createDriveFrame(
-    sequence,
-    direction,
-    power,
-    drive
-  );
-
-  transmitFrame(drive);
-
-  // 5. Debug
-  const uint32_t nowMs = millis();
-
-  if (nowMs - lastLogMs >= 250 &&
-      Serial &&
-      Serial.availableForWrite() >= 64) {
-    lastLogMs = nowMs;
-
-    Serial.printf(
-      "IR=%s angle=%u strength=%u "
-      "DIR=%u POWER=%u\n",
-      !received ? "timeout" :
-      strength > 0 ? "ball" : "none",
-      unsigned(angle),
-      unsigned(strength),
-      unsigned(direction),
-      unsigned(power)
-    );
+  if (received) {
+    lastIrReplyMs = now;
+    irSeen = true;
+    waitingForIr = false;
+    delayMicroseconds(50);  // Let the IR transceiver release the shared bus.
+  } else if (replyExpired) {
+    irSeen = false;
+    waitingForIr = false;
   }
 
-  // 6. Maintain cycle
-  while (micros() - cycleStart < CONTROL_CYCLE_US) {
-    delayMicroseconds(50);
+  if ((enabled || armRequested) && (cameraWasStale || !cameraFresh(camera, now) || replyExpired)) {
+    enabled = false;
+    armRequested = false;
+    disarmPending = true;
+  }
+  if (!cameraAllowsMotion(camera, now)) armRequested = false;
+  if (lastDrivePower && !sectorClear(camera, lastDriveDirection)) cameraStopPending = true;
+
+  // Never transmit during the IR reply window. Stop takes priority as soon as the bus is available.
+  if (waitingForIr || (startup && now < IR_POLL_INTERVAL_MS)) return;
+  startup = false;
+  if (disarmPending) {
+    sendMotorCommand(MSG_MOTOR_DISABLE, sequence++, 0, 0);
+    disarmPending = false;
+    cameraStopPending = false;
+    lastDrivePower = 0;
+  } else if (cameraStopPending && lastDrivePower) {
+    sendMotorCommand(MSG_DRIVE, sequence++, 0, 0);
+    cameraStopPending = false;
+    lastDrivePower = 0;
+  } else if (armRequested) {
+    sendMotorCommand(MSG_MOTOR_ENABLE, sequence++, 0, 0);
+    armRequested = false;
+    enabled = true;
+    lastDrivePower = 0;
+  } else if (received) {
+    uint16_t direction = 0;
+    uint16_t power = 0;
+    if (enabled) {
+      chooseChaseMotion(camera, now, strength > 0, convertDirection(rawAngle),
+                        MOVE_POWER, AVOID_POWER, direction, power);
+    }
+    sendMotorCommand(MSG_DRIVE, sequence++, direction, power, camera.mode == 1);
+    lastDriveDirection = direction;
+    lastDrivePower = power;
+
+    if (now - lastLogMs >= 250 && Serial && Serial.availableForWrite() >= 110) {
+      lastLogMs = now;
+      Serial.printf("IR raw=%u count=%u CAM=%u CLEAR=%02x DIR=%u POWER=%u ENABLE=%u\n",
+                    unsigned(rawAngle), unsigned(strength), unsigned(camera.mode),
+                    unsigned(camera.sectors), unsigned(direction), unsigned(power), unsigned(enabled));
+    }
+  }
+  cameraStopPending = false;
+
+  if (now - lastPollMs >= IR_POLL_INTERVAL_MS) {
+    const uint8_t poll[] = {0xA5, 0x5A, 0x01, 0xFE};
+    irReceiver.reset();
+    sendRs485(poll, sizeof(poll));
+    lastPollMs = millis();
+    waitingForIr = true;
   }
 }

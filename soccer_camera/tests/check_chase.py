@@ -23,7 +23,7 @@ class ChaseConfiguration(unittest.TestCase):
         self.assertRegex(source, r"Serial2\.setTX\(2\)")
         self.assertRegex(source, r"Serial2\.setRX\(3\)")
         self.assertRegex(source, r"IR_FRONT_DEGREES\s*=\s*0\s*;")
-        self.assertRegex(source, r"IR_ANGLE_SIGN\s*=\s*1\s*;")
+        self.assertRegex(source, r"IR_ANGLE_SIGN\s*=\s*-1\s*;")
         self.assertNotRegex(source, re.compile(r"\bAUTO\b|\bARM\b", re.I))
 
     def test_kicker_output_is_initialized_low(self):

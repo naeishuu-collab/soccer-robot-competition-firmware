@@ -30,7 +30,7 @@ const uint8_t MOTOR_IN2[4] = {7, 13, 10, 9};
 constexpr bool OUTPUTS_ENABLED = true;
 constexpr uint32_t PWM_FREQ = 20000;
 constexpr int16_t PWM_MAX = 210;
-constexpr int16_t MIN_RUNNING_DUTY = 150;
+constexpr int16_t MIN_RUNNING_DUTY = 160;
 
 // Provisional drive-axis angles.
 // These require physical verification.
@@ -64,6 +64,8 @@ constexpr uint8_t FRAME_SIZE = 12;
 constexpr uint8_t MSG_POLL = 1;
 constexpr uint8_t MSG_BALL = 2;
 constexpr uint8_t MSG_DRIVE = 3;
+constexpr uint8_t MSG_MOTOR_ENABLE = 4;
+constexpr uint8_t MSG_MOTOR_DISABLE = 5;
 
 constexpr uint32_t RX_TIMEOUT_US = 3000;
 
@@ -75,6 +77,7 @@ int16_t targetPWM[4] = {};
 int16_t currentPWM[4] = {};
 
 uint32_t reverseUntil[4] = {};
+uint32_t coordinatedReverseUntil = 0;
 
 uint32_t lastCommandMs = 0;
 uint32_t lastRampMs = 0;
@@ -92,6 +95,7 @@ uint16_t receivedPower = 0;
 
 bool commandReceived = false;
 bool timedOut = true;
+bool armed = false;
 
 static_assert(MIN_RUNNING_DUTY <= PWM_MAX,
               "Invalid PWM range");
@@ -205,6 +209,9 @@ void calculateWheelPWM(uint16_t direction,
 
   const float requestedPower =
       float(min(power, uint16_t(PWM_MAX)));
+  const float minimumDuty = min(requestedPower, float(MIN_RUNNING_DUTY));
+  constexpr float startProjection = 0.17365f; // sin(10 deg)
+  constexpr float keepProjection = 0.08716f;  // sin(5 deg)
 
   float projection[4];
   float maxMagnitude = 0.0f;
@@ -228,25 +235,15 @@ void calculateWheelPWM(uint16_t direction,
     return;
   }
 
-  const float scale =
-      requestedPower / maxMagnitude;
-
   for (uint8_t i = 0; i < 4; ++i) {
-    const int16_t duty = int16_t(
-        lroundf(projection[i] * scale)
-    );
+    const float magnitude = fabsf(projection[i]);
+    const int8_t sign = projection[i] < 0 ? -1 : 1;
+    const bool sameDirection = signOf(targetPWM[i]) == sign;
+    if (magnitude < (sameDirection ? keepProjection : startProjection)) continue;
 
-    if (duty > 0) {
-      output[i] = constrain(
-          duty, MIN_RUNNING_DUTY, PWM_MAX);
-
-    } else if (duty < 0) {
-      output[i] = constrain(
-          duty, -PWM_MAX, -MIN_RUNNING_DUTY);
-
-    } else {
-      output[i] = 0;
-    }
+    // Preserve the stronger wheel's duty while suppressing chatter near zero.
+    const float fraction = magnitude / maxMagnitude;
+    output[i] = int16_t(sign * lroundf(minimumDuty + (requestedPower - minimumDuty) * fraction));
   }
 }
 
@@ -288,13 +285,28 @@ void applyAllMotors() {
 // ============================================================
 
 // BEGIN HOST-TESTED DRIVE HANDLER
+void pauseMotor(uint8_t motor, uint32_t now) {
+  currentPWM[motor] = 0;
+  reverseUntil[motor] = now + REVERSE_PAUSE_MS;
+  if (reverseUntil[motor] == 0) reverseUntil[motor] = 1;
+}
+
+void stopAllMotors(uint32_t now) {
+  for (uint8_t i = 0; i < 4; ++i) {
+    targetPWM[i] = 0;
+    if (currentPWM[i] != 0) pauseMotor(i, now);
+  }
+  applyAllMotors();
+}
+
 void handleDrive(const uint8_t *frame) {
   if (frame[1] == MSG_POLL ||
       frame[1] == MSG_BALL) {
     return;
   }
 
-  if (frame[1] != MSG_DRIVE) {
+  const uint8_t type = frame[1];
+  if (type != MSG_DRIVE && type != MSG_MOTOR_ENABLE && type != MSG_MOTOR_DISABLE) {
     ++invalidFrames;
     return;
   }
@@ -310,69 +322,79 @@ void handleDrive(const uint8_t *frame) {
     return;
   }
 
-  for (uint8_t i = 7; i <= 10; ++i) {
-    if (frame[i] != 0) {
-      ++invalidFrames;
-      return;
-    }
+  const bool avoid = frame[7] == 1;
+  if (frame[7] > 1 || frame[8] || frame[9] || frame[10] ||
+      (avoid && !power) || (type != MSG_DRIVE && (power || direction))) {
+    ++invalidFrames;
+    return;
   }
 
-  int16_t nextTarget[4];
-
-  calculateWheelPWM(
-      direction,
-      power,
-      nextTarget
-  );
-
-  for (uint8_t i = 0; i < 4; ++i) {
-    targetPWM[i] = nextTarget[i];
-    if (power == 0 && currentPWM[i] != 0) {
-      currentPWM[i] = 0;
-      reverseUntil[i] = millis() + REVERSE_PAUSE_MS;
-      if (reverseUntil[i] == 0) reverseUntil[i] = 1;
-    }
+  const uint32_t now = millis();
+  if (type == MSG_MOTOR_DISABLE) {
+    armed = false;
+    receivedPower = 0;
+    stopAllMotors(now);
+    return;
   }
-  if (power == 0) applyAllMotors();
+  if (type == MSG_MOTOR_ENABLE) {
+    stopAllMotors(now);
+    armed = true;
+  } else if (!armed) {
+    return;
+  } else if (power == 0) {
+    stopAllMotors(now);
+  } else {
+    int16_t nextTarget[4];
+    calculateWheelPWM(direction, power, nextTarget);
+    if (avoid && !coordinatedReverseUntil) {
+      for (uint8_t i = 0; i < 4; ++i) {
+        const bool reversing = int32_t(currentPWM[i]) * nextTarget[i] < 0;
+        const bool waiting = reverseUntil[i] && int32_t(now - reverseUntil[i]) < 0;
+        if (reversing || waiting) {
+          stopAllMotors(now);
+          coordinatedReverseUntil = now + REVERSE_PAUSE_MS;
+          if (!coordinatedReverseUntil) coordinatedReverseUntil = 1;
+          break;
+        }
+      }
+    }
+    memcpy(targetPWM, nextTarget, sizeof(targetPWM));
+  }
 
   receivedDirection = direction;
   receivedPower = power;
 
   lastSequence = frame[2];
-  lastCommandMs = millis();
+  lastCommandMs = now;
 
   commandReceived = true;
   timedOut = false;
 
   ++receivedFrames;
 }
-// END HOST-TESTED DRIVE HANDLER
 
 // ============================================================
 // Communication timeout
 // ============================================================
 
 void checkTimeout() {
-  if (!commandReceived || timedOut) {
+  if (!armed || !commandReceived || timedOut) {
     return;
   }
 
-  if (millis() - lastCommandMs >=
-      COMMAND_TIMEOUT_MS) {
+  const uint32_t now = millis();
+  if (now - lastCommandMs >= COMMAND_TIMEOUT_MS) {
     timedOut = true;
+    armed = false;
     ++timeoutEvents;
 
     receivedPower = 0;
 
-    for (uint8_t i = 0; i < 4; ++i) {
-      targetPWM[i] = 0;
-      currentPWM[i] = 0;
-      reverseUntil[i] = 0;
-    }
-
-    applyAllMotors();
+    stopAllMotors(now);
   }
 }
+
+// END HOST-TESTED DRIVE HANDLER
 
 // ============================================================
 // Motor ramp
@@ -387,43 +409,32 @@ void updateMotors() {
 
   lastRampMs = now;
 
-  if (timedOut) {
-    return;
+  if (!armed || timedOut) return;
+  if (coordinatedReverseUntil) {
+    if (int32_t(now - coordinatedReverseUntil) < 0) return;
+    coordinatedReverseUntil = 0;
   }
 
   for (uint8_t i = 0; i < 4; ++i) {
     const int16_t target = targetPWM[i];
-    int16_t current = currentPWM[i];
+    const int16_t current = currentPWM[i];
 
     if (reverseUntil[i] != 0) {
-      currentPWM[i] = 0;
-
       if (int32_t(now - reverseUntil[i]) < 0) {
         continue;
       }
 
       reverseUntil[i] = 0;
-      current = 0;
     }
 
-    if (current != 0 &&
-        target != 0 &&
-        signOf(current) != signOf(target)) {
-      currentPWM[i] = 0;
-      reverseUntil[i] = now + REVERSE_PAUSE_MS;
-      continue;
+    if (current == 0) {
+      currentPWM[i] = int16_t(signOf(target) * min(abs(target), int(MIN_RUNNING_DUTY)));
+    } else if (signOf(current) != signOf(target)) {
+      pauseMotor(i, now);
+    } else {
+      const int delta = constrain(target - current, -int(RAMP_STEP), int(RAMP_STEP));
+      currentPWM[i] = int16_t(current + delta);
     }
-
-    if (current < target) {
-      current += RAMP_STEP;
-      if (current > target) current = target;
-
-    } else if (current > target) {
-      current -= RAMP_STEP;
-      if (current < target) current = target;
-    }
-
-    currentPWM[i] = current;
   }
 
   applyAllMotors();
@@ -457,7 +468,7 @@ void printDebug() {
       static_cast<unsigned long>(invalidFrames),
       static_cast<unsigned long>(timeoutEvents),
       static_cast<unsigned long>(age),
-      timedOut ? "STOP" : "RUN",
+      !armed ? "DISARMED" : receivedPower ? "RUN" : "STOP",
       unsigned(receivedDirection),
       unsigned(receivedPower),
       targetPWM[0], targetPWM[1],
@@ -500,7 +511,7 @@ void setup() {
     analogWrite(MOTOR_IN2[i], 0);
   }
 
-  Serial.println("MD - OMNI PWM 120..200");
+  Serial.println("MD - OMNI PWM max 210 / startup duty up to 160");
   Serial.println("RS485 115200 / PWM 20kHz");
   Serial.println("Debug interval: 1000ms");
 }
@@ -512,11 +523,10 @@ void setup() {
 void loop() {
   uint8_t frame[FRAME_SIZE];
 
+  checkTimeout();
   if (receiver.receive(frame)) {
     handleDrive(frame);
   }
-
-  checkTimeout();
   updateMotors();
 
   if (millis() - lastDebugMs >=

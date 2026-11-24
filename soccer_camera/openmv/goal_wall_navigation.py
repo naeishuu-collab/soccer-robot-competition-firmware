@@ -11,31 +11,27 @@ try:
 except ImportError:
     sensor = image = time = pyb = None
 
-OUTER_CM = 12
-LINE_CLEARANCE_CM = 18
+LINE_CLEARANCE_CM = 25  # Provisional, verify stopping distance before floor use.
+WALL_CLEARANCE_CM = 30
 LOOKAHEAD_CM = 50
 RAY_COUNT = 24
-GOAL_STABLE_FRAMES = 3
-GOAL_MAX_JUMP_DEG = 20
-GOAL_MAX_AIM_DEG = 7
-GOAL_EDGE_MARGIN_DEG = 2
+MIN_FLOOR_RAYS = RAY_COUNT // 2
+RAY_STEP_DEG = 360 / RAY_COUNT
+SECTOR_STEP_DEG = 45
+SECTOR_RAYS = tuple(frozenset((bearing + offset) % 360 for offset in (-30, -15, 0, 15, 30))
+                    for bearing in range(0, 360, SECTOR_STEP_DEG))
+WALL_NEIGHBOR_GAP_CM = 8
 STREAM_INTERVAL_MS = 50
 MAX_FRAME_AGE_MS = 100
 
 MODE_WAIT = 0
 MODE_AVOID = 1
 MODE_TRACK_IR = 2
-MODE_ALIGN = 3
-MODE_AIMED = 4
 FLAG_VIRTUAL_LINE = 0x01
-FLAG_OMNI = 0x20  # Distinguishes the calibrated camera protocol from legacy 0x20 senders.
+FLAG_DIRECTIONAL = 0x40  # Requires the matching MAIN firmware.
 
 GOAL_COLORS = {"YELLOW": (255, 255, 0), "BLUE": (0, 110, 255)}
-MODES = ("WAIT", "AVOID", "TRACK IR", "ALIGN", "AIMED")
-
-
-def angle_error(angle, reference=0):
-    return (angle - reference + 180) % 360 - 180
+MODES = ("WAIT", "AVOID", "TRACK IR")
 
 
 def image_angle(dx, dy):
@@ -124,7 +120,7 @@ class Mirror:
         return rays
 
 
-def find_color_blob(img, mirror, thresholds, min_pixels):
+def find_color_blob(img, mirror, thresholds, min_pixels, accept=None):
     counts = [0, 0, 0]  # Color components, too small, rejected by mirror geometry.
     best = None
     best_pixels = 0
@@ -142,59 +138,30 @@ def find_color_blob(img, mirror, thresholds, min_pixels):
             counts[1] += 1
             continue
         x, y = blob_value(blob, "cx"), blob_value(blob, "cy")
-        corners = blob_value(blob, "corners")
-        if mirror.ring_ready and (not mirror.pixels_on_ring(x, y)
-                                  or not all(mirror.pixels_on_ring(*p) for p in corners)):
+        if mirror.ring_ready and not mirror.pixels_on_ring(x, y):
             counts[2] += 1
+            continue
+        if accept is not None and not accept(blob):
             continue
         if pixels > best_pixels:
             best, best_pixels = blob, pixels
     return best, counts
 
 
-def goal_geometry(blob, mirror):
-    center = mirror.bearing(blob_value(blob, "cx"), blob_value(blob, "cy"))
-    offsets = [angle_error(mirror.bearing(x, y), center) for x, y in blob_value(blob, "corners")]
-    lower, upper = min(offsets), max(offsets)
-    # shortcut: contour corners approximate the opening; replace with tracked posts if needed.
-    aim = (abs(angle_error(center)) <= GOAL_MAX_AIM_DEG
-           and 0 < upper - lower <= 90
-           and lower + GOAL_EDGE_MARGIN_DEG <= angle_error(0, center)
-           <= upper - GOAL_EDGE_MARGIN_DEG)
-    return center, aim
-
-
-class GoalTrack:
-    def __init__(self):
-        self.last = None
-        self.count = 0
-        self.aim_count = 0
-
-    def update(self, goal):
-        if goal is None:
-            self.last, self.count, self.aim_count = None, 0, 0
-            return None
-        angle, aimed = goal
-        continuous = self.last is not None and abs(angle_error(angle, self.last)) <= GOAL_MAX_JUMP_DEG
-        self.count = self.count + 1 if continuous else 1
-        self.aim_count = (self.aim_count + 1 if continuous else 1) if aimed else 0
-        self.last = angle
-        if self.count >= GOAL_STABLE_FRAMES:
-            return angle, self.aim_count >= GOAL_STABLE_FRAMES
-        return None
-
-
 def scan_ray(samples, color_at):
     green_run = 0
     ground_seen = False
     previous = None
-    for x, y, distance in samples:
+    for index, (x, y, distance) in enumerate(samples):
         color = color_at(x, y)
+        if distance <= LINE_CLEARANCE_CM and color != "GREEN":
+            ground_seen = False
         if previous is not None and previous[0] == color:
             return ground_seen, previous
         previous = (color, distance, x, y) if green_run >= 2 and color in ("WHITE", "BLACK") else None
         green_run = green_run + 1 if color == "GREEN" else 0
-        ground_seen = ground_seen or green_run >= 2
+        if index == 1:
+            ground_seen = green_run >= 2
     return ground_seen, None
 
 
@@ -210,45 +177,85 @@ def scan_field(img, mirror):
         return None
 
     visible = set()
-    boundaries = []
+    candidates = {}
     for bearing, samples in mirror.rays:
         ground, edge = scan_ray(samples, color_at)
         if ground:
             visible.add(bearing)
         if edge is not None:
-            boundaries.append((bearing,) + edge)
+            candidates[bearing] = edge
+    boundaries = []
+    for bearing, edge in candidates.items():
+        color, distance, _, _ = edge
+        if color == "BLACK":
+            # An isolated dark transition can come from a cable or a shadow.
+            neighbors = (candidates.get((bearing - RAY_STEP_DEG) % 360),
+                         candidates.get((bearing + RAY_STEP_DEG) % 360))
+            if not any(other is not None and other[0] == color
+                       and abs(distance - other[1]) <= WALL_NEIGHBOR_GAP_CM for other in neighbors):
+                continue
+        boundaries.append((bearing,) + edge)
     return visible, boundaries
 
 
-def decide_navigation(ready, visible, boundaries, goal):
+def setup_wait_reason(mirror):
+    if cfg.IMAGE_SIZE != (mirror.width, mirror.height):
+        return "SET IMAGE_SIZE {}x{}".format(mirror.width, mirror.height)
+    if not mirror.ring_ready:
+        return "CHECK MIRROR_CENTER/RING"
+    # The first possible edge follows two distinct green sample pixels.
+    if not mirror.rays or any(len(s) < 4 or s[2][2] > LINE_CLEARANCE_CM for _, s in mirror.rays):
+        return "CHECK GROUND_POINTS"
+    return None
+
+
+def wait_detail(setup_reason, frame_ms, visible):
+    if setup_reason:
+        return setup_reason
+    if frame_ms > MAX_FRAME_AGE_MS:
+        return "SLOW FRAME {}ms > {}ms".format(frame_ms, MAX_FRAME_AGE_MS)
+    return "FLOOR {}/{}  CHECK PATH".format(len(visible), RAY_COUNT)
+
+
+def decide_navigation(ready, visible, boundaries):
+    stop = (0, 0, 0, MODE_WAIT)
     if not ready:
-        return 0, 0, 0, 0, MODE_WAIT, FLAG_OMNI
+        return stop
+
     away_x = away_y = 0.0
-    boundary_near = False
+    blocked = set()
     for bearing, color, distance, _, _ in boundaries:
-        clearance = LINE_CLEARANCE_CM + (OUTER_CM if color == "BLACK" else 0)
+        clearance = WALL_CLEARANCE_CM if color == "BLACK" else LINE_CLEARANCE_CM
         if distance <= clearance:
-            boundary_near = True
+            blocked.add(bearing)
             angle = math.radians(bearing)
             weight = clearance - distance + 1
             away_x -= math.sin(angle) * weight
             away_y -= math.cos(angle) * weight
-    if boundary_near:
+
+    clear = set(visible) - blocked
+    mask = 0
+    for sector, rays in enumerate(SECTOR_RAYS):
+        if rays.issubset(clear):
+            mask |= 1 << sector
+
+    if blocked:
         length = math.sqrt(away_x ** 2 + away_y ** 2)
-        vx, vy = (round(35 * away_x / length), round(35 * away_y / length)) if length >= 1 else (0, 0)
-        return vx, vy, 0, 0, MODE_AVOID, FLAG_OMNI | FLAG_VIRTUAL_LINE
-    step = 360 / RAY_COUNT
-    if len(visible) < RAY_COUNT // 2 or not {360 - step, 0, step}.issubset(visible):
-        return 0, 0, 0, 0, MODE_WAIT, FLAG_OMNI
-    if goal is None:
-        return 0, 0, 0, 0, MODE_TRACK_IR, FLAG_OMNI
-    angle, aimed = goal
-    turn = round(max(-35, min(35, -0.6 * angle_error(angle))))
-    return 0, 0, 0 if aimed else turn, int(aimed), MODE_AIMED if aimed else MODE_ALIGN, FLAG_OMNI
+        if length < 1:
+            return stop
+        vx, vy = round(35 * away_x / length), round(35 * away_y / length)
+        heading = int(math.degrees(math.atan2(vx, vy)) % 360 + 0.5) % 360
+        sector = ((heading + 22) // SECTOR_STEP_DEG) % len(SECTOR_RAYS)
+        return (vx, vy, mask, MODE_AVOID) if mask & (1 << sector) else stop
+
+    if len(visible) < MIN_FLOOR_RAYS or not mask:
+        return stop
+    return 0, 0, mask, MODE_TRACK_IR
 
 
-def make_nav_packet(vx, vy, turn, aimed, mode, flags):
-    packet = bytearray((0x20, vx & 0xff, vy & 0xff, turn & 0xff, aimed, mode, flags, 0))
+def make_nav_packet(vx, vy, sectors, mode, sequence):
+    flags = FLAG_DIRECTIONAL | (FLAG_VIRTUAL_LINE if mode == MODE_AVOID else 0)
+    packet = bytearray((0x20, vx & 0xff, vy & 0xff, sectors, sequence, mode, flags, 0))
     for byte in packet[:7]:
         packet[7] ^= byte
     return packet
@@ -275,39 +282,54 @@ def main_loop(send_uart=True, display=False):
     frame = sensor.snapshot()
     mirror = Mirror(frame.width(), frame.height())
     target = cfg.TARGET_GOAL
-    ready = bool(mirror.rays and target in GOAL_COLORS)
+    setup_reason = setup_wait_reason(mirror)
+    goal_thresholds = {"YELLOW": cfg.YELLOW, "BLUE": cfg.BLUE}.get(target, ())
     uart = pyb.UART(3, 9600) if send_uart else None
-    track = GoalTrack()
     last_tx = time.ticks_ms()
+    last_mode = None
+    sequence = 0
     while True:
         started = time.ticks_ms()
         img = sensor.snapshot()
         visible, boundaries = scan_field(img, mirror) if mirror.rays else ((), [])
-        goal = None
-        detections = []
-        for color, thresholds in (("YELLOW", cfg.YELLOW), ("BLUE", cfg.BLUE)):
-            if not display and (not ready or color != target):
-                continue
-            blob, _ = find_color_blob(img, mirror, thresholds, cfg.GOAL_MIN_PIXELS)
-            if blob is not None:
-                if ready and color == target:
-                    goal = goal_geometry(blob, mirror)
-                if display:
-                    detections.append((blob, color))
         now = time.ticks_ms()
-        fresh = time.ticks_diff(now, started) <= MAX_FRAME_AGE_MS
-        command = decide_navigation(ready and fresh, visible, boundaries, track.update(goal if fresh else None))
-        if uart is not None and time.ticks_diff(now, last_tx) >= STREAM_INTERVAL_MS:
-            uart.write(make_nav_packet(*command))
+        frame_ms = time.ticks_diff(now, started)
+        command = decide_navigation(setup_reason is None and frame_ms <= MAX_FRAME_AGE_MS,
+                                    visible, boundaries)
+        mode = command[3]
+        if uart is not None and (mode != last_mode or time.ticks_diff(now, last_tx) >= STREAM_INTERVAL_MS):
+            vx, vy, sectors, _ = command
+            uart.write(make_nav_packet(vx, vy, sectors, mode, sequence))
+            sequence = (sequence + 1) & 0xff
             last_tx = now
+            last_mode = mode
         if display:
-            for blob, color in detections:
-                draw_goal(img, blob, color)
+            if goal_thresholds:
+                blob, _ = find_color_blob(img, mirror, goal_thresholds, cfg.GOAL_MIN_PIXELS)
+                if blob is not None:
+                    draw_goal(img, blob, target)
             draw_mirror(img, mirror)
-            for _, color, _, x, y in boundaries:
+            white_distances = []
+            for _, color, distance, x, y in boundaries:
+                if color == "WHITE":
+                    white_distances.append(distance)
                 img.draw_cross((x, y), color=(255, 80, 80) if color == "BLACK" else (255, 255, 255))
-            img.draw_string((2, 2), "TARGET: {}  MODE: {}".format(target, MODES[command[4]]),
-                            color=(255, 255, 255))
+            status = "TARGET: {}  MODE: {}".format(target, MODES[mode])
+            img.draw_string((3, 3), status, color=(0, 0, 0))
+            img.draw_string((2, 2), status, color=(255, 255, 255))
+            if mode == MODE_WAIT:
+                detail = wait_detail(setup_reason, frame_ms, visible)
+                img.draw_string((3, 15), detail, color=(0, 0, 0))
+                img.draw_string((2, 14), detail, color=(255, 255, 255))
+            if white_distances:
+                line_status = "WHITE LINE: DETECTED ({}, {:.0f} cm)".format(
+                    len(white_distances), min(white_distances))
+            elif mirror.rays:
+                line_status = "WHITE LINE: NOT DETECTED"
+            else:
+                line_status = "WHITE LINE: CHECK CALIBRATION"
+            img.draw_string((3, 27), line_status, color=(0, 0, 0))
+            img.draw_string((2, 26), line_status, color=(255, 255, 255))
 
 
 if __name__ == "__main__":

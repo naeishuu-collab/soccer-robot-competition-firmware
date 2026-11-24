@@ -6,9 +6,7 @@ $results = Join-Path $PSScriptRoot 'results_last_run.txt'
 New-Item -ItemType Directory -Force -Path $build | Out-Null
 $logic = foreach ($sketch in @('main/main.ino', 'ir/ir.ino', 'motor/motor.ino')) {
     $source = Get-Content -Raw -Encoding UTF8 (Join-Path (Join-Path $root 'legacy_before_chase') $sketch)
-    if ($source -notmatch '(?s)// BEGIN HOST-TESTED SKETCH LOGIC?
-(.*?)?
-// END HOST-TESTED SKETCH LOGIC') { throw "Missing testable sketch logic: $sketch" }
+    if ($source -notmatch '(?s)// BEGIN HOST-TESTED SKETCH LOGIC\s*(.*?)\s*// END HOST-TESTED SKETCH LOGIC') { throw "Missing testable sketch logic: $sketch" }
     $Matches[1]
 }
 $logic | Set-Content -Encoding UTF8 (Join-Path $build 'integrated_sketch_logic.h')
@@ -18,19 +16,9 @@ $Matches[1] | Set-Content -Encoding UTF8 (Join-Path $build 'chase_camera_logic.h
 $motorSource = Get-Content -Raw -Encoding UTF8 (Join-Path $root 'motor/motor.ino')
 if ($motorSource -notmatch '(?s)// BEGIN HOST-TESTED DRIVE HANDLER\s*(.*?)\s*// END HOST-TESTED DRIVE HANDLER') { throw 'Missing testable drive handler' }
 $Matches[1] | Set-Content -Encoding UTF8 (Join-Path $build 'chase_drive_handler.h')
-$irSource = Get-Content -Raw -Encoding UTF8 (Join-Path $root 'ir/ir.ino')
-if ($irSource -notmatch '(?s)// BEGIN HOST-TESTED IR PREDICTION\s*(.*?)\s*// END HOST-TESTED IR PREDICTION') { throw 'Missing testable IR prediction' }
-$Matches[1] | Set-Content -Encoding UTF8 (Join-Path $build 'chase_ir_prediction.h')
-if ($irSource -notmatch '(?s)// BEGIN HOST-TESTED BALL RESPONSE\s*(.*?)\s*// END HOST-TESTED BALL RESPONSE') { throw 'Missing testable BALL response' }
-$Matches[1] | Set-Content -Encoding UTF8 (Join-Path $build 'chase_ir_response.h')
-if ($irSource -notmatch '(?s)// BEGIN HOST-TESTED IR SENSOR CONFIG\s*(.*?)\s*// END HOST-TESTED IR SENSOR CONFIG') { throw 'Missing testable IR sensor configuration' }
-$Matches[1] | Set-Content -Encoding UTF8 (Join-Path $build 'chase_ir_config.h')
-if ($irSource -notmatch '(?s)// BEGIN HOST-TESTED IR DIRECTION\s*(.*?)\s*// END HOST-TESTED IR DIRECTION') { throw 'Missing testable IR direction' }
-$Matches[1] | Set-Content -Encoding UTF8 (Join-Path $build 'chase_ir_direction.h')
-
 "Host tests started at $([DateTime]::UtcNow.ToString('yyyy-MM-dd HH:mm:ss')) UTC" | Set-Content -Encoding Unicode $results
 
-$sources = @('test_core.cpp', 'test_integration.cpp', 'test_chase_camera.cpp', 'test_chase_motor.cpp', 'test_chase_ir.cpp', 'test_chase_ir_response.cpp', 'test_chase_ir_direction.cpp')
+$sources = @('test_core.cpp', 'test_integration.cpp', 'test_chase_camera.cpp', 'test_chase_motor.cpp')
 $gpp = Get-Command g++ -ErrorAction SilentlyContinue
 $cl = Get-Command cl -ErrorAction SilentlyContinue
 

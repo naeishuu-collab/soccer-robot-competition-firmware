@@ -20,7 +20,25 @@ VISIBLE = set(range(0, 360, 15))
 class OpenMvNavigationTests(unittest.TestCase):
     def test_defaults_wait_for_measurements(self):
         self.assertFalse(nav.Mirror(320, 320).rays)
-        self.assertEqual(nav.decide_navigation(False, VISIBLE, [], (0, True))[4], nav.MODE_WAIT)
+        self.assertEqual(nav.decide_navigation(False, VISIBLE, [])[3], nav.MODE_WAIT)
+
+    def test_wait_display_identifies_setup_freshness_and_floor_failures(self):
+        with patch.multiple(nav.cfg, IMAGE_SIZE=None, MIRROR_CENTER=None, MIRROR_RING=None,
+                            GROUND_POINTS=()):
+            self.assertEqual(nav.setup_wait_reason(nav.Mirror(320, 240)),
+                             "SET IMAGE_SIZE 320x240")
+            nav.cfg.IMAGE_SIZE = (320, 240)
+            self.assertEqual(nav.setup_wait_reason(nav.Mirror(320, 240)),
+                             "CHECK MIRROR_CENTER/RING")
+            nav.cfg.MIRROR_CENTER = (160, 120)
+            nav.cfg.MIRROR_RING = (20, 100)
+            self.assertEqual(nav.setup_wait_reason(nav.Mirror(320, 240)),
+                             "CHECK GROUND_POINTS")
+            nav.cfg.GROUND_POINTS = ((40, 10), (80, 55))
+            mirror = nav.Mirror(320, 240)
+            self.assertIsNone(nav.setup_wait_reason(mirror))
+        self.assertEqual(nav.wait_detail(None, 120, VISIBLE), "SLOW FRAME 120ms > 100ms")
+        self.assertEqual(nav.wait_detail(None, 100, VISIBLE - {0}), "FLOOR 23/24  CHECK PATH")
 
     def test_calibration_uses_actual_size_center_rotation_and_mirroring(self):
         with patch.multiple(nav.cfg, IMAGE_SIZE=(320, 240), MIRROR_CENTER=(149, 110),
@@ -108,52 +126,152 @@ class OpenMvNavigationTests(unittest.TestCase):
         samples = [(i, 0, i + 10) for i in range(5)]
         for color in ("WHITE", "BLACK"):
             colors = ["GREEN", "GREEN", color, color, None]
-            self.assertEqual(nav.scan_ray(samples, lambda x, _: colors[x]), (True, (color, 12, 2, 0)))
+            self.assertEqual(nav.scan_ray(samples, lambda x, _: colors[x]), (False, (color, 12, 2, 0)))
         colors = ["GREEN", "GREEN", "BLACK", None, "BLACK"]
-        self.assertEqual(nav.scan_ray(samples, lambda x, _: colors[x]), (True, None))
+        self.assertEqual(nav.scan_ray(samples, lambda x, _: colors[x]), (False, None))
         colors = ["GREEN", "GREEN", "BLACK", "WHITE", "BLACK"]
-        self.assertEqual(nav.scan_ray(samples, lambda x, _: colors[x]), (True, None))
+        self.assertEqual(nav.scan_ray(samples, lambda x, _: colors[x]), (False, None))
         self.assertEqual(nav.scan_ray(samples, lambda x, _: "BLACK"), (False, None))
 
-    def test_avoid_moves_away_on_all_four_sides_and_inhibits_aim(self):
+    def test_wall_scan_requires_neighbor_at_similar_distance(self):
+        class Mirror:
+            rays = [
+                (bearing, [(x, row, base + x) for x in range(4)])
+                for row, (bearing, base) in enumerate(
+                    ((0, 20), (15, 32), (90, 20), (105, 20), (180, 15), (345, 21)))
+            ]
+
+        class Frame:
+            def get_pixel(self, position, *, rgbtuple):
+                x, row = position
+                if x < 2:
+                    return (18, -15, 6)
+                return (90, 0, 0) if row == 4 else (8, 0, 0)
+
+        class ImageModule:
+            rgb_to_lab = staticmethod(lambda values: values)
+
+        with patch.object(nav, "image", ImageModule):
+            visible, boundaries = nav.scan_field(Frame(), Mirror())
+        self.assertEqual(visible, {15})
+        self.assertEqual([(bearing, color) for bearing, color, *_ in boundaries],
+                         [(0, "BLACK"), (90, "BLACK"), (105, "BLACK"),
+                          (180, "WHITE"), (345, "BLACK")])
+        self.assertEqual(nav.decide_navigation(True, visible, boundaries)[3], nav.MODE_WAIT)
+
+    def test_avoid_moves_away_only_into_visible_floor(self):
         for bearing, motion in ((0, (0, -35)), (90, (-35, 0)), (180, (0, 35)), (270, (35, 0))):
-            result = nav.decide_navigation(True, VISIBLE, [edge(bearing)], (0, True))
-            self.assertEqual(result, (*motion, 0, 0, nav.MODE_AVOID, nav.FLAG_OMNI | nav.FLAG_VIRTUAL_LINE))
+            result = nav.decide_navigation(True, VISIBLE, [edge(bearing)])
+            self.assertEqual(result[:2], motion)
+            self.assertEqual(result[3], nav.MODE_AVOID)
+        blocked_retreat = nav.decide_navigation(True, VISIBLE - {180}, [edge(0)])
+        self.assertEqual(blocked_retreat, (0, 0, 0, nav.MODE_WAIT))
 
     def test_corner_avoidance_and_conflicting_boundaries(self):
-        corner = nav.decide_navigation(True, VISIBLE, [edge(0), edge(90)], None)
+        corner = nav.decide_navigation(True, VISIBLE, [edge(0), edge(90)])
         self.assertEqual(corner[:2], (-25, -25))
-        opposite = nav.decide_navigation(True, VISIBLE, [edge(0), edge(180)], None)
-        self.assertEqual(opposite[:3], (0, 0, 0))
-        self.assertEqual(opposite[4], nav.MODE_AVOID)
+        opposite = nav.decide_navigation(True, VISIBLE, [edge(0), edge(180)])
+        self.assertEqual(opposite, (0, 0, 0, nav.MODE_WAIT))
 
-    def test_wall_clearance_includes_outer_area_without_inventing_penalty_flag(self):
-        command = nav.decide_navigation(True, VISIBLE, [edge(90, "BLACK", 29)], None)
-        self.assertEqual(command[4], nav.MODE_AVOID)
-        self.assertFalse(command[5] & 0x02)
-        for boundary in (edge(90, "BLACK", 31), edge(90, "WHITE", 19)):
-            self.assertEqual(nav.decide_navigation(True, VISIBLE, [boundary], None)[4], nav.MODE_TRACK_IR)
+    def test_clearance_for_wall_and_white_line(self):
+        for boundary in (edge(90, "BLACK", 29), edge(90, "WHITE", 25)):
+            self.assertEqual(nav.decide_navigation(True, VISIBLE, [boundary])[3], nav.MODE_AVOID)
+        for boundary in (edge(90, "BLACK", 31), edge(90, "WHITE", 26)):
+            self.assertEqual(nav.decide_navigation(True, VISIBLE, [boundary])[3], nav.MODE_TRACK_IR)
 
-    def test_poor_floor_visibility_waits(self):
-        self.assertEqual(nav.decide_navigation(True, set(range(0, 165, 15)), [], (0, True))[4], nav.MODE_WAIT)
-        self.assertEqual(nav.decide_navigation(True, VISIBLE - {0}, [], (0, True))[4], nav.MODE_WAIT)
+    def test_directional_floor_mask(self):
+        self.assertEqual(nav.decide_navigation(True, set(range(0, 165, 15)), [])[3], nav.MODE_WAIT)
+        command = nav.decide_navigation(True, VISIBLE - {75, 90, 105}, [])
+        self.assertEqual(command[3], nav.MODE_TRACK_IR)
+        self.assertTrue(command[2] & 1)
+        self.assertFalse(command[2] & (1 << 2))
 
-    def test_goal_tracking_wraps_and_drops_aim_immediately(self):
-        track = nav.GoalTrack()
-        self.assertIsNone(track.update((358, True)))
-        self.assertIsNone(track.update((1, True)))
-        self.assertEqual(track.update((0, True)), (0, True))
-        self.assertEqual(track.update((0, False)), (0, False))
-        self.assertIsNone(track.update((45, True)))
-        self.assertIsNone(track.update(None))
-        self.assertIsNone(track.update((45, True)))
+    def test_repository_calibration_can_detect_and_avoid_a_near_white_line(self):
+        mirror = nav.Mirror(320, 240)
+        self.assertIsNone(nav.setup_wait_reason(mirror))
+        for bearing, samples in mirror.rays:
+            colors = {(x, y): "GREEN" if i < 2 else "WHITE"
+                      for i, (x, y, _) in enumerate(samples)}
+            _, boundary = nav.scan_ray(samples, lambda x, y: colors[x, y])
+            self.assertEqual(nav.decide_navigation(True, VISIBLE, [(bearing,) + boundary])[3],
+                             nav.MODE_AVOID)
+        with patch.object(nav, "LINE_CLEARANCE_CM", 18):
+            self.assertEqual(nav.setup_wait_reason(mirror), "CHECK GROUND_POINTS")
 
-    def test_goal_commands_are_stationary_or_turn_only(self):
-        self.assertEqual(nav.decide_navigation(True, VISIBLE, [], (10, False))[:5], (0, 0, -6, 0, nav.MODE_ALIGN))
-        self.assertEqual(nav.decide_navigation(True, VISIBLE, [], (0, True))[:5], (0, 0, 0, 1, nav.MODE_AIMED))
-        self.assertEqual(nav.decide_navigation(True, VISIBLE, [], None)[:5], (0, 0, 0, 0, nav.MODE_TRACK_IR))
+    def test_camera_reports_white_line_and_stops_only_for_stale_frames_in_this_scene(self):
+        class Frame:
+            labels = []
 
-    def test_goal_mask_and_both_edges_of_aim_window(self):
+            def __init__(self, line):
+                self.line = line
+
+            def width(self):
+                return 320
+
+            def height(self):
+                return 240
+
+            def find_blobs(self, thresholds, **kwargs):
+                return ()
+
+            def draw_string(self, position, text, *, color):
+                if position == (2, 26):
+                    self.labels.append(text)
+
+            def draw_cross(self, *args, **kwargs):
+                pass
+
+            draw_circle = draw_line = draw_cross
+
+        class Sensor:
+            frames = iter(Frame(ball) for ball in
+                          (False, True, True, True, False, True, True, True, True))
+
+            @staticmethod
+            def snapshot():
+                return next(Sensor.frames)
+
+        class Time:
+            timestamps = iter((0, 0, 50, 50, 100, 100, 150, 150, 200, 200,
+                               250, 250, 300, 300, 350, 350, 470))
+
+            @staticmethod
+            def ticks_ms():
+                return next(Time.timestamps)
+
+            @staticmethod
+            def ticks_diff(now, previous):
+                return now - previous
+
+        class Board:
+            packets = []
+
+            @staticmethod
+            def UART(port, baud):
+                return Board()
+
+            def write(self, packet):
+                Board.packets.append(packet)
+
+        with patch.multiple(nav.cfg, IMAGE_SIZE=(320, 240), MIRROR_CENTER=(160, 120),
+                            MIRROR_RING=(20, 100), GROUND_POINTS=((40, 10), (80, 55)),
+                            TARGET_GOAL="YELLOW"):
+            with patch.multiple(nav, sensor=Sensor, time=Time, pyb=Board,
+                                init_camera=lambda: None,
+                                scan_field=lambda img, _: (
+                                    VISIBLE, [edge(0)] if img.line else [edge(0, "BLACK", 35)])):
+                with self.assertRaises(StopIteration):
+                    nav.main_loop(display=True)
+        self.assertEqual([packet[5] for packet in Board.packets],
+                         [nav.MODE_AVOID, nav.MODE_AVOID, nav.MODE_AVOID,
+                          nav.MODE_TRACK_IR, nav.MODE_AVOID, nav.MODE_AVOID,
+                          nav.MODE_AVOID, nav.MODE_WAIT])
+        self.assertTrue(all(packet[1:4] == b"\x00\x00\x00"
+                            for packet in Board.packets if packet[5] == nav.MODE_WAIT))
+        self.assertEqual(Frame.labels.count("WHITE LINE: DETECTED (1, 15 cm)"), 7)
+        self.assertEqual(Frame.labels[3], "WHITE LINE: NOT DETECTED")
+
+    def test_diagnostic_goal_blob_filters_by_mirror_and_size(self):
         class Blob:
             def __init__(self, x, y, pixels, corners):
                 self.cx, self.cy, self.pixels, self.corners = x, y, pixels, corners
@@ -171,13 +289,11 @@ class OpenMvNavigationTests(unittest.TestCase):
             mirror = nav.Mirror(320, 320)
             self.assertEqual(nav.find_color_blob(Frame(), mirror, nav.cfg.YELLOW, 30),
                              (true_goal, [3, 1, 1]))
-            self.assertEqual(nav.goal_geometry(true_goal, mirror), (0, True))
-            narrow = Blob(160, 100, 30, [(159, 100), (161, 100), (161, 95), (159, 95)])
-            self.assertFalse(nav.goal_geometry(narrow, mirror)[1])
 
     def test_wire_format_signed_motion_checksum_and_protocol_marker(self):
-        packet = nav.make_nav_packet(*nav.decide_navigation(True, VISIBLE, [edge(90)], None))
-        self.assertEqual(list(packet), [0x20, 221, 0, 0, 0, 1, 0x21, 221])
+        vx, vy, mask, mode = nav.decide_navigation(True, VISIBLE, [edge(90)])
+        packet = nav.make_nav_packet(vx, vy, mask, mode, 42)
+        self.assertEqual(list(packet), [0x20, 221, 0, 251, 42, 1, 0x41, 108])
 
 
 if __name__ == "__main__":
