@@ -1,0 +1,3 @@
+Base commit: 559e8a46363017dad905a5b8912f66307a8aea02
+Source: soccer_ir_main_motor/main/main.ino from GitHub main before auto-start change
+SHA-256: 50B09FDCFA3394C62A28B67DE028BA16FF80244931B724EBDD92C033787A9107
