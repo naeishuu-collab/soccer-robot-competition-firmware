@@ -107,8 +107,6 @@ constexpr uint8_t FRAME_START = 0xA5;
 constexpr uint8_t FRAME_SIZE = 12;
 
 constexpr uint8_t MSG_DRIVE = 3;
-constexpr uint8_t MSG_MOTOR_ENABLE = 4;
-constexpr uint8_t MSG_MOTOR_DISABLE = 5;
 
 // Match the timing of the field-tested IR poll.
 constexpr uint32_t IR_POLL_INTERVAL_MS = 30;
@@ -227,11 +225,10 @@ uint16_t convertDirection(uint16_t irAngle) {
 // DRIVE frame
 // ============================================================
 
-void sendMotorCommand(uint8_t type, uint8_t sequence, uint16_t direction,
-                      uint16_t power, bool avoid = false) {
+void sendDrive(uint8_t sequence, uint16_t direction, uint16_t power, bool avoid = false) {
   uint8_t frame[FRAME_SIZE] = {};
   frame[0] = FRAME_START;
-  frame[1] = type;
+  frame[1] = MSG_DRIVE;
   frame[2] = sequence & 0x7F;
   encodeValue(&frame[3], direction);
   encodeValue(&frame[5], power);
@@ -270,39 +267,13 @@ void loop() {
   static uint8_t sequence = 0;
   static uint32_t lastPollMs = 0;
   static uint32_t lastLogMs = 0;
-  static uint32_t lastIrReplyMs = 0;
   static bool waitingForIr = false;
-  static bool irSeen = false;
-  static bool enabled = false;
-  static bool armRequested = false;
-  static bool disarmPending = true;
-  static bool startup = true;
   static uint16_t lastDriveDirection = 0;
   static uint16_t lastDrivePower = 0;
 
   const bool cameraWasStale = !cameraFresh(camera, millis());
   receiveCamera();
   const uint32_t now = millis();
-  // Accept only a single-letter USB command terminated by CR or LF.
-  static int consoleCommand = 0;
-  while (Serial.available()) {
-    const int byte = Serial.read();
-    if (byte != '\r' && byte != '\n') {
-      consoleCommand = consoleCommand ? -1 : byte;
-      continue;
-    }
-    if (consoleCommand == 'S' || consoleCommand == 's') {
-      enabled = false;
-      armRequested = false;
-      disarmPending = true;
-    } else if ((consoleCommand == 'A' || consoleCommand == 'a') && !disarmPending &&
-               !cameraWasStale && cameraAllowsMotion(camera, now) && irSeen &&
-               now - lastIrReplyMs < IR_REPLY_TIMEOUT_MS) {
-      armRequested = true;
-    }
-    consoleCommand = 0;
-  }
-
   uint16_t rawAngle = 0;
   uint16_t strength = 0;
   bool received = false;
@@ -316,56 +287,36 @@ void loop() {
   }
 
   if (received) {
-    lastIrReplyMs = now;
-    irSeen = true;
     waitingForIr = false;
     delayMicroseconds(50);  // Let the IR transceiver release the shared bus.
   } else if (replyExpired) {
-    irSeen = false;
     waitingForIr = false;
   }
 
-  if ((enabled || armRequested) && (cameraWasStale || !cameraFresh(camera, now) || replyExpired)) {
-    enabled = false;
-    armRequested = false;
-    disarmPending = true;
+  if (lastDrivePower && (cameraWasStale || !cameraAllowsMotion(camera, now) ||
+                         !sectorClear(camera, lastDriveDirection))) {
+    cameraStopPending = true;
   }
-  if (!cameraAllowsMotion(camera, now)) armRequested = false;
-  if (lastDrivePower && !sectorClear(camera, lastDriveDirection)) cameraStopPending = true;
 
-  // Never transmit during the IR reply window. Stop takes priority as soon as the bus is available.
-  if (waitingForIr || (startup && now < IR_POLL_INTERVAL_MS)) return;
-  startup = false;
-  if (disarmPending) {
-    sendMotorCommand(MSG_MOTOR_DISABLE, sequence++, 0, 0);
-    disarmPending = false;
-    cameraStopPending = false;
-    lastDrivePower = 0;
-  } else if (cameraStopPending && lastDrivePower) {
-    sendMotorCommand(MSG_DRIVE, sequence++, 0, 0);
-    cameraStopPending = false;
-    lastDrivePower = 0;
-  } else if (armRequested) {
-    sendMotorCommand(MSG_MOTOR_ENABLE, sequence++, 0, 0);
-    armRequested = false;
-    enabled = true;
+  // Never transmit during the IR reply window. Send a pending stop before a new drive.
+  if (waitingForIr) return;
+  if (replyExpired || (cameraStopPending && lastDrivePower)) {
+    sendDrive(sequence++, 0, 0);
     lastDrivePower = 0;
   } else if (received) {
     uint16_t direction = 0;
     uint16_t power = 0;
-    if (enabled) {
-      chooseChaseMotion(camera, now, strength > 0, convertDirection(rawAngle),
-                        MOVE_POWER, AVOID_POWER, direction, power);
-    }
-    sendMotorCommand(MSG_DRIVE, sequence++, direction, power, camera.mode == 1);
+    chooseChaseMotion(camera, now, strength > 0, convertDirection(rawAngle),
+                      MOVE_POWER, AVOID_POWER, direction, power);
+    sendDrive(sequence++, direction, power, camera.mode == 1);
     lastDriveDirection = direction;
     lastDrivePower = power;
 
     if (now - lastLogMs >= 250 && Serial && Serial.availableForWrite() >= 110) {
       lastLogMs = now;
-      Serial.printf("IR raw=%u count=%u CAM=%u CLEAR=%02x DIR=%u POWER=%u ENABLE=%u\n",
+      Serial.printf("IR raw=%u count=%u CAM=%u CLEAR=%02x DIR=%u POWER=%u\n",
                     unsigned(rawAngle), unsigned(strength), unsigned(camera.mode),
-                    unsigned(camera.sectors), unsigned(direction), unsigned(power), unsigned(enabled));
+                    unsigned(camera.sectors), unsigned(direction), unsigned(power));
     }
   }
   cameraStopPending = false;

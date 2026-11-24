@@ -64,8 +64,6 @@ constexpr uint8_t FRAME_SIZE = 12;
 constexpr uint8_t MSG_POLL = 1;
 constexpr uint8_t MSG_BALL = 2;
 constexpr uint8_t MSG_DRIVE = 3;
-constexpr uint8_t MSG_MOTOR_ENABLE = 4;
-constexpr uint8_t MSG_MOTOR_DISABLE = 5;
 
 constexpr uint32_t RX_TIMEOUT_US = 3000;
 
@@ -95,7 +93,6 @@ uint16_t receivedPower = 0;
 
 bool commandReceived = false;
 bool timedOut = true;
-bool armed = false;
 
 static_assert(MIN_RUNNING_DUTY <= PWM_MAX,
               "Invalid PWM range");
@@ -305,8 +302,7 @@ void handleDrive(const uint8_t *frame) {
     return;
   }
 
-  const uint8_t type = frame[1];
-  if (type != MSG_DRIVE && type != MSG_MOTOR_ENABLE && type != MSG_MOTOR_DISABLE) {
+  if (frame[1] != MSG_DRIVE) {
     ++invalidFrames;
     return;
   }
@@ -324,24 +320,13 @@ void handleDrive(const uint8_t *frame) {
 
   const bool avoid = frame[7] == 1;
   if (frame[7] > 1 || frame[8] || frame[9] || frame[10] ||
-      (avoid && !power) || (type != MSG_DRIVE && (power || direction))) {
+      (avoid && !power)) {
     ++invalidFrames;
     return;
   }
 
   const uint32_t now = millis();
-  if (type == MSG_MOTOR_DISABLE) {
-    armed = false;
-    receivedPower = 0;
-    stopAllMotors(now);
-    return;
-  }
-  if (type == MSG_MOTOR_ENABLE) {
-    stopAllMotors(now);
-    armed = true;
-  } else if (!armed) {
-    return;
-  } else if (power == 0) {
+  if (power == 0) {
     stopAllMotors(now);
   } else {
     int16_t nextTarget[4];
@@ -378,14 +363,13 @@ void handleDrive(const uint8_t *frame) {
 // ============================================================
 
 void checkTimeout() {
-  if (!armed || !commandReceived || timedOut) {
+  if (!commandReceived || timedOut) {
     return;
   }
 
   const uint32_t now = millis();
   if (now - lastCommandMs >= COMMAND_TIMEOUT_MS) {
     timedOut = true;
-    armed = false;
     ++timeoutEvents;
 
     receivedPower = 0;
@@ -409,7 +393,7 @@ void updateMotors() {
 
   lastRampMs = now;
 
-  if (!armed || timedOut) return;
+  if (timedOut) return;
   if (coordinatedReverseUntil) {
     if (int32_t(now - coordinatedReverseUntil) < 0) return;
     coordinatedReverseUntil = 0;
@@ -468,7 +452,7 @@ void printDebug() {
       static_cast<unsigned long>(invalidFrames),
       static_cast<unsigned long>(timeoutEvents),
       static_cast<unsigned long>(age),
-      !armed ? "DISARMED" : receivedPower ? "RUN" : "STOP",
+      timedOut || !receivedPower ? "STOP" : "RUN",
       unsigned(receivedDirection),
       unsigned(receivedPower),
       targetPWM[0], targetPWM[1],
