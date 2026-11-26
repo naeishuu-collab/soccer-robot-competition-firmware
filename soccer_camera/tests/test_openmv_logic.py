@@ -133,6 +133,47 @@ class OpenMvNavigationTests(unittest.TestCase):
         self.assertEqual(nav.scan_ray(samples, lambda x, _: colors[x]), (False, None))
         self.assertEqual(nav.scan_ray(samples, lambda x, _: "BLACK"), (False, None))
 
+    def test_white_boundary_allows_one_unclassified_pixel_between_turf_and_line(self):
+        samples = [(i, 0, 18 + i) for i in range(6)]
+        colors = ("GREEN", "GREEN", None, "WHITE", "WHITE", None)
+        self.assertEqual(nav.scan_ray(samples, lambda x, _: colors[x]),
+                         (False, ("WHITE", 21, 3, 0)))
+        colors = ("GREEN", "GREEN", None, None, "WHITE", "WHITE")
+        self.assertEqual(nav.scan_ray(samples, lambda x, _: colors[x]), (False, None))
+        colors = ("GREEN", "GREEN", None, "BLACK", "BLACK", None)
+        self.assertEqual(nav.scan_ray(samples, lambda x, _: colors[x]), (False, None))
+
+    def test_measured_turf_and_white_form_a_boundary(self):
+        class Mirror:
+            rays = [(0, [(i, 0, 18 + i * 2) for i in range(4)])]
+
+        turf = (39, -9, 6)
+        white = (99, -4, 10)
+        black = (14, -4, 4)
+        class Frame:
+            colors = (turf, turf, white, white)
+
+            def get_pixel(self, position, *, rgbtuple):
+                return self.colors[position[0]]
+
+        class ImageModule:
+            rgb_to_lab = staticmethod(lambda rgb: rgb)
+
+        preview = set()
+        frame = Frame()
+        with patch.object(nav, "image", ImageModule):
+            with patch.object(nav.cfg, "GREEN_LOW_SATURATION", None):
+                self.assertEqual(nav.scan_field(frame, Mirror(), preview), (set(), []))
+                self.assertEqual(preview, {0})
+            preview.clear()
+            self.assertEqual(nav.scan_field(frame, Mirror(), preview),
+                             (set(), [(0, "WHITE", 22, 2, 0)]))
+            self.assertEqual(preview, {0})
+            frame.colors = (turf, turf, black, black)
+            self.assertEqual(nav.scan_field(frame, Mirror()), (set(), []))
+        self.assertTrue(nav.in_lab(black, nav.cfg.BLACK))
+        self.assertFalse(nav.in_lab(black, nav.cfg.GREEN_LOW_SATURATION))
+
     def test_wall_scan_requires_neighbor_at_similar_distance(self):
         class Mirror:
             rays = [
@@ -263,13 +304,18 @@ class OpenMvNavigationTests(unittest.TestCase):
             def write(self, packet):
                 Board.packets.append(packet)
 
+        def scan_scene(img, _, white_candidates):
+            if img.line is None:
+                white_candidates.add(0)
+                return VISIBLE, [edge(0, "BLACK", 35)]
+            return VISIBLE, [edge(img.line)]
+
         with patch.multiple(nav.cfg, IMAGE_SIZE=(320, 240), MIRROR_CENTER=(160, 120),
                             MIRROR_RING=(20, 100), GROUND_POINTS=((40, 10), (80, 55)),
                             TARGET_GOAL="YELLOW"):
             with patch.multiple(nav, sensor=Sensor, time=Time, pyb=Board,
                                 init_camera=lambda: None,
-                                scan_field=lambda img, _: (
-                                    VISIBLE, [edge(img.line)] if img.line is not None else [edge(0, "BLACK", 35)])):
+                                scan_field=scan_scene):
                 with self.assertRaises(StopIteration):
                     nav.main_loop(display=True)
         self.assertEqual([packet[5] for packet in Board.packets],
@@ -281,7 +327,7 @@ class OpenMvNavigationTests(unittest.TestCase):
         self.assertTrue(all(packet[1:4] == b"\x00\x00\x00"
                             for packet in Board.packets if packet[5] == nav.MODE_WAIT))
         self.assertEqual(Frame.labels.count("WHITE LINE: DETECTED (1, 15 cm)"), 7)
-        self.assertEqual(Frame.labels[3], "WHITE LINE: NOT DETECTED")
+        self.assertEqual(Frame.labels[3], "WHITE LINE: UNCONFIRMED (1)")
 
     def test_diagnostic_goal_blob_filters_by_mirror_and_size(self):
         class Blob:
@@ -306,6 +352,11 @@ class OpenMvNavigationTests(unittest.TestCase):
         for l in (21, 22):
             for a in (8, 9):
                 for b in (-34, -33):
+                    self.assertTrue(any(nav.in_lab((l, a, b), threshold)
+                                        for threshold in nav.cfg.BLUE))
+        for l in (43, 45):
+            for a in (10, 11):
+                for b in (-39, -38):
                     self.assertTrue(any(nav.in_lab((l, a, b), threshold)
                                         for threshold in nav.cfg.BLUE))
         self.assertFalse(any(nav.in_lab((21, 8, 0), threshold) for threshold in nav.cfg.BLUE))

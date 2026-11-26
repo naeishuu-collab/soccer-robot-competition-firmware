@@ -21,9 +21,12 @@ RGB_GAIN_DB = None  # None freezes the white balance measured after warm-up.
 YELLOW = [(30, 62, 5, 24, 26, 64), (79, 86, -3, 7, 57, 70),
           (69, 88, 18, 32, 22, 39)]
 # Additional sample: LAB L=21..22, A=8..9, B=-34..-33.
-BLUE = [(18, 25, 5, 12, -38, -30), (39, 42, 3, 7, -45, -41), (19, 25, 13, 20, -46, -40),
+# Additional blue sample: L=43..45, A=10..11, B=-39..-38.
+BLUE = [(40, 48, 7, 14, -43, -34), (18, 25, 5, 12, -38, -30), (39, 42, 3, 7, -45, -41), (19, 25, 13, 20, -46, -40),
         (4, 10, -5, 2, -18, -10)]
 BLACK = (5, 32, -20, 5, -5, 15)
 GREEN = (12, 75, -65, -10, -15, 55)
+# Turf sample: L=34..41, A=-10..-9, B=5..7.
+GREEN_LOW_SATURATION = (33, 48, -13, -7, 2, 11)
 WHITE = (72, 100, -12, 12, -15, 15)
 GOAL_MIN_PIXELS = 30  # Check both goals at the farthest usable distance.

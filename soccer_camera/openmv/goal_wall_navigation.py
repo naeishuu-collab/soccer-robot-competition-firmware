@@ -154,25 +154,33 @@ def scan_ray(samples, color_at):
     green_run = 0
     ground_seen = False
     previous = None
+    white_bridge = False
     for index, (x, y, distance) in enumerate(samples):
         color = color_at(x, y)
         if distance <= LINE_CLEARANCE_CM and color != "GREEN":
             ground_seen = False
         if previous is not None and previous[0] == color:
             return ground_seen, previous
-        previous = (color, distance, x, y) if green_run >= 2 and color in ("WHITE", "BLACK") else None
+        follows_turf = green_run >= 2 or (white_bridge and color == "WHITE")
+        previous = (color, distance, x, y) if follows_turf and color in ("WHITE", "BLACK") else None
+        # A mixed edge pixel may be neither turf nor white.
+        white_bridge = color is None and green_run >= 2
         green_run = green_run + 1 if color == "GREEN" else 0
         if index == 1:
             ground_seen = green_run >= 2
     return ground_seen, None
 
 
-def scan_field(img, mirror):
+def scan_field(img, mirror, white_candidates=None):
+    low_saturation = getattr(cfg, "GREEN_LOW_SATURATION", None)
+
     def color_at(x, y):
         lab = image.rgb_to_lab(img.get_pixel((x, y), rgbtuple=True))
-        if in_lab(lab, cfg.GREEN):
+        if in_lab(lab, cfg.GREEN) or (low_saturation and in_lab(lab, low_saturation)):
             return "GREEN"
         if in_lab(lab, cfg.WHITE):
+            if white_candidates is not None:
+                white_candidates.add(bearing)
             return "WHITE"
         if in_lab(lab, cfg.BLACK):
             return "BLACK"
@@ -305,7 +313,8 @@ def main_loop(send_uart=True, display=False):
     while True:
         started = time.ticks_ms()
         img = sensor.snapshot()
-        visible, boundaries = scan_field(img, mirror) if mirror.rays else ((), [])
+        white_candidates = set() if display else None
+        visible, boundaries = scan_field(img, mirror, white_candidates) if mirror.rays else ((), [])
         now = time.ticks_ms()
         frame_ms = time.ticks_diff(now, started)
         command = decide_navigation(setup_reason is None and frame_ms <= MAX_FRAME_AGE_MS,
@@ -339,6 +348,8 @@ def main_loop(send_uart=True, display=False):
             if white_distances:
                 line_status = "WHITE LINE: DETECTED ({}, {:.0f} cm)".format(
                     len(white_distances), min(white_distances))
+            elif white_candidates:
+                line_status = "WHITE LINE: UNCONFIRMED ({})".format(len(white_candidates))
             elif mirror.rays:
                 line_status = "WHITE LINE: NOT DETECTED"
             else:
