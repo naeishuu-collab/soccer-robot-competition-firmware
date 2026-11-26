@@ -3,8 +3,9 @@
 FRAME_SIZE = "QVGA"
 # Enter (image_width, image_height), (center_x, center_y), and (inner_px, outer_px).
 IMAGE_SIZE = (320, 240)
-MIRROR_CENTER = (180, 132)
-MIRROR_RING = (40, 100)
+MIRROR_CENTER = (171, 129)  # Approximate values measured from the supplied preview.
+MIRROR_RING = (29, 77)  # Inner and outer radii in QVGA pixels.
+MIRROR_AUTO_DETECT = False
 FRONT_DEG = 297.0  # Clockwise from image up to the robot's forward direction.
 CLOCKWISE = False  # False if moving a target to the robot's right decreases its image angle.
 

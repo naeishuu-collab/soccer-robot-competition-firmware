@@ -28,7 +28,7 @@ MAINをUSBに接続し、シリアルモニタを115200bpsで開くと、約0.5�
 
 ## ミラーと色
 
-起動時に中央と外側の円を検出できればその値を、その後は固定して使います。検出できなければ `MIRROR_CENTER` と `MIRROR_RING` の設定値を使います。`RING: AUTO` は自動検出、`RING: CONFIG` は設定値です。電源を入れ直すと再検出します。`RECALIBRATE GROUND POINTS` で停止しません。
+`MIRROR_AUTO_DETECT = False` のとき `MIRROR_CENTER` と `MIRROR_RING` の固定値を使います。`True` にすると起動時に自動検出を試し、検出できなければ固定値を使います。`RING: AUTO` は自動検出、`RING: CONFIG` は設定値です。`RECALIBRATE GROUND POINTS` で停止しません。
 
 `GROUND_POINTS` はミラー中心からの画像半径と実際の床距離を対応させます。枠が変わっても値は自動換算されないため、白線距離は実測で確認してください。床や距離が設定と合わないと白線を見逃すことがあります。設定が不正な場合は画面に `CHECK GROUND_POINTS` などを表示しますが走行は止まりません。
 

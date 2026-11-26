@@ -80,7 +80,8 @@ class Mirror:
         self.cx, self.cy = cfg.MIRROR_CENTER or ((width - 1) / 2, (height - 1) / 2)
         self.inner, self.outer = cfg.MIRROR_RING or (0, 0)
         self.detected = False
-        if frame is not None and cfg.IMAGE_SIZE == (width, height) and cfg.MIRROR_CENTER and cfg.MIRROR_RING:
+        if (getattr(cfg, "MIRROR_AUTO_DETECT", False) and frame is not None
+                and cfg.IMAGE_SIZE == (width, height) and cfg.MIRROR_CENTER and cfg.MIRROR_RING):
             self.detect_ring(frame)
         self.points = cfg.GROUND_POINTS
         self.ring_ready = (cfg.IMAGE_SIZE == (width, height) and cfg.MIRROR_CENTER is not None

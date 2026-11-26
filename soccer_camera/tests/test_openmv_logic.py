@@ -89,7 +89,8 @@ class OpenMvNavigationTests(unittest.TestCase):
                 return (80, 100, 70) if inner.r <= radius <= outer.r else (0, 0, 0)
 
         with patch.multiple(nav.cfg, IMAGE_SIZE=(320, 240), MIRROR_CENTER=(160, 120),
-                            MIRROR_RING=(40, 100), GROUND_POINTS=((50, 18), (74, 50))):
+                            MIRROR_RING=(40, 100), GROUND_POINTS=((50, 18), (74, 50)),
+                            MIRROR_AUTO_DETECT=True):
             mirror = nav.Mirror(320, 240, Frame([Circle(164, 120, 40), Circle(164, 120, 99)]))
             self.assertTrue(mirror.detected)
             self.assertEqual((mirror.cx, mirror.outer), (164, 99))
@@ -118,6 +119,16 @@ class OpenMvNavigationTests(unittest.TestCase):
             fallback = nav.Mirror(320, 240, Frame([Circle(160, 120, 40)]))
             self.assertFalse(fallback.detected)
             self.assertIsNone(nav.setup_wait_reason(fallback))
+
+    def test_fixed_mirror_ignores_detected_circles(self):
+        class Frame:
+            def find_circles(self, **kwargs):
+                self.fail("Fixed mirror must not run circle detection")
+        with patch.multiple(nav.cfg, IMAGE_SIZE=(320, 240), MIRROR_CENTER=(171, 129),
+                            MIRROR_RING=(29, 77), MIRROR_AUTO_DETECT=False):
+            mirror = nav.Mirror(320, 240, Frame())
+        self.assertEqual((mirror.cx, mirror.cy, mirror.inner, mirror.outer), (171, 129, 29, 77))
+        self.assertFalse(mirror.detected)
 
     def test_defaults_wait_for_measurements(self):
         self.assertFalse(nav.Mirror(320, 320).rays)
