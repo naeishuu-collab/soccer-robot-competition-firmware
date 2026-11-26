@@ -1,6 +1,12 @@
 #include <Arduino.h>
 #include <math.h>
 #include <string.h>
+#include "motor_logic.h"
+
+// 0 = field-tested legacy mixer (default). 1 = wheel model with start boost (verify on hardware first).
+#ifndef ROBOT_UPGRADE
+#define ROBOT_UPGRADE 0
+#endif
 
 // ============================================================
 // MOTOR - RP2350 / TB67H450 x 4
@@ -304,34 +310,50 @@ void stopAllMotors(uint32_t now) {
   applyAllMotors();
 }
 
-void handleDrive(const uint8_t *frame) {
+bool parseDrive(const uint8_t *frame, uint16_t &direction, uint16_t &power, int &turn, bool &avoid) {
   if (frame[1] == MSG_POLL ||
       frame[1] == MSG_BALL) {
-    return;
+    return false;
   }
 
   if (frame[1] != MSG_DRIVE) {
     ++invalidFrames;
-    return;
+    return false;
   }
 
-  const uint16_t direction =
-      unpackValue(&frame[3]);
-
-  const uint16_t power =
-      unpackValue(&frame[5]);
+  direction = unpackValue(&frame[3]);
+  power = unpackValue(&frame[5]);
 
   if (direction >= 360 || power > PWM_MAX) {
     ++invalidFrames;
-    return;
+    return false;
   }
 
-  const bool avoid = frame[7] == 1;
+  avoid = frame[7] == 1;
   if (frame[7] > 1 || (frame[8] && (frame[8] < 21 || frame[8] > 101)) || frame[9] || frame[10] ||
       (avoid && !power)) {
     ++invalidFrames;
-    return;
+    return false;
   }
+  turn = frame[8] ? int(frame[8]) - 61 : 0;
+  return true;
+}
+
+void acceptCommand(uint8_t sequence, uint16_t direction, uint16_t power, uint32_t now) {
+  receivedDirection = direction;
+  receivedPower = power;
+  lastSequence = sequence;
+  lastCommandMs = now;
+  commandReceived = true;
+  timedOut = false;
+  ++receivedFrames;
+}
+
+void handleDrive(const uint8_t *frame) {
+  uint16_t direction = 0, power = 0;
+  int turn = 0;
+  bool avoid = false;
+  if (!parseDrive(frame, direction, power, turn, avoid)) return;
 
   const uint32_t now = millis();
   if (power == 0) {
@@ -339,7 +361,6 @@ void handleDrive(const uint8_t *frame) {
   } else {
     int16_t nextTarget[4];
     calculateWheelPWM(direction, power, nextTarget);
-    const int turn = frame[8] ? int(frame[8]) - 61 : 0;
     for (uint8_t i = 0; i < 4; ++i) {
       nextTarget[i] = int16_t(constrain(int(nextTarget[i]) + turn * WHEEL_SIGN[i], -int(PWM_MAX), int(PWM_MAX)));
     }
@@ -362,16 +383,7 @@ void handleDrive(const uint8_t *frame) {
     memcpy(targetPWM, nextTarget, sizeof(targetPWM));
   }
 
-  receivedDirection = direction;
-  receivedPower = power;
-
-  lastSequence = frame[2];
-  lastCommandMs = now;
-
-  commandReceived = true;
-  timedOut = false;
-
-  ++receivedFrames;
+  acceptCommand(frame[2], direction, power, now);
 }
 
 // ============================================================
@@ -490,6 +502,80 @@ void printDebug() {
 }
 
 // ============================================================
+// Wheel-model path and USB diagnostics
+// ============================================================
+
+wheel::Drive modelDrive;
+wheel::Diag diag;
+uint32_t startRequestUs = 0, startLatencyUs = 0;
+
+void readDiagSerial(uint32_t now) {
+  static char text[32];
+  static uint8_t used = 0;
+  while (Serial.available()) {
+    const char c = char(Serial.read());
+    if (c != '\n' && c != '\r') {
+      if (used < sizeof(text) - 1) text[used++] = c;
+      continue;
+    }
+    if (!used) continue;
+    text[used] = 0;
+    used = 0;
+    const bool wasActive = diag.active();
+    Serial.println(diag.line(text, now));
+    if (diag.active() != wasActive) {
+      stopAllMotors(now);
+      modelDrive.stop(now);
+      timedOut = true;  // leaving diag waits for a fresh MAIN command
+    }
+  }
+}
+
+void runDiag(uint32_t now) {
+  uint8_t frame[FRAME_SIZE];
+  receiver.receive(frame);  // drain the bus; commands are ignored
+  diag.update(now);
+  for (uint8_t i = 0; i < 4; ++i) applyMotor(i, int16_t(diag.duty(i, now)));
+}
+
+void runModel(uint32_t now) {
+  uint8_t frame[FRAME_SIZE];
+  if (receiver.receive(frame)) {
+    uint16_t direction = 0, power = 0;
+    int turn = 0;
+    bool avoid = false;
+    if (parseDrive(frame, direction, power, turn, avoid)) {
+      const bool wasStill = !(currentPWM[0] || currentPWM[1] || currentPWM[2] || currentPWM[3]);
+      if (power || turn) {
+        if (wasStill && !startRequestUs) startRequestUs = micros();
+        modelDrive.command(direction, power, turn, now);
+      } else {
+        modelDrive.stop(now);
+        startRequestUs = 0;
+      }
+      acceptCommand(frame[2], direction, power, now);
+    }
+  }
+  if (commandReceived && !timedOut && now - lastCommandMs >= COMMAND_TIMEOUT_MS) {
+    timedOut = true;
+    ++timeoutEvents;
+    receivedPower = 0;
+    modelDrive.stop(now);
+    startRequestUs = 0;
+  }
+  if (!timedOut) modelDrive.update(now);
+  for (uint8_t i = 0; i < 4; ++i) {
+    targetPWM[i] = int16_t(modelDrive.target(i));
+    currentPWM[i] = int16_t(modelDrive.duty(i));
+  }
+  applyAllMotors();
+  if (startRequestUs && (currentPWM[0] || currentPWM[1] || currentPWM[2] || currentPWM[3])) {
+    startLatencyUs = micros() - startRequestUs;
+    startRequestUs = 0;
+  }
+}
+
+// ============================================================
 // Setup
 // ============================================================
 
@@ -523,17 +609,28 @@ void setup() {
 // ============================================================
 
 void loop() {
-  uint8_t frame[FRAME_SIZE];
-
-  checkTimeout();
-  if (receiver.receive(frame)) {
-    handleDrive(frame);
+  const uint32_t now = millis();
+  readDiagSerial(now);
+  if (diag.active()) {
+    runDiag(now);
+  } else if (ROBOT_UPGRADE) {
+    runModel(now);
+  } else {
+    uint8_t frame[FRAME_SIZE];
+    checkTimeout();
+    if (receiver.receive(frame)) {
+      handleDrive(frame);
+    }
+    updateMotors();
   }
-  updateMotors();
 
   if (millis() - lastDebugMs >=
       DEBUG_INTERVAL_MS) {
     lastDebugMs = millis();
     printDebug();
+    if (ROBOT_UPGRADE && Serial && Serial.availableForWrite() >= 64) {
+      Serial.printf("MODEL err=%d feasible=%d start_us=%lu\n", int(modelDrive.mix().errorDeg),
+                    int(modelDrive.mix().feasible), static_cast<unsigned long>(startLatencyUs));
+    }
   }
 }
