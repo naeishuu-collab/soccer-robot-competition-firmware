@@ -67,7 +67,9 @@ def main():
         wall, counts = (find_color_blob(img, mirror, [cfg.BLACK], WALL_KEEP_PIXELS)
                         if USE_MIRROR else find_rectangular_wall(img))
         tracked = track.update(wall, img.width(), img.height())
-        visible, boundaries = scan_field(img, mirror) if USE_MIRROR and SHOW_FIELD_EDGES and mirror.rays else ((), [])
+        visible, boundaries = (), []
+        if USE_MIRROR and SHOW_FIELD_EDGES and mirror.rays:
+            visible, boundaries = scan_field(img, mirror, include_wall=True)
         now = time.ticks_ms()
         if time.ticks_diff(now, last_stream) >= STREAM_INTERVAL_MS:
             last_stream = now

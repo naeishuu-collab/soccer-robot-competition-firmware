@@ -12,7 +12,6 @@ except ImportError:
     sensor = image = time = pyb = None
 
 LINE_CLEARANCE_CM = 25  # Provisional, verify stopping distance before floor use.
-WALL_CLEARANCE_CM = 30
 LOOKAHEAD_CM = 50
 RAY_COUNT = 24
 MIN_FLOOR_RAYS = RAY_COUNT // 2
@@ -150,7 +149,7 @@ def find_color_blob(img, mirror, thresholds, min_pixels, accept=None):
     return best, counts
 
 
-def scan_ray(samples, color_at):
+def scan_ray(samples, color_at, include_wall=False):
     green_run = 0
     ground_seen = False
     previous = None
@@ -162,7 +161,8 @@ def scan_ray(samples, color_at):
         if previous is not None and previous[0] == color:
             return ground_seen, previous
         follows_turf = green_run >= 2 or (white_bridge and color == "WHITE")
-        previous = (color, distance, x, y) if follows_turf and color in ("WHITE", "BLACK") else None
+        is_boundary = color == "WHITE" or (include_wall and color == "BLACK")
+        previous = (color, distance, x, y) if follows_turf and is_boundary else None
         # A mixed edge pixel may be neither turf nor white.
         white_bridge = color is None and green_run >= 2
         green_run = green_run + 1 if color == "GREEN" else 0
@@ -171,7 +171,7 @@ def scan_ray(samples, color_at):
     return ground_seen, None
 
 
-def scan_field(img, mirror, white_candidates=None):
+def scan_field(img, mirror, white_candidates=None, include_wall=False):
     low_saturation = getattr(cfg, "GREEN_LOW_SATURATION", None)
 
     def color_at(x, y):
@@ -189,7 +189,7 @@ def scan_field(img, mirror, white_candidates=None):
     visible = set()
     candidates = {}
     for bearing, samples in mirror.rays:
-        ground, edge = scan_ray(samples, color_at)
+        ground, edge = scan_ray(samples, color_at, include_wall)
         if ground:
             visible.add(bearing)
         if edge is not None:
@@ -235,12 +235,11 @@ def decide_navigation(ready, visible, boundaries):
     away_x = away_y = 0.0
     blocked = {}
     for bearing, color, distance, _, _ in boundaries:
-        clearance = WALL_CLEARANCE_CM if color == "BLACK" else LINE_CLEARANCE_CM
-        if distance <= clearance:
+        if color == "WHITE" and distance <= LINE_CLEARANCE_CM:
             angle = math.radians(bearing)
             toward_x, toward_y = math.sin(angle), math.cos(angle)
             blocked[bearing] = (toward_x, toward_y)
-            weight = clearance - distance + 1
+            weight = LINE_CLEARANCE_CM - distance + 1
             away_x -= toward_x * weight
             away_y -= toward_y * weight
 
@@ -295,6 +294,15 @@ def draw_mirror(img, mirror):
         img.draw_line((cx, cy, end_x, end_y), color=(255, 255, 255))
 
 
+def draw_floor_scan(img, mirror):
+    # Show actual sampled radii on the four cardinal rays.
+    for bearing, samples in mirror.rays:
+        if bearing % 90 == 0 and samples:
+            x0, y0, _ = samples[0]
+            x1, y1, _ = samples[-1]
+            img.draw_line((x0, y0, x1, y1), color=(0, 220, 220))
+
+
 def draw_goal(img, blob, name):
     img.draw_edges(blob_value(blob, "corners"), color=GOAL_COLORS[name], thickness=3)
 
@@ -305,7 +313,7 @@ def main_loop(send_uart=True, display=False):
     mirror = Mirror(frame.width(), frame.height())
     target = cfg.TARGET_GOAL
     setup_reason = setup_wait_reason(mirror)
-    goal_thresholds = {"YELLOW": cfg.YELLOW, "BLUE": cfg.BLUE}.get(target, ())
+    goal_thresholds = (("YELLOW", cfg.YELLOW), ("BLUE", cfg.BLUE))
     uart = pyb.UART(3, 9600) if send_uart else None
     last_tx = time.ticks_ms()
     last_command = None
@@ -328,16 +336,18 @@ def main_loop(send_uart=True, display=False):
             last_tx = now
             last_command = command
         if display:
-            if goal_thresholds:
-                blob, _ = find_color_blob(img, mirror, goal_thresholds, cfg.GOAL_MIN_PIXELS)
+            # Detect both colors before drawing so overlays never enter the other search.
+            detections = [(name, find_color_blob(img, mirror, thresholds, cfg.GOAL_MIN_PIXELS)[0])
+                          for name, thresholds in goal_thresholds]
+            for name, blob in detections:
                 if blob is not None:
-                    draw_goal(img, blob, target)
+                    draw_goal(img, blob, name)
             draw_mirror(img, mirror)
+            draw_floor_scan(img, mirror)
             white_distances = []
-            for _, color, distance, x, y in boundaries:
-                if color == "WHITE":
-                    white_distances.append(distance)
-                img.draw_cross((x, y), color=(255, 80, 80) if color == "BLACK" else (255, 255, 255))
+            for _, _, distance, x, y in boundaries:
+                white_distances.append(distance)
+                img.draw_cross((x, y), color=(255, 255, 255))
             status = "TARGET: {}  MODE: {}".format(target, MODES[mode])
             img.draw_string((3, 3), status, color=(0, 0, 0))
             img.draw_string((2, 2), status, color=(255, 255, 255))

@@ -126,12 +126,21 @@ class OpenMvNavigationTests(unittest.TestCase):
         samples = [(i, 0, i + 10) for i in range(5)]
         for color in ("WHITE", "BLACK"):
             colors = ["GREEN", "GREEN", color, color, None]
-            self.assertEqual(nav.scan_ray(samples, lambda x, _: colors[x]), (False, (color, 12, 2, 0)))
+            self.assertEqual(nav.scan_ray(samples, lambda x, _: colors[x], include_wall=True),
+                             (False, (color, 12, 2, 0)))
         colors = ["GREEN", "GREEN", "BLACK", None, "BLACK"]
         self.assertEqual(nav.scan_ray(samples, lambda x, _: colors[x]), (False, None))
         colors = ["GREEN", "GREEN", "BLACK", "WHITE", "BLACK"]
         self.assertEqual(nav.scan_ray(samples, lambda x, _: colors[x]), (False, None))
         self.assertEqual(nav.scan_ray(samples, lambda x, _: "BLACK"), (False, None))
+
+    def test_white_is_not_hidden_by_an_earlier_black_wall(self):
+        samples = [(i, 0, 18 + i) for i in range(8)]
+        colors = ("GREEN", "GREEN", "BLACK", "BLACK", "GREEN", "GREEN", "WHITE", "WHITE")
+        self.assertEqual(nav.scan_ray(samples, lambda x, _: colors[x]),
+                         (False, ("WHITE", 24, 6, 0)))
+        self.assertEqual(nav.scan_ray(samples, lambda x, _: colors[x], include_wall=True),
+                         (False, ("BLACK", 20, 2, 0)))
 
     def test_white_boundary_allows_one_unclassified_pixel_between_turf_and_line(self):
         samples = [(i, 0, 18 + i) for i in range(6)]
@@ -193,7 +202,9 @@ class OpenMvNavigationTests(unittest.TestCase):
             rgb_to_lab = staticmethod(lambda values: values)
 
         with patch.object(nav, "image", ImageModule):
-            visible, boundaries = nav.scan_field(Frame(), Mirror())
+            visible, boundaries = nav.scan_field(Frame(), Mirror(), include_wall=True)
+            _, driving_boundaries = nav.scan_field(Frame(), Mirror())
+        self.assertEqual([edge[1] for edge in driving_boundaries], ["WHITE"])
         self.assertEqual(visible, {15})
         self.assertEqual([(bearing, color) for bearing, color, *_ in boundaries],
                          [(0, "BLACK"), (90, "BLACK"), (105, "BLACK"),
@@ -225,10 +236,10 @@ class OpenMvNavigationTests(unittest.TestCase):
         self.assertFalse(mask & (1 << 4))  # 180 degrees approaches the 135-degree edge.
         self.assertTrue(mask & (1 << 5))
 
-    def test_clearance_for_wall_and_white_line(self):
-        for boundary in (edge(90, "BLACK", 29), edge(90, "WHITE", 25)):
-            self.assertEqual(nav.decide_navigation(True, VISIBLE, [boundary])[3], nav.MODE_AVOID)
-        for boundary in (edge(90, "BLACK", 31), edge(90, "WHITE", 26)):
+    def test_only_close_white_line_triggers_avoidance(self):
+        self.assertEqual(nav.decide_navigation(True, VISIBLE, [edge(90, "WHITE", 25)])[3],
+                         nav.MODE_AVOID)
+        for boundary in (edge(90, "BLACK", 20), edge(90, "BLACK", 29), edge(90, "WHITE", 38)):
             self.assertEqual(nav.decide_navigation(True, VISIBLE, [boundary])[3], nav.MODE_TRACK_IR)
 
     def test_directional_floor_mask(self):
@@ -251,8 +262,13 @@ class OpenMvNavigationTests(unittest.TestCase):
             self.assertEqual(nav.setup_wait_reason(mirror), "CHECK GROUND_POINTS")
 
     def test_camera_reports_white_line_sends_changed_heading_and_stops_on_stale_frame(self):
+        class Goal:
+            pixels, cx, cy = 50, 160, 50
+            corners = [(156, 46), (164, 46), (164, 54), (156, 54)]
+
         class Frame:
             labels = []
+            goal_colors = []
 
             def __init__(self, line):
                 self.line = line
@@ -264,7 +280,10 @@ class OpenMvNavigationTests(unittest.TestCase):
                 return 240
 
             def find_blobs(self, thresholds, **kwargs):
-                return ()
+                return (Goal(),) if thresholds is nav.cfg.BLUE else ()
+
+            def draw_edges(self, corners, *, color, thickness):
+                self.goal_colors.append(color)
 
             def draw_string(self, position, text, *, color):
                 if position == (2, 26):
@@ -307,7 +326,7 @@ class OpenMvNavigationTests(unittest.TestCase):
         def scan_scene(img, _, white_candidates):
             if img.line is None:
                 white_candidates.add(0)
-                return VISIBLE, [edge(0, "BLACK", 35)]
+                return VISIBLE, []
             return VISIBLE, [edge(img.line)]
 
         with patch.multiple(nav.cfg, IMAGE_SIZE=(320, 240), MIRROR_CENTER=(160, 120),
@@ -328,6 +347,7 @@ class OpenMvNavigationTests(unittest.TestCase):
                             for packet in Board.packets if packet[5] == nav.MODE_WAIT))
         self.assertEqual(Frame.labels.count("WHITE LINE: DETECTED (1, 15 cm)"), 7)
         self.assertEqual(Frame.labels[3], "WHITE LINE: UNCONFIRMED (1)")
+        self.assertEqual(Frame.goal_colors, [nav.GOAL_COLORS["BLUE"]] * 8)
 
     def test_diagnostic_goal_blob_filters_by_mirror_and_size(self):
         class Blob:
@@ -357,6 +377,11 @@ class OpenMvNavigationTests(unittest.TestCase):
         for l in (43, 45):
             for a in (10, 11):
                 for b in (-39, -38):
+                    self.assertTrue(any(nav.in_lab((l, a, b), threshold)
+                                        for threshold in nav.cfg.BLUE))
+        for l in (28, 29):
+            for a in (9, 10):
+                for b in (-35, -34):
                     self.assertTrue(any(nav.in_lab((l, a, b), threshold)
                                         for threshold in nav.cfg.BLUE))
         self.assertFalse(any(nav.in_lab((21, 8, 0), threshold) for threshold in nav.cfg.BLUE))
