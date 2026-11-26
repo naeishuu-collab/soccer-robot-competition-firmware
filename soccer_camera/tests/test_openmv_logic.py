@@ -25,7 +25,9 @@ class OpenMvNavigationTests(unittest.TestCase):
 
         self.assertTrue(nav.ball_like(Blob(20, 20, 310)))
         self.assertFalse(nav.ball_like(Blob(40, 15, 450)))
-        self.assertFalse(nav.ball_like(Blob(20, 20, 400)))
+        self.assertTrue(nav.ball_like(Blob(20, 20, 400)))
+        self.assertTrue(nav.ball_like(Blob(20, 12, 110)))
+        self.assertFalse(nav.ball_like(Blob(20, 20, 100)))
         self.assertFalse(nav.ball_like(Blob(0, 20, 0)))
 
     def test_startup_detects_matching_circles_and_rechecks_ground_calibration(self):
@@ -433,6 +435,11 @@ class OpenMvNavigationTests(unittest.TestCase):
             self.assertTrue(any(nav.in_lab(sample, threshold) for threshold in nav.cfg.YELLOW))
 
     def test_ball_saturated_samples_and_yellow_goal_sample(self):
+        for l in (17, 70):
+            for a in (29, 59):
+                for b in (21, 58):
+                    self.assertTrue(any(nav.in_lab((l, a, b), threshold)
+                                        for threshold in nav.cfg.BALL))
         for sample in ((38, 51, 45), (69, 40, 59), (73, 31, 52)):
             self.assertTrue(any(nav.in_lab(sample, threshold) for threshold in nav.cfg.BALL))
         self.assertFalse(any(nav.in_lab((77, 21, 49), threshold) for threshold in nav.cfg.BALL))

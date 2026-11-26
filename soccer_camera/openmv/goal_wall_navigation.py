@@ -188,7 +188,7 @@ def ball_like(blob):
     if not width or not height:
         return False
     fill = blob_value(blob, "pixels") / (width * height)
-    return min(width, height) / max(width, height) >= 0.7 and 0.50 <= fill <= 0.88
+    return min(width, height) / max(width, height) >= 0.55 and 0.35 <= fill <= 1.0
 
 
 def scan_ray(samples, color_at, include_wall=False):
@@ -384,7 +384,8 @@ def main_loop(send_uart=True, display=False):
                            getattr(cfg, "BLUE_MIN_PIXELS", 8) if name == "BLUE" else cfg.GOAL_MIN_PIXELS))
                           for name, thresholds in goal_thresholds]
             ball_thresholds = getattr(cfg, "BALL", None)
-            ball = find_color_blob(img, mirror, ball_thresholds, cfg.GOAL_MIN_PIXELS, ball_like)[0] if ball_thresholds else None
+            ball, ball_counts = (find_color_blob(img, mirror, ball_thresholds, 20, ball_like)
+                                 if ball_thresholds else (None, [0, 0, 0]))
             for name, (blob, counts) in detections:
                 if blob is not None:
                     draw_goal(img, blob, name)
@@ -422,6 +423,10 @@ def main_loop(send_uart=True, display=False):
                 "YES" if blue_blob is not None else "NO", *blue_counts)
             img.draw_string((3, 51), blue_status, color=(0, 0, 0))
             img.draw_string((2, 50), blue_status, color=(255, 255, 255))
+            ball_status = "BALL: {} C{} S{} R{}".format(
+                "YES" if ball is not None else "NO", *ball_counts)
+            img.draw_string((3, 63), ball_status, color=(0, 0, 0))
+            img.draw_string((2, 62), ball_status, color=(255, 255, 255))
 
 
 if __name__ == "__main__":
