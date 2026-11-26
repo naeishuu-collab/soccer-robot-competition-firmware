@@ -102,7 +102,7 @@ class RecognitionTests(unittest.TestCase):
         # Robot turned 30 degrees clockwise: the opponent goal appears at 330.
         self.assertAlmostEqual(v.estimate_heading((150, 100), (330, 100))[0], 30, delta=0.01)
         # Sideways translation on the centre line keeps the estimate.
-        self.assertAlmostEqual(v.wrap(v.estimate_heading((140, 100), (40, 100))[0] + 0), -270 + 180, delta=181)
+        self.assertAlmostEqual(v.wrap(v.estimate_heading((140, 100), (40, 100))[0]), 0, delta=0.01)
         self.assertEqual(v.estimate_heading((30, 100), (0, 100)), (None, 0))
         self.assertEqual(v.estimate_heading((180, 20), (0, 100)), (None, 0))
 

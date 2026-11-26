@@ -13,6 +13,16 @@ CLOCKWISE = False  # False if moving a target to the robot's right decreases its
 GROUND_POINTS = ((50, 18), (74, 50))
 TARGET_GOAL = "YELLOW"  # Set to "YELLOW" or "BLUE" before each half.
 
+# 1 = legacy 8-byte UART at 9600 (default). 2 = extended packet at 115200; needs MAIN ROBOT_UPGRADE=1
+# and competition_vision.py on the camera.
+PROTOCOL = 1
+LINE_BLOCK_CM = 35  # Protocol 2: headings toward a line closer than this are closed early. Unverified.
+# Separate (radius_px, distance_cm) tables measured for THESE objects. Empty = distance unknown.
+# Never copy GROUND_POINTS here without measuring.
+BALL_DISTANCE = ()
+GOAL_DISTANCE = ()
+BALL_MIN_PIXELS = 10
+
 # Capture settings are shared by all four scripts. None uses automatic exposure and gain.
 EXPOSURE_US = 45000
 GAIN_DB = 6.0

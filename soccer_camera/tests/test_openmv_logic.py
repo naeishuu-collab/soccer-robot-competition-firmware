@@ -132,7 +132,7 @@ class OpenMvNavigationTests(unittest.TestCase):
 
     def test_defaults_wait_for_measurements(self):
         self.assertFalse(nav.Mirror(320, 320).rays)
-        self.assertEqual(nav.decide_navigation(False, VISIBLE, [])[3], nav.MODE_TRACK_IR)
+        self.assertEqual(nav.decide_navigation(False, VISIBLE, []), (0, 0, 0, nav.MODE_WAIT))
 
     def test_wait_display_identifies_setup_freshness_and_floor_failures(self):
         with patch.multiple(nav.cfg, IMAGE_SIZE=None, MIRROR_CENTER=None, MIRROR_RING=None,
@@ -321,7 +321,8 @@ class OpenMvNavigationTests(unittest.TestCase):
         self.assertEqual([(bearing, color) for bearing, color, *_ in boundaries],
                          [(0, "BLACK"), (90, "BLACK"), (105, "BLACK"),
                           (180, "WHITE"), (345, "BLACK")])
-        self.assertEqual(nav.decide_navigation(True, visible, boundaries)[3], nav.MODE_TRACK_IR)
+        # Only one of 24 rays shows floor: unknown, so stop.
+        self.assertEqual(nav.decide_navigation(True, visible, boundaries)[3], nav.MODE_WAIT)
 
     def test_avoid_moves_away_only_into_visible_floor(self):
         for bearing, motion in ((0, (0, -35)), (90, (-35, 0)), (180, (0, 35)), (270, (35, 0))):
@@ -333,13 +334,13 @@ class OpenMvNavigationTests(unittest.TestCase):
         self.assertEqual(abs(alternative[0]), 25)
         self.assertEqual(alternative[1], -25)
         blocked_retreat = nav.decide_navigation(True, VISIBLE - {135, 180, 225}, [edge(0)])
-        self.assertEqual(blocked_retreat, (0, 0, 255, nav.MODE_TRACK_IR))
+        self.assertEqual(blocked_retreat, (0, 0, 0, nav.MODE_WAIT))
 
     def test_corner_avoidance_and_conflicting_boundaries(self):
         corner = nav.decide_navigation(True, VISIBLE, [edge(0), edge(90)])
         self.assertEqual(corner[:2], (-25, -25))
         opposite = nav.decide_navigation(True, VISIBLE, [edge(0), edge(180)])
-        self.assertEqual(opposite, (0, 0, 255, nav.MODE_TRACK_IR))
+        self.assertEqual(opposite, (0, 0, 0, nav.MODE_WAIT))
 
     def test_retreat_mask_excludes_headings_toward_any_close_edge(self):
         boundaries = [edge(0, cm=18), edge(135, cm=25)]
@@ -355,7 +356,8 @@ class OpenMvNavigationTests(unittest.TestCase):
             self.assertEqual(nav.decide_navigation(True, VISIBLE, [boundary])[3], nav.MODE_TRACK_IR)
 
     def test_directional_floor_mask(self):
-        self.assertEqual(nav.decide_navigation(True, set(range(0, 165, 15)), [])[3], nav.MODE_TRACK_IR)
+        self.assertEqual(nav.decide_navigation(True, set(range(0, 165, 15)), [])[3], nav.MODE_WAIT)
+        self.assertEqual(nav.decide_navigation(True, set(range(0, 180, 15)), [])[3], nav.MODE_TRACK_IR)
         command = nav.decide_navigation(True, VISIBLE - {75, 90, 105}, [])
         self.assertEqual(command[3], nav.MODE_TRACK_IR)
         self.assertTrue(command[2] & 1)
@@ -452,7 +454,7 @@ class OpenMvNavigationTests(unittest.TestCase):
         self.assertEqual([packet[5] for packet in Board.packets],
                          [nav.MODE_AVOID, nav.MODE_AVOID, nav.MODE_AVOID,
                           nav.MODE_TRACK_IR, nav.MODE_AVOID, nav.MODE_AVOID,
-                          nav.MODE_AVOID, nav.MODE_TRACK_IR])
+                          nav.MODE_AVOID, nav.MODE_WAIT])  # last frame is stale: stop
         self.assertEqual(Board.packets[0][1:3], bytes((0, 221)))
         self.assertEqual(Board.packets[1][1:3], bytes((221, 0)))
         self.assertTrue(all(packet[1:4] == b"\x00\x00\x00"

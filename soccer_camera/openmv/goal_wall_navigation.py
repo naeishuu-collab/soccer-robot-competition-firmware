@@ -308,8 +308,9 @@ def wait_detail(setup_reason, frame_ms, visible):
 
 
 def decide_navigation(ready, visible, boundaries):
+    stop = (0, 0, 0, MODE_WAIT)
     if not ready:
-        return (0, 0, 255, MODE_TRACK_IR)
+        return stop
 
     away_x = away_y = 0.0
     blocked = {}
@@ -346,10 +347,10 @@ def decide_navigation(ready, visible, boundaries):
             if score > best_score:
                 best = (round(35 * dx), round(35 * dy))
                 best_score = score
-        return (0, 0, 255, MODE_TRACK_IR) if best is None else (best[0], best[1], retreat_mask, MODE_AVOID)
+        return stop if best is None else (best[0], best[1], retreat_mask, MODE_AVOID)
 
     if len(visible) < MIN_FLOOR_RAYS or not mask:
-        return (0, 0, 255, MODE_TRACK_IR)
+        return stop
     return 0, 0, mask, MODE_TRACK_IR
 
 
@@ -395,13 +396,19 @@ def main_loop(send_uart=True, display=False):
     target = cfg.TARGET_GOAL
     setup_reason = setup_wait_reason(mirror)
     goal_thresholds = (("YELLOW", cfg.YELLOW), ("BLUE", cfg.BLUE))
-    uart = pyb.UART(3, 9600) if send_uart else None
+    vision = None
+    if getattr(cfg, "PROTOCOL", 1) == 2:
+        import competition_vision
+        vision = competition_vision.Pipeline(cfg, mirror, LINE_CLEARANCE_CM, MAX_FRAME_AGE_MS)
+    uart = pyb.UART(3, 115200 if vision else 9600) if send_uart else None
     last_tx = time.ticks_ms()
     last_command = None
+    last_report = last_tx
     sequence = 0
     while True:
         started = time.ticks_ms()
         img = sensor.snapshot()
+        captured = time.ticks_ms() if vision else started
         white_candidates = set() if display else None
         visible, boundaries = scan_field(img, mirror, white_candidates) if mirror.rays else ((), [])
         now = time.ticks_ms()
@@ -409,14 +416,31 @@ def main_loop(send_uart=True, display=False):
         command = decide_navigation(setup_reason is None and frame_ms <= MAX_FRAME_AGE_MS,
                                     visible, boundaries)
         mode = command[3]
-        if uart is not None and (command != last_command
+        if vision is not None:
+            ready = (setup_reason is None and frame_ms <= MAX_FRAME_AGE_MS
+                     and len(visible) >= MIN_FLOOR_RAYS)
+            packet = vision.step(img, now, ready, frame_ms, visible, boundaries, time.ticks_ms)
+            if uart is not None:
+                uart.write(packet)
+        elif uart is not None and (command != last_command
                                  or time.ticks_diff(now, last_tx) >= STREAM_INTERVAL_MS):
             vx, vy, sectors, _ = command
             uart.write(make_nav_packet(vx, vy, sectors, mode, sequence))
             sequence = (sequence + 1) & 0xff
             last_tx = now
             last_command = command
-        if display:
+        if vision is not None and time.ticks_diff(now, last_report) >= 2000:
+            last_report = now
+            print("ms capture={} line={} total={}".format(
+                time.ticks_diff(captured, started), time.ticks_diff(now, captured),
+                time.ticks_diff(time.ticks_ms(), started)))
+            print(vision.timing, vision.status)
+        if display and vision is not None:
+            draw_mirror(img, mirror)
+            draw_floor_scan(img, mirror)
+            for _, _, _, x, y in boundaries:
+                img.draw_cross((x, y), color=(255, 255, 255))
+        elif display:
             # Detect both colors before drawing so overlays never enter the other search.
             ball_thresholds = getattr(cfg, "BALL", None)
             ball, ball_counts = (find_color_blob(img, mirror, ball_thresholds, 10, ball_like, True)
