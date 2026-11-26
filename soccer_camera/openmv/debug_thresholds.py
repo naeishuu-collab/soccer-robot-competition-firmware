@@ -31,7 +31,7 @@ def main():
                                            getattr(cfg, "BLUE_MIN_PIXELS", 8) if name == "BLUE" else
                                            getattr(cfg, "YELLOW_MIN_PIXELS", 12),
                                            (lambda candidate: not overlaps_ball(candidate, ball)) if name == "YELLOW" else None,
-                                           name == "YELLOW")
+                                           True)
             if blob is not None:
                 detections.append((name, blob))
             if log:

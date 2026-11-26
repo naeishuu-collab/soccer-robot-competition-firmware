@@ -398,7 +398,7 @@ def main_loop(send_uart=True, display=False):
                            getattr(cfg, "BLUE_MIN_PIXELS", 8) if name == "BLUE" else
                            getattr(cfg, "YELLOW_MIN_PIXELS", 12),
                            (lambda blob: not overlaps_ball(blob, ball)) if name == "YELLOW" else None,
-                           name == "YELLOW")) for name, thresholds in goal_thresholds]
+                           True)) for name, thresholds in goal_thresholds]
             for name, (blob, counts) in detections:
                 if blob is not None:
                     draw_goal(img, blob, name)

@@ -443,6 +443,8 @@ class OpenMvNavigationTests(unittest.TestCase):
                              (true_goal, [3, 1, 1]))
 
     def test_blue_threshold_covers_supplied_lab_sample(self):
+        for l in (17, 18):
+            self.assertTrue(any(nav.in_lab((l, 4, -27), threshold) for threshold in nav.cfg.BLUE))
         for l in (29, 38):
             for a in (6, 14):
                 for b in (-42, -30):
