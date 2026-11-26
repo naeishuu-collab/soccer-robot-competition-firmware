@@ -393,6 +393,8 @@ void loop() {
   static uint8_t sequence = 0;
   static uint32_t lastPollMs = 0;
   static uint32_t lastLogMs = 0;
+  static uint32_t lastIrReplyMs = 0;
+  static bool irReplied = false;
   static bool waitingForIr = false;
   static IrBallLock ballLock;
   static uint16_t lastDriveDirection = 0;
@@ -417,12 +419,28 @@ void loop() {
   }
 
   if (received) {
+    lastIrReplyMs = now;
+    irReplied = true;
     ballLock.update(now, strength > 0, convertDirection(rawAngle));
     waitingForIr = false;
     delayMicroseconds(50);  // Let the IR transceiver release the shared bus.
   } else if (replyExpired) {
     ballLock.reset();
     waitingForIr = false;
+  }
+
+  if (now - lastLogMs >= 500 && Serial) {
+    char line[100];
+    const int length = snprintf(line, sizeof(line), "CAM=%s mode=%u IR=%s ball=%u DIR=%u PWM=%u\n",
+                                cameraFresh(camera, now) ? "OK" : "NO",
+                                unsigned(camera.mode),
+                                irReplied && uint32_t(now - lastIrReplyMs) < IR_REPLY_TIMEOUT_MS ? "OK" : "NO",
+                                unsigned(ballLock.active(now) ? ballLock.direction() : 360),
+                                unsigned(lastDriveDirection), unsigned(lastDrivePower));
+    if (length > 0 && length < int(sizeof(line)) && Serial.availableForWrite() >= length) {
+      Serial.write(reinterpret_cast<const uint8_t *>(line), size_t(length));
+      lastLogMs = now;
+    }
   }
 
   // Never transmit during the IR reply window. Send a pending stop before a new drive.
@@ -439,13 +457,6 @@ void loop() {
     lastDriveDirection = direction;
     lastDrivePower = power;
 
-    if (now - lastLogMs >= 250 && Serial && Serial.availableForWrite() >= 110) {
-      lastLogMs = now;
-      Serial.printf("IR raw=%u count=%u lock=%u CAM=%u CLEAR=%02x DIR=%u POWER=%u\n",
-                    unsigned(rawAngle), unsigned(strength),
-                    unsigned(ballLock.active(now) ? ballLock.direction() : 360), unsigned(camera.mode),
-                    unsigned(camera.sectors), unsigned(direction), unsigned(power));
-    }
   }
 
   if (now - lastPollMs >= IR_POLL_INTERVAL_MS) {
