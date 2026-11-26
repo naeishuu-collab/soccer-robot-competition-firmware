@@ -381,10 +381,10 @@ def main_loop(send_uart=True, display=False):
         if display:
             # Detect both colors before drawing so overlays never enter the other search.
             detections = [(name, find_color_blob(img, mirror, thresholds,
-                           getattr(cfg, "BLUE_MIN_PIXELS", 8) if name == "BLUE" else cfg.GOAL_MIN_PIXELS,
-                           (lambda blob: not ball_like(blob)) if name == "YELLOW" else None))
+                           getattr(cfg, "BLUE_MIN_PIXELS", 8) if name == "BLUE" else cfg.GOAL_MIN_PIXELS))
                           for name, thresholds in goal_thresholds]
-            ball, _ = find_color_blob(img, mirror, cfg.YELLOW, cfg.GOAL_MIN_PIXELS, ball_like)
+            ball_thresholds = getattr(cfg, "BALL", None)
+            ball = find_color_blob(img, mirror, ball_thresholds, cfg.GOAL_MIN_PIXELS, ball_like)[0] if ball_thresholds else None
             for name, (blob, counts) in detections:
                 if blob is not None:
                     draw_goal(img, blob, name)

@@ -432,6 +432,11 @@ class OpenMvNavigationTests(unittest.TestCase):
         for sample in ((75, 16, 47), (80, 26, 50), (72, 21, 45), (77, 24, 49)):
             self.assertTrue(any(nav.in_lab(sample, threshold) for threshold in nav.cfg.YELLOW))
 
+    def test_ball_saturated_samples_and_yellow_goal_sample(self):
+        for sample in ((38, 51, 45), (69, 40, 59), (73, 31, 52)):
+            self.assertTrue(any(nav.in_lab(sample, threshold) for threshold in nav.cfg.BALL))
+        self.assertFalse(any(nav.in_lab((77, 21, 49), threshold) for threshold in nav.cfg.BALL))
+
     def test_wire_format_signed_motion_checksum_and_protocol_marker(self):
         vx, vy, mask, mode = nav.decide_navigation(True, VISIBLE, [edge(90)])
         packet = nav.make_nav_packet(vx, vy, mask, mode, 42)

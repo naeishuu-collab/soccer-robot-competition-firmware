@@ -25,14 +25,14 @@ def main():
         detections = []
         for name, thresholds in (("YELLOW", cfg.YELLOW), ("BLUE", cfg.BLUE)):
             blob, counts = find_color_blob(img, mirror, thresholds,
-                                           getattr(cfg, "BLUE_MIN_PIXELS", 8) if name == "BLUE" else cfg.GOAL_MIN_PIXELS,
-                                           (lambda candidate: not ball_like(candidate)) if name == "YELLOW" else None)
+                                           getattr(cfg, "BLUE_MIN_PIXELS", 8) if name == "BLUE" else cfg.GOAL_MIN_PIXELS)
             if blob is not None:
                 detections.append((name, blob))
             if log:
                 rect = blob_value(blob, "rect") if blob is not None else None
                 print("{} components/small/masked={} selected={}".format(name, counts, rect))
-        ball, _ = find_color_blob(img, mirror, cfg.YELLOW, cfg.GOAL_MIN_PIXELS, ball_like)
+        ball_thresholds = getattr(cfg, "BALL", None)
+        ball = find_color_blob(img, mirror, ball_thresholds, cfg.GOAL_MIN_PIXELS, ball_like)[0] if ball_thresholds else None
         if ball is not None:
             detections.append(("BALL", ball))
         if log:
