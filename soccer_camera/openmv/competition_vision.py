@@ -112,6 +112,11 @@ class LineGuard:
         return mask, escape, nearest, max(groups, 1 if ordered else 0)
 
 
+def observed_rays(visible, boundaries):
+    """Rays that told us something: open floor, or a white line (which hides the floor behind it)."""
+    return len(set(visible) | {edge[0] for edge in boundaries if edge[1] == "WHITE"})
+
+
 def table_distance(table, radius):
     """Radius (px) to centimetres. Invalid table or radius outside it: unknown, never extrapolated."""
     if len(table) < 2:
@@ -279,6 +284,7 @@ class Pipeline:
         self.sequence = 0
         self.frame = 0
         self.timing = {"ball": 0, "goals": 0, "pose": 0}
+        self.ran = {"ball": 0, "goals": 0}
         self.heading = (None, 0)
 
     def candidates(self, img, thresholds, min_pixels, ball):
@@ -293,6 +299,21 @@ class Pipeline:
         result = [blob_candidate(b, mirror, min_pixels, ball) for b in found]
         return [c for c in result if c is not None]
 
+    def unhide_ball(self, now, visible, boundaries):
+        """A ball close to the robot hides its own floor rays; fill that gap if both sides are clear."""
+        bearing, _, confidence, width, age = self.ball.fields(now)
+        if bearing is None or confidence < 40 or age > 15:
+            return visible
+        white = {e[0]: e[2] for e in boundaries if e[1] == "WHITE"}
+        result = set(visible)
+        for ray in range(0, 360, 15):
+            if ray in visible or ray in white or abs(wrap(ray - bearing)) > max(15, width / 2):
+                continue
+            sides = [[(ray + s * d) % 360 for d in (15, 30)] for s in (-1, 1)]
+            if all(any(r in visible and white.get(r, 255) > self.guard.block for r in side) for side in sides):
+                result.add(ray)
+        return result
+
     def step(self, img, now, ready, frame_ms, visible, boundaries, clock=None):
         cfg = self.cfg
         clock = clock or (lambda: 0)
@@ -301,12 +322,20 @@ class Pipeline:
         slow = frame_ms + self.timing["ball"] + self.timing["goals"] > self.max_frame_ms * 0.7
         ball_period, goal_period = (4, 6) if slow else (2, 3)
         self.frame += 1
-        if self.frame % ball_period == 0:
+        def affordable(name):
+            # Line data comes first: skip a detection that would make this packet stale, but not forever.
+            fits = frame_ms + clock() - began + self.timing[name] <= self.max_frame_ms * 0.9
+            if fits or self.frame - self.ran[name] >= 20:
+                self.ran[name] = self.frame
+                return True
+            return False
+
+        if self.frame % ball_period == 0 and affordable("ball"):
             start = clock()
             self.ball.update(now, self.candidates(img, getattr(cfg, "BALL", None),
                                                   getattr(cfg, "BALL_MIN_PIXELS", 10), True))
             self.timing["ball"] = clock() - start
-        if self.frame % goal_period == 1:
+        if self.frame % goal_period == 1 and affordable("goals"):
             start = clock()
             for name, track in self.goals.items():
                 found = self.candidates(img, getattr(cfg, name), getattr(cfg, name + "_MIN_PIXELS", 12), False)
@@ -317,7 +346,9 @@ class Pipeline:
                 track.update(now, found)
             self.timing["goals"] = clock() - start
         age_ms = frame_ms + clock() - began
-        ready = ready and age_ms <= self.max_frame_ms
+        floor_ok = ready
+        ready = floor_ok and age_ms <= self.max_frame_ms
+        visible = self.unhide_ball(now, visible, boundaries)
         mask, escape, nearest, count = self.guard.update(ready, visible, boundaries)
         start = clock()
         ball = self.ball.fields(now)
@@ -331,8 +362,8 @@ class Pipeline:
         flags = FLAG_READY if ready else 0
         if escape is not None:
             flags |= FLAG_ESCAPE
-        if age_ms > self.max_frame_ms:
-            flags |= FLAG_SLOW
+        if floor_ok and not ready:
+            flags |= FLAG_SLOW  # late, not blind: MAIN may reuse the previous line data briefly
         self.heading = (None, 0)
         if target in ("YELLOW", "BLUE"):
             flags |= FLAG_TARGET_VALID | (FLAG_TARGET_BLUE if target == "BLUE" else 0)
@@ -343,6 +374,7 @@ class Pipeline:
         packet = make_packet(self.sequence, flags, mask, escape, nearest, count, ball, yellow, blue,
                              self.heading, frame_ms)
         self.sequence = (self.sequence + 1) & 0xFF
-        self.status = "V2 mask={:04x} esc={} line={} ball={}/{} Y={}/{} B={}/{} head={}/{}".format(
+        self.status = "V2 " + ("OK" if ready else "SLOW" if floor_ok else "NOFLOOR")
+        self.status += " mask={:04x} esc={} line={} ball={}/{} Y={}/{} B={}/{} head={}/{}".format(
             mask, escape, nearest, ball[0], ball[2], yellow[0], yellow[2], blue[0], blue[2], *self.heading)
         return packet

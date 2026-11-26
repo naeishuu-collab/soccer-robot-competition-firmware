@@ -417,8 +417,9 @@ def main_loop(send_uart=True, display=False):
                                     visible, boundaries)
         mode = command[3]
         if vision is not None:
-            ready = (setup_reason is None and frame_ms <= MAX_FRAME_AGE_MS
-                     and len(visible) >= MIN_FLOOR_RAYS)
+            # Frame age is judged inside the pipeline, which also counts the detection time.
+            ready = (setup_reason is None
+                     and competition_vision.observed_rays(visible, boundaries) >= MIN_FLOOR_RAYS)
             packet = vision.step(img, now, ready, frame_ms, visible, boundaries, time.ticks_ms)
             if uart is not None:
                 uart.write(packet)

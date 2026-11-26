@@ -61,6 +61,11 @@ class LineGuardTests(unittest.TestCase):
         escape = v.LineGuard(25, 35).update(True, ALL, near)[1]
         self.assertIn(escape, (90, 112.5, 247.5, 270))
 
+    def test_unreadable_floor_beside_a_heading_keeps_it_closed(self):
+        # The sector window is about the robot's own width: it is never narrowed to avoid a stop.
+        narrow = {75, 90, 105, 0, 15, 345}
+        self.assertEqual(v.LineGuard(25, 35).update(True, narrow, lines((0, 15)))[:2], (0, None))
+
     def test_separate_lines_are_counted(self):
         count = v.LineGuard(25, 35).update(True, ALL, lines(*(wall(0, 30, 15) + wall(180, 30, 15))))[3]
         self.assertEqual(count, 2)
@@ -184,6 +189,42 @@ class RecognitionTests(unittest.TestCase):
                 near = lines(*(wall(first, 15, 30) + wall(second, 22, 15)))
                 escape = v.LineGuard(25, 35).update(True, ALL, near)[1]
                 self.assertTrue(escape is None or escape % 45 == 0, (first, second, escape))
+
+    def test_near_ball_does_not_blind_its_own_direction(self):
+        hidden = ALL - {90}
+        pipe = None
+        box = (200, 115, 10, 10)
+        with patch.multiple(nav.cfg, IMAGE_SIZE=(320, 240), MIRROR_CENTER=(160, 120), MIRROR_RING=(20, 100)):
+            pipe = v.Pipeline(nav.cfg, nav.Mirror(320, 240), 25, 100)
+            bearing = nav.Mirror(320, 240).bearing(205, 120)
+            hidden = ALL - {int(bearing / 15 + 0.5) * 15 % 360}
+            for i in range(6):
+                packet = pipe.step(self.blobs(ball=box), i * 50, True, 30, hidden, [])
+            self.assertEqual(packet[6] | packet[7] << 8, 0xFFFF)
+            # Without a ball there the same gap stays closed.
+            pipe = v.Pipeline(nav.cfg, nav.Mirror(320, 240), 25, 100)
+            for i in range(6):
+                packet = pipe.step(self.blobs(), i * 50, True, 30, hidden, [])
+            self.assertNotEqual(packet[6] | packet[7] << 8, 0xFFFF)
+
+    def test_nearby_lines_count_as_observed_floor(self):
+        visible = set(range(90, 210, 15))
+        seen = [(b, "WHITE", 15, 0, 0) for b in range(0, 75, 15)]
+        self.assertEqual(v.observed_rays(visible, seen), 13)
+
+    def test_slow_detection_is_skipped_to_keep_line_data_fresh(self):
+        clock = [0]
+
+        class Slow:
+            def find_blobs(self, *args, **kwargs):
+                clock[0] += 50
+                return []
+
+        with patch.multiple(nav.cfg, IMAGE_SIZE=(320, 240), MIRROR_CENTER=(160, 120), MIRROR_RING=(20, 100)):
+            pipe = v.Pipeline(nav.cfg, nav.Mirror(320, 240), 25, 100)
+            ready = [bool(pipe.step(Slow(), i * 70, True, 60, ALL, [], lambda: clock[0])[5] & v.FLAG_READY)
+                     for i in range(60)]
+        self.assertGreaterEqual(sum(ready), 50)
 
     def test_golden_packet_shared_with_main(self):
         packet = v.make_packet(7, 0x15, 0xFF0F, None, (350, 31), 1, (10, None, 80, 0, 2),

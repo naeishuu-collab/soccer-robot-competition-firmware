@@ -28,7 +28,7 @@ struct Frame { uint16_t direction, power; int turn; bool avoid; };
 struct Rig {
   MockSerial mainBus, motorBus, irBus;
   std::vector<Frame> sent;
-  bool camera = true, ir = true;
+  bool camera = true, ir = true, cameraBall = false, corrupt = false, noBall = false;
   uint16_t mask = 0xFFFF, escape = 0xFFFF, ballAngle = 0;
   uint8_t sequence = 0;
   uint32_t lastCameraMs = 0, replyAt = 0;
@@ -43,7 +43,9 @@ struct Rig {
     for (int at : {14, 25, 31}) put(at, 0xFFFF);
     f[16] = 255; f[18] = 255; f[27] = 255; f[30] = 255;
     put(19, 0); f[21] = 255; f[22] = 90; f[23] = 20; f[24] = 0;  // yellow goal ahead
+    if (cameraBall) { put(14, 0); f[17] = 80; f[18] = 0; }
     put(35, brain::crc16(f, brain::kCameraSize - 2));
+    if (corrupt) { f[7] ^= 1; corrupt = false; }
     mainboard::cameraSerial.feed(f, sizeof(f));
   }
 
@@ -55,7 +57,7 @@ struct Rig {
       pollPending = false;
       irx::Result r;
       r.angle = uint16_t((360 - ballAngle) % 360);  // MAIN mirrors the IR angle
-      r.strength = 400; r.confidence = 90;
+      r.strength = noBall ? 0 : 400; r.confidence = noBall ? 0 : 90;
       uint8_t wire[irx::kReplySize];
       irx::encode(r, wire);
       mainBus.feed(wire, sizeof(wire));
@@ -131,6 +133,31 @@ int main() {
   rig.run(500);
   CHECK("IR recovery resumes", !Rig::still());
   CHECK("still inside the reply window rule", !rig.sentDuringReply);
+
+  // One corrupted camera frame is absorbed by the freshness window.
+  rig.corrupt = true;
+  int stopped = 0;
+  for (int i = 0; i < 300; ++i) { rig.tick(); stopped += Rig::still(); }
+  CHECK("a single bad CRC does not stop", stopped == 0);
+
+  // IR silent but the camera sees the ball: the drive stream must not gap past the MOTOR watchdog.
+  rig.cameraBall = true;
+  rig.run(300);
+  rig.ir = false;
+  stopped = 0;
+  for (int i = 0; i < 1000; ++i) { rig.tick(); stopped += Rig::still(); }
+  CHECK("camera ball keeps the motors running without IR", stopped == 0);
+  rig.ir = true; rig.cameraBall = false;
+  rig.run(500);
+
+  // A lost ball: the patrol must keep the motors turning, not sit in reverse pauses.
+  rig.noBall = true;
+  rig.run(700);
+  stopped = 0;
+  for (int i = 0; i < 4000; ++i) { rig.tick(); stopped += Rig::still(); }
+  CHECK("searching keeps moving", stopped == 0 && Rig::legalDuty());
+  rig.noBall = false;
+  rig.run(700);
 
   rig.mask = uint16_t(1u << 8); rig.escape = 180;
   size_t from = rig.sent.size();

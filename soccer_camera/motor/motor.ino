@@ -510,6 +510,7 @@ wheel::Diag diag;
 uint32_t startRequestUs = 0, startLatencyUs = 0;
 uint32_t diagExitMs = 0;
 bool diagCooling = false;  // after diag, wait one reverse pause before obeying MAIN
+const char *modelStop = "no command yet";  // why the wheel-model path is stopped; "" while driving
 
 void readDiagSerial(uint32_t now) {
   static char text[32];
@@ -556,9 +557,11 @@ void runModel(uint32_t now) {
       if (power) {  // power 0 always means stop
         if (wasStill && !startRequestUs) startRequestUs = micros();
         modelDrive.command(direction, power, turn, now, avoid);
+        modelStop = modelDrive.mix().feasible ? "" : "infeasible direction";
       } else {
         modelDrive.stop(now);
         startRequestUs = 0;
+        modelStop = "MAIN stop";
       }
       acceptCommand(frame[2], direction, power, now);
     }
@@ -567,6 +570,7 @@ void runModel(uint32_t now) {
     timedOut = true;
     ++timeoutEvents;
     receivedPower = 0;
+    modelStop = "command timeout";
     modelDrive.stop(now);
     startRequestUs = 0;
   }
@@ -640,8 +644,7 @@ void loop() {
     lastDebugMs = millis();
     printDebug();
     if (ROBOT_UPGRADE && Serial && Serial.availableForWrite() >= 64) {
-      Serial.printf("MODEL err=%d feasible=%d start_us=%lu\n", int(modelDrive.mix().errorDeg),
-                    int(modelDrive.mix().feasible), static_cast<unsigned long>(startLatencyUs));
+      Serial.printf("MODEL err=%d stop=%s start_us=%lu\n", int(modelDrive.mix().errorDeg), modelStop, static_cast<unsigned long>(startLatencyUs));
     }
   }
 }

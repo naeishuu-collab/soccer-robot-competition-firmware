@@ -85,7 +85,7 @@ static void tactics() {
   World u;
   u.ir.angle = 180;
   Output o = u.run(10);
-  CHECK("unknown attack direction: no pushing by default", !o.power);
+  CHECK("unknown attack direction: no pushing by default", !o.power || fabsf(wrap(o.direction - 180.0f)) >= 90);
 
   World orbit;
   orbit.goal(0); orbit.ir.angle = 180;
@@ -115,7 +115,7 @@ static void tactics() {
   stale.cam.yellow.seen = false;
   stale.run(1);
   stale.cam.receivedMs = stale.now;
-  stale.now += 380;
+  stale.now += 1100;
   stale.cam.receivedMs = stale.now;
   stale.ir.stampMs = stale.now;
   o = stale.robot.step(stale.cam, stale.ir, stale.bno, stale.now);

@@ -11,13 +11,15 @@ constexpr uint16_t kUnknown = 0xFFFF;
 
 struct Config {
   // Speed requests for the MOTOR wheel model (210 = full). Values below the motors' holding speed are raised there.
-  uint16_t speedSlow = 137, speedNormal = 160, speedFast = 185, speedAttack = 195, speedAvoid = 175;
+  uint16_t speedSlow = 160, speedNormal = 160, speedFast = 185, speedAttack = 195, speedAvoid = 175;
   int turnSign = 1;            // verify with wheels raised
   float headingKp = 0.5f, headingKd = 0.05f;
   float headingEnter = 10, headingExit = 5;
   int turnMin = 8, turnMax = 30, turnSlew = 3;  // turn units, per 20 ms step
   uint32_t cameraTimeoutMs = 200, irTimeoutMs = 100;
-  uint32_t searchMs = 1500, attackStallMs = 3000, recoverMs = 400;
+  uint32_t searchLegMs = 400, attackStallMs = 3000, recoverMs = 400;
+  uint32_t lineHoldMs = 150;  // a slow camera frame may reuse line data this old, never older
+  uint32_t goalMemoryMs = 1000, goalMemoryGyroMs = 3000;
   uint8_t ballMinConfidence = 25, goalMinConfidence = 40, headingMinConfidence = 50;
   float attackEnterDeg = 15, attackExitDeg = 30, alignDeg = 45;
   uint8_t nearCm = 25, farCm = 50;
@@ -341,9 +343,10 @@ private:
 };
 
 // ---------------- Ball fusion and prediction ----------------
-enum class BallState { TRACK, PREDICT, SEARCH, WAIT };
+// WAIT only before the first sighting; afterwards TRACK -> PREDICT -> SEARCH -> REACQUIRE -> TRACK.
+enum class BallState { TRACK, PREDICT, SEARCH, REACQUIRE, WAIT };
 inline const char *name(BallState s) {
-  static const char *const n[] = {"TRACK", "PREDICT", "SEARCH", "WAIT"};
+  static const char *const n[] = {"TRACK", "PREDICT", "SEARCH", "REACQUIRE", "WAIT"};
   return n[int(s)];
 }
 
@@ -411,16 +414,15 @@ public:
     const uint32_t lost = now - seenMs_;
     const uint32_t predictMs = headingWasKnown_ ? 100 + 2u * confidence : 100 + confidence;
     if (lost <= 100) {
-      state = BallState::TRACK;
+      if (reacquiring_ && uint32_t(now - reacquiredMs_) >= 100) reacquiring_ = false;
+      state = reacquiring_ ? BallState::REACQUIRE : BallState::TRACK;
       bearing = filtered_;
     } else if (lost <= predictMs) {
       state = BallState::PREDICT;
       bearing = norm(filtered_ + clampf(rate * lost / 1000.0f, 30));
-    } else if (lost <= predictMs + cfg.searchMs) {
-      state = BallState::SEARCH;
     } else {
-      state = BallState::WAIT;
-      ever_ = false;
+      state = BallState::SEARCH;  // `bearing` stays as the search anchor
+      reacquiring_ = false;
       rate = 0;
     }
   }
@@ -455,6 +457,10 @@ private:
         if (dt > 0.005f) rate = clampf(rate + 0.15f * residual / dt, 360);
       }
     }
+    if (state == BallState::SEARCH) {
+      reacquiring_ = true;
+      reacquiredMs_ = now;
+    }
     ever_ = true;
     confidence = conf;
     measuredMs_ = seenMs_ = now;
@@ -463,7 +469,8 @@ private:
   Observation lastIr_, lastCam_;
   float filtered_ = 0, heading_ = 0, jumpBearing_ = 0;
   uint32_t irStamp_ = 0, camStamp_ = 0, measuredMs_ = 0, seenMs_ = 0, distanceMs_ = 0;
-  bool ever_ = false, jump_ = false, headingWasKnown_ = false;
+  uint32_t reacquiredMs_ = 0;
+  bool ever_ = false, jump_ = false, headingWasKnown_ = false, reacquiring_ = false;
 };
 
 // ---------------- Tactics, line safety, speed ----------------
@@ -476,18 +483,35 @@ inline const char *name(Tactic t) {
 inline bool sectorOpen(uint16_t mask, int sector) { return mask & (1u << (sector & 15)); }
 inline int sectorOf(float direction) { return int(norm(direction) / 22.5f + 0.5f) & 15; }
 
-// Returns a direction allowed by the line mask nearest to `wanted`, or -1. In-between angles can come
-// out up to ~23 degrees wrong, so near any line only multiples of 45 (exact on all four wheels) are used.
-inline int safeDirection(uint16_t mask, float wanted) {
-  if (mask == 0xFFFF) return int(norm(wanted) + 0.5f) % 360;
+// Best direction that the line mask opens and `veto` accepts, or -1. In-between angles can come out up
+// to ~23 degrees wrong, so away from a fully open field only multiples of 45 (exact on all wheels) are used.
+// Cost: angle from `wanted`, a reversal pause against `previous`, and closeness to the nearest line.
+template <class Veto>
+inline int chooseDirection(uint16_t mask, float wanted, Veto veto, int previous = -1, int line = -1,
+                           bool exact = false) {
+  if (mask == 0xFFFF && !exact && !veto(norm(wanted))) return int(norm(wanted) + 0.5f) % 360;
   int best = -1;
-  float bestError = 91;
+  float bestCost = 1e9f;
   for (int k = 0; k < 16; k += 2) {
-    if (!sectorOpen(mask, k)) continue;
-    const float error = fabsf(wrap(k * 22.5f - wanted));
-    if (error < bestError) { bestError = error; best = k / 2 * 45; }
+    const float candidate = k * 22.5f;
+    if (!sectorOpen(mask, k) || veto(candidate)) continue;
+    float cost = fabsf(wrap(candidate - wanted));
+    if (previous >= 0 && fabsf(wrap(candidate - previous)) > 100) cost += 40;
+    if (line >= 0) cost += fmaxf(0, 90 - fabsf(wrap(candidate - line))) * 0.5f;
+    if (cost < bestCost) { bestCost = cost; best = int(candidate); }
   }
   return best;
+}
+inline int nearestExact(uint16_t mask, float wanted) {
+  int best = -1;
+  for (int k = 0; k < 16; k += 2) {
+    if (sectorOpen(mask, k) && (best < 0 || fabsf(wrap(k * 22.5f - wanted)) < fabsf(wrap(best - wanted))))
+      best = k / 2 * 45;
+  }
+  return best;
+}
+inline int safeDirection(uint16_t mask, float wanted) {
+  return chooseDirection(mask, wanted, [](float) { return false; });
 }
 
 struct Output {
@@ -524,58 +548,103 @@ public:
     const bool gyro = heading.mode == Mode::FUSED || heading.mode == Mode::BNO_ONLY;
     ball.update(i, c, camFresh ? cam.ball.distanceCm : -1, gyro, heading.heading(), cfg, now);
 
-    // Attack direction: the goal itself, else opposite our own goal, else the heading, else brief memory.
+    const bool gyroNow = gyro && !heading.disagreement;
+    // Attack direction: the goal itself, else opposite our own goal, else the heading, else memory.
     const bool trusted = heading.absolute && !heading.disagreement;
     float goal = NAN;
     if (usable(target)) goal = target.bearing;
     else if (usable(own)) goal = norm(own.bearing + 180);
     else if (trusted) goal = norm(-heading.heading());
-    if (isfinite(goal)) { goalMemory_ = goal; goalMs_ = now; haveGoal_ = true; }
-    else if (haveGoal_ && !heading.disagreement && uint32_t(now - goalMs_) <= 300) goal = goalMemory_;
+    if (isfinite(goal)) {
+      goalMemory_ = goal;
+      goalMs_ = now;
+      goalHeading_ = heading.heading();
+      goalGyro_ = gyroNow;
+      haveGoal_ = true;
+    } else if (haveGoal_ && !heading.disagreement) {
+      // The gyro lets the remembered bearing turn with the robot, so it can be kept longer.
+      const bool turned = goalGyro_ && gyroNow;
+      if (uint32_t(now - goalMs_) <= (turned ? cfg.goalMemoryGyroMs : cfg.goalMemoryMs))
+        goal = turned ? norm(goalMemory_ - wrap(heading.heading() - goalHeading_)) : goalMemory_;
+    }
 
     Output out;
     out.goal = goal;
     // 1. communication and recognition failures
-    if (!camFresh) return finish(out, Tactic::SAFE_STOP, "camera link", false, 0);
-    if (!irFresh) return finish(out, Tactic::SAFE_STOP, "IR link", false, 0);
-    if (!cam.ready) return finish(out, Tactic::SAFE_STOP, "line unknown", false, 0);
-    if (!cam.mask) return finish(out, Tactic::SAFE_STOP, "no safe direction", false, 0);
+    if (!camFresh) return stop(out, "camera link");
+    bool held = false;
+    if (cam.ready) {
+      lineMask_ = cam.mask;
+      lineEscape_ = cam.escaping ? cam.escape : kUnknown;
+      lineBearing_ = cam.line;
+      lineMs_ = cam.receivedMs;
+      haveLine_ = true;
+    } else if (cam.slow && haveLine_ && uint32_t(now - lineMs_) <= cfg.lineHoldMs) {
+      held = true;  // one late frame: keep the last good line data, briefly
+    } else {
+      haveLine_ = false;
+      return stop(out, cam.slow ? "line data expired" : "floor not recognised");
+    }
+    const uint16_t mask = lineMask_;
+    if (!mask) return stop(out, "no safe direction");
+    const bool cameraBall = c.valid && c.confidence >= cfg.ballMinConfidence && uint32_t(now - c.stampMs) <= 150;
+    const bool searching = ball.state == BallState::SEARCH || ball.state == BallState::WAIT;
+    if (!irFresh && (searching || !cameraBall)) return stop(out, "no ball sensor");
+
+    const int line = lineBearing_ == kUnknown ? -1 : int(lineBearing_);
     // 2. line escape, with no heading correction
-    if (cam.escaping) {
-      if (cam.escape % 45 || !sectorOpen(cam.mask, sectorOf(cam.escape)))
-        return finish(out, Tactic::SAFE_STOP, "escape not safe", false, 0);
-      out.direction = cam.escape;
+    if (lineEscape_ != kUnknown) {
+      const uint16_t escape = lineEscape_;
+      const int d = escape % 45 == 0 && sectorOpen(mask, sectorOf(escape))
+                        ? int(escape)
+                        : nearestExact(mask, float(escape));
+      if (d < 0) return stop(out, "no safe escape");
+      out.direction = uint16_t(d);
       out.power = cfg.speedAvoid;
       out.avoid = true;
       return finish(out, Tactic::AVOID_LINE, "line", false, 0);
     }
 
     if (recovering_ && uint32_t(now - recoverMs_) >= cfg.recoverMs) recovering_ = false;
-    if (ball.state == BallState::WAIT) return finish(out, Tactic::SEARCH, "waiting for ball", false, 0);
+    if (ball.state == BallState::WAIT) return finish(out, Tactic::SEARCH, "no ball seen yet", false, 0);
 
     float wanted = 0;
     uint16_t speed = cfg.speedNormal;
     Tactic tactic = Tactic::APPROACH;
+    const char *note = "";
+    bool keepAway = false;  // never get closer to the ball
+    float orbitLimit = 45;  // a rerouted orbit never heads closer to the ball than this, or than planned
     if (ball.state == BallState::SEARCH) {
-      // Fall back toward our own goal for a limited time; only with a calibrated distance to it.
-      if (!usable(own) || own.distanceCm < 40)
-        return finish(out, Tactic::SEARCH, "ball lost", false, 0);
+      // Octagon patrol from the last bearing. 45 degree steps need no reverse pause (a wheel changing
+      // sign has been idle for a whole leg), and the loop returns near its start.
       tactic = Tactic::SEARCH;
-      wanted = own.bearing;
+      if (previous_ != Tactic::SEARCH) {
+        searchMs_ = now;
+        searchAnchor_ = int(ball.bearing / 45 + 0.5f) % 8 * 45;
+      }
+      wanted = norm(float(searchAnchor_) + side_ * 45.0f * (uint32_t(now - searchMs_) / cfg.searchLegMs % 8));
+      speed = cfg.speedSlow;
+      note = "searching";
     } else if (recovering_) {
       tactic = Tactic::RECOVER;
       wanted = norm(ball.bearing + 180);
     } else if (!isfinite(goal)) {
-      // Pushing blind can score in our own goal: only close in on a ball known to be far away.
-      const bool far = ball.distanceCm > cfg.farCm;
-      if (!cfg.blindTracking && !far)
-        return finish(out, Tactic::SAFE_STOP, "attack direction unknown", false, 0);
-      wanted = ball.lead();
+      if (cfg.blindTracking || ball.distanceCm > cfg.farCm) {
+        wanted = ball.lead();
+        note = "goal unknown: closing on a far ball";
+      } else {
+        // Circle the ball without touching it until a goal is seen again.
+        tactic = Tactic::ORBIT;
+        wanted = norm(ball.bearing + side_ * 90.0f);
+        keepAway = true;
+        note = "goal unknown: repositioning";
+      }
       speed = cfg.speedSlow;
     } else {
       const float delta = wrap(ball.bearing - goal);
       const float size = fabsf(delta);
-      const bool attacking = previous_ == Tactic::ATTACK ? size <= cfg.attackExitDeg : size <= cfg.attackEnterDeg;
+      const bool attacking = ball.state != BallState::REACQUIRE &&
+                             (previous_ == Tactic::ATTACK ? size <= cfg.attackExitDeg : size <= cfg.attackEnterDeg);
       const bool far = ball.distanceCm > cfg.farCm;
       if (size < 150) side_ = delta < 0 ? -1 : 1;  // keep the side while the ball is nearly straight behind
       if (attacking) {
@@ -592,13 +661,7 @@ public:
         if (ball.distanceCm > cfg.nearCm) offset *= float(cfg.nearCm) / ball.distanceCm + 0.2f;
         if (offset > 90) offset = 90;
         wanted = norm(ball.bearing + side_ * offset);
-        // Near a line, go round the other way rather than clipping the preferred side.
-        const int first = safeDirection(cam.mask, wanted);
-        if (first < 0 || fabsf(wrap(first - wanted)) > 45) {
-          const float other = norm(ball.bearing - side_ * offset);
-          const int second = safeDirection(cam.mask, other);
-          if (second >= 0 && fabsf(wrap(second - other)) <= 45) { side_ = -side_; wanted = other; }
-        }
+        orbitLimit = fminf(orbitLimit, offset);
         speed = far ? cfg.speedFast : cfg.speedNormal;
       }
     }
@@ -609,46 +672,55 @@ public:
       else if (uint32_t(now - attackMs_) >= cfg.attackStallMs) { recovering_ = true; recoverMs_ = now; }
     }
 
-    const int direction = safeDirection(cam.mask, wanted);
-    if (direction < 0) return finish(out, Tactic::SAFE_STOP, "path blocked by line", false, 0);
-    if (tactic == Tactic::ORBIT && fabsf(wrap(direction - ball.bearing)) < 45)
-      return finish(out, Tactic::SAFE_STOP, "orbit blocked", false, 0);
     // A weaker, older sighting of our own goal is still enough to refuse pushing toward it.
     const bool ownSeen = cam.targetValid && own.seen && own.confidence >= 25 && uint32_t(now - own.stampMs) <= 800;
-    if (ownSeen && tactic != Tactic::SEARCH && fabsf(wrap(direction - own.bearing)) < cfg.ownGoalGuardDeg &&
-        fabsf(wrap(ball.bearing - own.bearing)) < 60)
-      return finish(out, Tactic::SAFE_STOP, "own goal ahead", false, 0);
+    const bool ballToOwn = ownSeen && tactic != Tactic::SEARCH && fabsf(wrap(ball.bearing - own.bearing)) < 60;
+    const bool ownNear = tactic == Tactic::SEARCH && ownSeen && own.distanceCm < 40;  // unknown counts as near
+    auto veto = [&](float d) {
+      const float fromBall = fabsf(wrap(d - ball.bearing));
+      const bool intoOwn = ownSeen && fabsf(wrap(d - own.bearing)) < cfg.ownGoalGuardDeg;
+      if ((ballToOwn && (intoOwn || fromBall < 60)) || (ownNear && intoOwn)) return true;
+      if (keepAway) return fromBall < 89.5f;
+      return tactic == Tactic::ORBIT && fromBall < orbitLimit - 0.5f;
+    };
+    // Near a line, and on held line data, only exact directions: the MOTOR applies its strict rule there.
+    const int direction = chooseDirection(mask, wanted, veto, previousDirection_, line, held);
+    if (direction < 0) return stop(out, "every open direction is unsafe");
+    if (fabsf(wrap(direction - wanted)) > 30 && !*note) note = "rerouted";
     const float headingError = heading.absolute ? -heading.heading() : (usable(target) ? wrap(target.bearing) : 0);
-    if (cam.mask != 0xFFFF || cam.slow || ball.confidence < 40 ||
+    if (mask != 0xFFFF || cam.slow || held || ball.confidence < 40 ||
         (heading.absolute && fabsf(headingError) > 45)) speed = cfg.speedSlow < speed ? cfg.speedSlow : speed;
     out.direction = uint16_t(direction);
     out.power = speed;
-    out.avoid = cam.mask != 0xFFFF;  // near a line the MOTOR applies its strict feasibility rule
+    out.avoid = mask != 0xFFFF || held;  // near a line the MOTOR applies its strict feasibility rule
     // Absolute heading: hold it. Goal-relative only: face the goal while lining up, at half gain.
     const bool relative = !heading.absolute && usable(target) &&
                           (tactic == Tactic::ALIGN || tactic == Tactic::ATTACK);
     const bool correct = !out.avoid && !heading.disagreement && (heading.absolute || relative);
     // Camera-only headings are approximate: correct them at half gain, like a goal-relative bearing.
     const bool half = relative || heading.mode == Mode::VISION_ONLY;
-    return finish(out, tactic, "", correct, headingError, half ? 0.5f : 1.0f);
+    return finish(out, tactic, note, correct, headingError, half ? 0.5f : 1.0f);
   }
 
 private:
+  Output &stop(Output &out, const char *reason) { return finish(out, Tactic::SAFE_STOP, reason, false, 0); }
   Output &finish(Output &out, Tactic tactic, const char *reason, bool correct, float error, float gain = 1) {
     out.tactic = tactic;
     out.reason = reason;
     out.turn = turn_.update(correct && out.power, error, cfg, gain);
     if (!out.power) out.direction = 0;
+    previousDirection_ = out.power ? int(out.direction) : -1;
     previous_ = tactic;
     return out;
   }
 
   Turn turn_;
   Tactic previous_ = Tactic::SAFE_STOP;
-  float goalMemory_ = 0;
-  int side_ = 1;
-  uint32_t goalMs_ = 0, attackMs_ = 0, recoverMs_ = 0;
-  bool haveGoal_ = false, recovering_ = false;
+  float goalMemory_ = 0, goalHeading_ = 0;
+  int side_ = 1, searchAnchor_ = 0, previousDirection_ = -1;
+  uint32_t goalMs_ = 0, attackMs_ = 0, recoverMs_ = 0, searchMs_ = 0, lineMs_ = 0;
+  uint16_t lineMask_ = 0, lineEscape_ = kUnknown, lineBearing_ = kUnknown;
+  bool haveGoal_ = false, goalGyro_ = false, recovering_ = false, haveLine_ = false;
 };
 
 }  // namespace brain

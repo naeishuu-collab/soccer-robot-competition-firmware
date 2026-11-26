@@ -131,7 +131,8 @@ static void irFilterTests() {
 static void headingModes() {
   World w;
   w.ir.angle = 0;
-  assert(!w.run(10).power);  // default: attack direction unknown, stay put
+  const Output circle = w.run(10);  // default: attack direction unknown, never approach
+  assert(circle.power && fabsf(wrap(circle.direction - 0.0f)) >= 90);
   w.robot.cfg.blindTracking = true;
   Output o = w.run(10);
   assert(w.robot.heading.mode == Mode::DEGRADED && o.turn == 0 && o.power > 0);  // restricted IR tracking
@@ -204,8 +205,11 @@ static void safety() {
   w.cam.mask = 1u << 8; w.cam.escaping = true; w.cam.escape = 180;
   o = w.run();
   assert(o.tactic == Tactic::AVOID_LINE && o.direction == 180 && o.power == w.robot.cfg.speedAvoid && o.avoid && !o.turn);
-  w.cam.escape = 0;
-  assert(w.run().power == 0);
+  w.cam.escape = 0;  // listed escape is closed: use the open exact direction instead
+  o = w.run();
+  assert(o.power && o.direction == 180 && o.avoid);
+  w.cam.mask = 1u << 5;  // only an in-between heading open: nothing the wheels follow exactly
+  assert(!w.run().power);
   // Line mask beats the ball.
   w.cam.escaping = false; w.cam.escape = kUnknown;
   w.cam.mask = uint16_t(~((1u << 15) | 1u | (1u << 1) | (1u << 2) | (1u << 14)));
@@ -213,9 +217,9 @@ static void safety() {
   o = w.run(15);
   assert(o.power == w.robot.cfg.speedSlow && sectorOpen(w.cam.mask, sectorOf(o.direction)) && o.direction != 0);
   assert(o.direction % 45 == 0 && o.avoid && !o.turn);
-  w.cam.mask = 1u << 8;  // only straight back, ball ahead
+  w.cam.mask = 1u << 8;  // only straight back, ball ahead: back off rather than stop
   o = w.run();
-  assert(!o.power);
+  assert(o.power && o.direction == 180);
   for (int mask = 0; mask < 65536; mask += 7) {
     for (int wanted = 0; wanted < 360; wanted += 13) {
       const int d = safeDirection(uint16_t(mask), float(wanted));
@@ -240,9 +244,9 @@ static void ballStates() {
   assert(w.robot.ball.state == BallState::PREDICT);
   w.run(15);
   assert(w.robot.ball.state == BallState::SEARCH);
-  o = w.run(80);
-  assert(w.robot.ball.state == BallState::WAIT && !o.power);  // never drives forever
-  w.ball = true; w.ir.angle = 90; w.run(2);
+  o = w.run(300);
+  assert(w.robot.ball.state == BallState::SEARCH && o.power);  // keeps searching while observations are valid
+  w.ball = true; w.ir.angle = 90; w.run(8);
   assert(w.robot.ball.state == BallState::TRACK && fabsf(wrap(w.robot.ball.bearing - 90)) < 5);  // reacquired
   // Moving ball: positive rate, lead ahead, wraparound.
   World m;
@@ -302,18 +306,15 @@ static void tactics() {
   own.cam.blue.distanceCm = 100;
   o = own.run(10);
   assert(o.tactic == Tactic::ORBIT && fabsf(o.goal - 180) < 1 && (o.direction == 90 || o.direction == 270));
-  // Ball lost: retreat toward own goal only for a limited time.
+  // Ball lost: patrol, but not into our own goal.
   own.ball = false;
-  o = own.run(30);
-  assert(o.tactic == Tactic::SEARCH && o.power && o.direction == 0);
-  o = own.run(100);
-  assert(!o.power);
-  // Without a calibrated own-goal distance the robot does not retreat blind.
-  World blind;
-  blind.cam.blue.seen = true; blind.cam.blue.bearing = 180; blind.cam.blue.confidence = 90;
-  blind.run(10);
-  blind.ball = false;
-  assert(!blind.run(30).power);
+  own.cam.blue.distanceCm = -1;
+  own.run(30);
+  for (int i = 0; i < 200; ++i) {
+    o = own.run();
+    assert(o.tactic == Tactic::SEARCH && o.power && fabsf(wrap(o.direction - 0.0f)) >= 45);
+  }
+
   // A held camera ball (unchanged stamp) does not keep the track alive.
   World held;
   held.irOn = true; held.ball = false;

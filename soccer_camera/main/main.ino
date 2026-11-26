@@ -193,6 +193,8 @@ constexpr uint8_t MSG_DRIVE = 3;
 // Match the timing of the field-tested IR poll.
 constexpr uint32_t IR_POLL_INTERVAL_MS = 30;
 constexpr uint32_t IR_REPLY_TIMEOUT_MS = 100;
+// Upgrade path: the reply normally arrives in ~6 ms; waiting longer would gap the 100 ms MOTOR watchdog.
+constexpr uint32_t UPGRADE_IR_WAIT_MS = 25;
 
 // Movement
 // Initial commissioning limits. Verify that both settings move reliably on the floor.
@@ -496,7 +498,7 @@ void upgradeLoop() {
       delayMicroseconds(50);
     }
   }
-  if (waitingForIr && now - lastPollMs >= IR_REPLY_TIMEOUT_MS) waitingForIr = false;
+  if (waitingForIr && now - lastPollMs >= UPGRADE_IR_WAIT_MS) waitingForIr = false;
   if (waitingForIr) return;  // never transmit inside the IR reply window
 
   updateBno(now, bno);
