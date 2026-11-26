@@ -6,7 +6,7 @@
 
 constexpr uint8_t MSG_POLL = 1, MSG_BALL = 2, MSG_DRIVE = 3;
 constexpr int16_t PWM_MAX = 210, MIN_RUNNING_DUTY = 160, RAMP_STEP = 5;
-constexpr int8_t WHEEL_SIGN[4] = {1, -1, 1, -1};
+constexpr int8_t WHEEL_SIGN[4] = {1, 1, -1, -1};
 constexpr uint32_t RAMP_INTERVAL_MS = 10;
 constexpr uint32_t REVERSE_PAUSE_MS = 200, COMMAND_TIMEOUT_MS = 100;
 int16_t targetPWM[4]{}, currentPWM[4]{}, appliedPWM[4]{};

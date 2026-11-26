@@ -94,6 +94,11 @@ static void mustContinue() {
   CHECK("held line data still repositions in an exact direction", o.power && o.direction % 45 == 0 &&
         apart(o.direction, 20) >= 89);
 
+  CHECK("near lines a bench-verified direction beats a slightly closer diagonal",
+        safeDirection(uint16_t((1u << 0) | (1u << 2)), 30) == 0 && nearestExact(uint16_t((1u << 0) | (1u << 2)), 30) == 0);
+  CHECK("a diagonal is still used when clearly better",
+        safeDirection(uint16_t((1u << 0) | (1u << 2)), 44) == 45);
+
   World escape;
   escape.cam.escaping = true; escape.cam.escape = 113;
   escape.cam.mask = uint16_t((1u << 5) | (1u << 4)); escape.goal(0);

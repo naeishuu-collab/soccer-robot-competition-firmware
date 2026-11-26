@@ -15,7 +15,7 @@ constexpr uint16_t kUnknown = 0xFFFF;
 struct Config {
   // Speed requests for the MOTOR wheel model (210 = full). Values below the motors' holding speed are raised there.
   uint16_t speedSlow = 160, speedNormal = 160, speedFast = 185, speedAttack = 195, speedAvoid = 175;
-  int turnSign = 1;            // verify with wheels raised
+  int turnSign = 1;            // +1 = clockwise by wheel geometry; verify with wheels raised
   float headingKp = 0.5f, headingKd = 0.05f;
   float headingEnter = 10, headingExit = 5;
   int turnMin = 8, turnMax = 30, turnSlew = 3;  // turn units, per 20 ms step
@@ -501,15 +501,17 @@ inline int chooseDirection(uint16_t mask, float wanted, Veto veto, int previous 
     float cost = fabsf(wrap(candidate - wanted));
     if (previous >= 0 && fabsf(wrap(candidate - previous)) > 100) cost += 40;
     if (line >= 0) cost += fmaxf(0, 90 - fabsf(wrap(candidate - line))) * 0.5f;
+    if (k % 4) cost += 25;  // diagonals drive two wheels only and are not bench tested
     if (cost < bestCost) { bestCost = cost; best = int(candidate); }
   }
   return best;
 }
 inline int nearestExact(uint16_t mask, float wanted) {
   int best = -1;
+  float bestCost = 1e9f;
   for (int k = 0; k < 16; k += 2) {
-    if (sectorOpen(mask, k) && (best < 0 || fabsf(wrap(k * 22.5f - wanted)) < fabsf(wrap(best - wanted))))
-      best = k / 2 * 45;
+    const float cost = fabsf(wrap(k * 22.5f - wanted)) + (k % 4 ? 25 : 0);
+    if (sectorOpen(mask, k) && cost < bestCost) { bestCost = cost; best = k / 2 * 45; }
   }
   return best;
 }

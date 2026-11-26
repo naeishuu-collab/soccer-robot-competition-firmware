@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include "main_logic.h"
 #include "motor_logic.h"
+#include "verified_motors.h"
 
 namespace mainboard {
 #include "main.ino"
@@ -120,6 +121,29 @@ int main() {
   CHECK("USB hold stops", Rig::still());
   Serial.type("g");
   rig.run(600);
+
+  // Bench-verified directions through the real MOTOR loop.
+  rig.camera = false;
+  Serial.rx.clear();
+  for (int row = 0; row < 4; ++row) {
+    mockMs += 500;
+    std::swap(Serial1, rig.motorBus);
+    for (int i = 0; i < 500; ++i) {
+      if (i % 20 == 0) {
+        uint8_t f[12] = {0xA5, 3, uint8_t(i / 20), uint8_t((row * 90) >> 7), uint8_t((row * 90) & 127), 1, 32, 0, 61};
+        f[11] = mainboard::calculateCRC(f);
+        Serial1.feed(f, 12);
+      }
+      ++mockMs;
+      motorboard::loop();
+    }
+    std::swap(Serial1, rig.motorBus);
+    CHECK("legacy output equals the bench-verified pattern at PWM 160", pinsMatchVerified(row, 160));
+  }
+  mockMs += 500;
+  std::swap(Serial1, rig.motorBus);
+  motorboard::loop();
+  std::swap(Serial1, rig.motorBus);
 
   // MOTOR diagnostics inside the real loop: entry stops, no immediate motion, exit cools down.
   rig.camera = false;

@@ -39,23 +39,22 @@ constexpr uint32_t PWM_FREQ = 20000;
 constexpr int16_t PWM_MAX = 210;
 constexpr int16_t MIN_RUNNING_DUTY = 160;
 
-// Provisional drive-axis angles.
-// These require physical verification.
-//
-// Assumed original positional mapping:
-// Right Rear  = 45
-// Left Rear   = 135
-// Left Front  = 225
-// Right Front = 315
-//
-// Reordered to GPIO channel order.
+// Matched to the bench result of 2026-11-27 (front/right/back/left at PWM 160).
+//   channel  motor            GPIO pair   bench "+" is
+//   [0]      M3 left rear     6, 7        channel "+"
+//   [1]      M2 left front    12, 13      channel "+"
+//   [2]      M1 right front   11, 10      channel "-" (bench IN1 is GPIO10)
+//   [3]      M4 right rear    9, 8        channel "-" (bench IN1 is GPIO8)
+// Translation: M1 = x - y, M2 = x + y, M3 = -x + y, M4 = -x - y (x right, y front).
+// Channel duty = WHEEL_SIGN * cos(direction - WHEEL_DEGREES).
 constexpr int16_t WHEEL_DEGREES[4] = {
-  45, 225, 315, 135
+  315, 45, 135, 225
 };
 
-// Forward on the actual robot uses IN1 for all four channels.
+// Adding the same turn * WHEEL_SIGN to every channel gives all four motors the same bench sign:
+// pure rotation. That it is clockwise follows from the geometry and has NOT been bench tested.
 constexpr int8_t WHEEL_SIGN[4] = {
-  1, -1, 1, -1
+  1, 1, -1, -1
 };
 
 // Timing
@@ -287,6 +286,14 @@ void applyMotor(uint8_t motor, int16_t duty) {
 void applyAllMotors() {
   for (uint8_t i = 0; i < 4; ++i) {
     applyMotor(i, currentPWM[i]);
+  }
+}
+
+// TB67H450 short brake: both inputs high. Only the wheel-model path uses it, for a bounded time.
+void brakeAllMotors() {
+  for (uint8_t i = 0; i < 4; ++i) {
+    analogWrite(MOTOR_IN1[i], OUTPUTS_ENABLED ? 255 : 0);
+    analogWrite(MOTOR_IN2[i], OUTPUTS_ENABLED ? 255 : 0);
   }
 }
 
@@ -553,6 +560,10 @@ void runDiag(uint32_t now) {
   uint8_t frame[FRAME_SIZE];
   receiver.receive(frame);  // drain the bus; commands are ignored
   diag.update(now);
+  if (diag.braking(now)) {
+    brakeAllMotors();
+    return;
+  }
   for (uint8_t i = 0; i < 4; ++i) applyMotor(i, int16_t(diag.duty(i, now)));
 }
 
@@ -589,7 +600,11 @@ void runModel(uint32_t now) {
     targetPWM[i] = int16_t(modelDrive.target(i));
     currentPWM[i] = int16_t(modelDrive.duty(i));
   }
-  applyAllMotors();
+  if (modelDrive.braking(now)) {
+    brakeAllMotors();
+  } else {
+    applyAllMotors();
+  }
   if (startRequestUs && (currentPWM[0] || currentPWM[1] || currentPWM[2] || currentPWM[3])) {
     startLatencyUs = micros() - startRequestUs;
     startRequestUs = 0;

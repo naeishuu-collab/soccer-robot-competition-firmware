@@ -93,7 +93,8 @@ class LineGuard:
                 away_x = sum(-math.sin(math.radians(b)) * (self.clearance - lines[b] + 6) for b in close)
                 away_y = sum(-math.cos(math.radians(b)) * (self.clearance - lines[b] + 6) for b in close)
                 away = polar(away_x, away_y)
-                best = max(good, key=lambda h: (good[h], -abs(wrap(h - away))))
+                # Front/right/back/left are bench verified: prefer them unless clearly worse than a diagonal.
+                best = max(good, key=lambda h: (good[h] + (20 if h % 90 == 0 else 0), -abs(wrap(h - away))))
                 if self.escape in good and good[self.escape] >= good[best] - 15:
                     best = self.escape
                 escape = best

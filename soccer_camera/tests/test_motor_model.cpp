@@ -2,6 +2,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <initializer_list>
 #include "motor_logic.h"
 #include <assert.h>
@@ -18,7 +19,8 @@ int main() {
   // Inverse table, never below hold, never above the limit.
   assert(dutyForSpeed(w, 0) == 0);
   assert(dutyForSpeed(w, 0.1f) == 160 && dutyForSpeed(w, -0.1f) == -160);
-  assert(dutyForSpeed(w, 0.65f) == 160 && dutyForSpeed(w, 0.83f) == 185 && dutyForSpeed(w, 1.0f) == 210);
+  assert(dutyForSpeed(w, 0.762f) == 160 && dutyForSpeed(w, 0.881f) == 185 && dutyForSpeed(w, 1.0f) == 210);
+  assert(dutyForSpeed(w, 175 / 210.0f) == 175);  // a speed request equals the PWM in the placeholder table
   assert(dutyForSpeed(w, 2.0f) == 210);
 
   // Every direction and power: realizable speeds only, bounded and reported direction error.
@@ -28,7 +30,7 @@ int main() {
         const Mix m = solve(kWheels, dir, power, turn, nullptr);
         for (int i = 0; i < 4; ++i) {
           assert(fabsf(m.speed[i]) <= 1.0001f);
-          assert(m.speed[i] == 0 || fabsf(m.speed[i]) >= 0.649f);
+          assert(m.speed[i] == 0 || fabsf(m.speed[i]) >= 0.761f);
         }
         assert(m.feasible && m.errorDeg <= kMaxDirectionErrorDeg);
         if (turn == 0) {
@@ -49,17 +51,18 @@ int main() {
   }
   // Diagonals stop the perpendicular pair instead of feeding it a stall duty.
   Mix diag45 = solve(kWheels, 45, 210, 0, nullptr);
-  assert(diag45.errorDeg < 0.1f && diag45.speed[2] == 0 && diag45.speed[3] == 0);
+  assert(diag45.errorDeg < 0.1f && diag45.speed[0] == 0 && diag45.speed[2] == 0);
   // Ratio is preserved when both wheel groups are above the floor.
-  Mix ratio = solve(kWheels, 8, 210, 0, nullptr);
-  const float expected = cosf(37 * kDegToRad) / cosf(53 * kDegToRad);
-  assert(ratio.errorDeg < 0.1f && fabsf(fabsf(ratio.speed[0] / ratio.speed[2]) - expected) < 0.01f);
+  Mix ratio = solve(kWheels, 7, 210, 0, nullptr);
+  const float expected = cosf(38 * kDegToRad) / cosf(52 * kDegToRad);
+  assert(ratio.errorDeg < 0.1f && fabsf(fabsf(ratio.speed[1] / ratio.speed[0]) - expected) < 0.01f);
   // Pure rotation runs at a speed the wheels can hold.
   Mix spin = solve(kWheels, 0, 0, 10, nullptr);
-  assert(spin.feasible && spin.speed[0] > 0.64f && spin.speed[1] < -0.64f);
+  assert(spin.feasible && spin.speed[0] > 0.76f && spin.speed[1] > 0.76f && spin.speed[2] < -0.76f && spin.speed[3] < -0.76f);
 
   // Boost from rest, then the running duty; 120 requests never reach the pins as 120.
   Drive d;
+  d.rampMs = 0;
   d.command(0, 120, 0, 1000);
   assert(d.duty(0) == 180 && noLowDuty(d));
   d.update(1050);
@@ -85,16 +88,18 @@ int main() {
   assert(d.duty(0) < 0);
   // A still-turning wheel is not boosted again; a stationary one always is (no stall at hold duty).
   Drive c;
+  c.rampMs = 0;
   c.command(0, 160, 0, 1000);
   c.update(1070);
   c.stop(1100);
   c.command(0, 160, 0, 1130);
-  assert(c.duty(0) == c.target(0) && c.duty(0) < 180);
+  assert(c.duty(0) == c.target(0) && c.duty(0) == 160);
   c.stop(1200);
   c.command(0, 160, 0, 1300);
   assert(c.duty(0) == 180);
   // millis wrap during a reverse pause.
   Drive wrap;
+  wrap.rampMs = 0;
   wrap.command(0, 160, 0, UINT32_MAX - 50);
   wrap.command(180, 160, 0, UINT32_MAX - 10);
   wrap.update(100);
@@ -110,7 +115,7 @@ int main() {
       for (int power : {137, 175, 195}) {
         Drive a;
         a.command(dir, power, avoid ? 30 : 0, 1000, avoid != 0);
-        a.update(1100);
+        for (uint32_t t = 1010; t <= 1200; t += 10) a.update(t);
         float x = 0, y = 0, spin = 0;
         bool any = false;
         for (int i = 0; i < 4; ++i) {
@@ -146,6 +151,9 @@ int main() {
   unsigned seed = 1;
   auto random = [&](int n) { seed = seed * 1103515245u + 12345u; return int((seed >> 16) % unsigned(n)); };
   bool on[4] = {};
+  uint32_t lowSince[4] = {};
+  bool low[4] = {};
+  f.brakeMs = 50;
   for (int step = 0; step < 100000; ++step) {
     now += 1 + random(40);
     const int what = random(6);
@@ -155,7 +163,14 @@ int main() {
     for (int i = 0; i < 4; ++i) {
       const int duty = f.duty(i);
       if (duty) {
-        assert(abs(duty) >= 160 && abs(duty) <= 210);
+        assert(abs(duty) <= 210 && !f.braking(now));
+        // Below the verified 160 only while ramping up from rest, never longer than the ramp.
+        if (abs(duty) < 160) {
+          if (!low[i]) { low[i] = true; lowSince[i] = now; }
+          if (what == 4 || what == 5) assert(uint32_t(now - lowSince[i]) < kStartRampMs + 41);
+        } else {
+          low[i] = false;
+        }
         const int sign = duty < 0 ? -1 : 1;
         if (last[i] && sign != last[i]) assert(!on[i] && uint32_t(now - off[i]) >= kReversePauseMs);
         last[i] = sign;
@@ -164,8 +179,55 @@ int main() {
         on[i] = false;
         off[i] = now;
       }
+      if (!duty) low[i] = false;
     }
   }
+
+  // Start ramp as on the bench: 100 ms, equal factor on every wheel, then boost, then running duty.
+  Drive r;
+  r.command(0, 160, 0, 5000);
+  assert(r.duty(0) == 18);
+  for (uint32_t at = 5010; at <= 5090; at += 10) {
+    r.command(0, 160, 0, at);  // MAIN repeats commands: the ramp must not restart
+    assert(r.duty(0) == int(180 * (at - 5000 + 10) / 100) && r.duty(1) == r.duty(0) && r.duty(2) == r.duty(0));  // forward: every channel positive
+  }
+  r.update(5100);
+  assert(r.duty(0) == 180);
+  r.update(5161);
+  assert(r.duty(0) == 160);
+  // A line escape does not wait for the ramp.
+  Drive e;
+  e.command(180, 175, 0, 5000, true);
+  assert(abs(e.duty(0)) == 180);
+  // Brake: off by default, bounded when on, ended by a new start, never skipping the reverse pause.
+  Drive quiet;
+  quiet.command(0, 160, 0, 100);
+  quiet.stop(200);
+  assert(!quiet.braking(200));
+  Drive brake;
+  brake.brakeMs = 5000;
+  brake.command(0, 160, 0, 100);
+  brake.stop(300);
+  assert(brake.braking(300) && brake.braking(399) && !brake.braking(400));
+  brake.command(180, 160, 0, 320);
+  assert(brake.duty(0) == 0 && brake.braking(320));
+  brake.update(500);
+  assert(brake.duty(0) != 0 && !brake.braking(500));
+  // Bench motor names in diagnostics.
+  Diag bench;
+  bench.line("diag", 0);
+  bench.line("p M1 + 160", 300);
+  assert(bench.duty(2, 301) == -160 && !bench.duty(0, 301) && !bench.duty(1, 301) && !bench.duty(3, 301));
+  bench.line("s", 400);
+  bench.line("p M3 - 160", 700);
+  assert(bench.duty(0, 701) == -160);
+  assert(strcmp(bench.line("p M5 + 160", 1500), "out of range") == 0);
+  bench.update(1401);  // the pulse expires, so the move below is outside the reverse pause
+  bench.line("b 40", 1600);
+  bench.line("m 0 160 0 300", 1700);
+  bench.update(1850);
+  bench.update(2001);
+  assert(bench.braking(2001) && !bench.braking(2042));
 
   Diag t;
   assert(!t.active());
@@ -189,7 +251,7 @@ int main() {
   assert(t.duty(0, 1500) == 0);
   t.line("m 90 160 0", 1800);
   assert(t.duty(0, 1800) != 0);
-  t.line("p 0 r 160", 1810);
+  t.line("p 0 f 160", 1810);
   assert(t.duty(0, 1811) == 0);  // reverses the wheel the move just drove
   t.line("p 2 f 160", 1900);
   t.line("m 270 160 0", 1950);

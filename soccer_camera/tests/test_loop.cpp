@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include "main_logic.h"
 #include "motor_logic.h"
+#include "verified_motors.h"
 #include "ir_logic.h"
 
 namespace mainboard {
@@ -91,8 +92,17 @@ struct Rig {
     for (int pin = 6; pin <= 13; ++pin) if (mockPwm[pin]) return false;
     return true;
   }
+  // Never above the limit; below 160 only during a start ramp (100 ms plus one command period).
   static bool legalDuty() {
-    for (int pin = 6; pin <= 13; ++pin) if (mockPwm[pin] && (mockPwm[pin] < 160 || mockPwm[pin] > 210)) return false;
+    static uint32_t since[16] = {};
+    static bool low[16] = {};
+    for (int pin = 6; pin <= 13; ++pin) {
+      if (mockPwm[pin] > 210) return false;
+      const bool now = mockPwm[pin] && mockPwm[pin] < 160;
+      if (now && !low[pin]) since[pin] = mockMs;
+      low[pin] = now;
+      if (now && mockMs - since[pin] > 140) return false;
+    }
     return true;
   }
 };
@@ -203,10 +213,33 @@ int main() {
   CHECK("inexact avoid direction does not move", Rig::still());
   mockMs += 500;
   sendRaw(rig, 90, 175, 30, true);
-  CHECK("avoid ignores rotation", mockPwm[6] == mockPwm[12] && mockPwm[6] == mockPwm[10] && mockPwm[6] == mockPwm[8] && !Rig::still());
+  CHECK("avoid ignores rotation", pinsMatchVerified(1, mockPwm[10]) && !Rig::still());
   mockMs += 500;
   sendRaw(rig, 0, 0, 30, false);
   CHECK("zero power always means stop", Rig::still());
+
+  // Bench-verified directions through the real MOTOR loop.
+  rig.camera = false;
+  Serial.rx.clear();
+  for (int row = 0; row < 4; ++row) {
+    mockMs += 500;
+    std::swap(Serial1, rig.motorBus);
+    for (int i = 0; i < 500; ++i) {
+      if (i % 20 == 0) {
+        uint8_t f[12] = {0xA5, 3, uint8_t(i / 20), uint8_t((row * 90) >> 7), uint8_t((row * 90) & 127), 1, 32, 0, 61};
+        f[11] = mainboard::calculateCRC(f);
+        Serial1.feed(f, 12);
+      }
+      ++mockMs;
+      motorboard::loop();
+    }
+    std::swap(Serial1, rig.motorBus);
+    CHECK("upgrade output equals the bench-verified pattern at PWM 160", pinsMatchVerified(row, 160));
+  }
+  mockMs += 500;
+  std::swap(Serial1, rig.motorBus);
+  motorboard::loop();
+  std::swap(Serial1, rig.motorBus);
 
   // IR sketch: both poll commands answer in their own format; a quiet bus gets no unsolicited bytes.
   irboard::setup();

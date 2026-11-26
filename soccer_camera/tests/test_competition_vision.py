@@ -66,6 +66,10 @@ class LineGuardTests(unittest.TestCase):
         narrow = {75, 90, 105, 0, 15, 345}
         self.assertEqual(v.LineGuard(25, 35).update(True, narrow, lines((0, 15)))[:2], (0, None))
 
+    def test_escape_prefers_bench_verified_directions_when_comparable(self):
+        escape = v.LineGuard(25, 35).update(True, ALL, lines((0, 15), (30, 15)))[1]
+        self.assertEqual(escape % 90, 0)
+
     def test_separate_lines_are_counted(self):
         count = v.LineGuard(25, 35).update(True, ALL, lines(*(wall(0, 30, 15) + wall(180, 30, 15))))[3]
         self.assertEqual(count, 2)

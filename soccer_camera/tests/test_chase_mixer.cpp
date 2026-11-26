@@ -26,7 +26,8 @@ int main() {
   calculateWheelPWM(180, 200, pwm);
   for (int i = 0; i < 4; ++i) assert(pwm[i] == -200);
   calculateWheelPWM(90, 200, pwm);
-  assert(pwm[0] > 0 && pwm[1] > 0 && pwm[2] < 0 && pwm[3] < 0);
+  // Channels are M3, M2, M1(inverted), M4(inverted): bench "right" is M1+ M2+ M3- M4-.
+  assert(pwm[0] < 0 && pwm[1] > 0 && pwm[2] < 0 && pwm[3] > 0);
   calculateWheelPWM(270, 200, pwm);
-  assert(pwm[0] < 0 && pwm[1] < 0 && pwm[2] > 0 && pwm[3] > 0);
+  assert(pwm[0] > 0 && pwm[1] < 0 && pwm[2] > 0 && pwm[3] < 0);
 }

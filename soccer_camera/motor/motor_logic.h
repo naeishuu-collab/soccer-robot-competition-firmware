@@ -18,6 +18,10 @@ constexpr uint32_t kBoostLimitMs = 150;       // Hard ceiling for any configured
 // A wheel stopped for less than this is still turning and gets no boost; this also bounds boost duty.
 constexpr uint32_t kMovingMemoryMs = 80;
 constexpr uint32_t kTickMs = 10;
+// Start ramp from rest, as in the bench test (100 ms, 10 ms updates). Skipped for line escapes.
+constexpr uint32_t kStartRampMs = 100;
+// Short brake after stop(). 0 = coast (default): current, heat and distance are unmeasured.
+constexpr uint32_t kBrakeLimitMs = 100;
 constexpr float kMaxDirectionErrorDeg = 30;   // Larger error: do not move at all.
 constexpr float kMaxAvoidErrorDeg = 10;       // Line escape: stricter, and no rotation mixed in.
 
@@ -42,11 +46,14 @@ struct WheelConfig {
   uint16_t boostMs;
 };
 
-// Order: GPIO6/7, GPIO12/13, GPIO11/10, GPIO9/8. 160 is the provisional baseline, not a measured value.
-#define WHEEL_DIRECTION {180, 160, 1000, {{160, 650}, {185, 830}, {210, 1000}}}
+// Channel order (see motor.ino): M3 (GPIO6,7), M2 (12,13), M1 (11,10), M4 (9,8). "forward" = channel IN1,
+// which for M1 and M4 is the bench "-" direction.
+// 160 moved the robot in four directions on 2026-11-27; it is NOT a measured minimum start or hold duty.
+// Table is assumed proportional (speed request 160 -> PWM 160) until the speeds are measured.
+#define WHEEL_DIRECTION {180, 160, 1000, {{160, 762}, {185, 881}, {210, 1000}}}
 #define WHEEL_DEFAULT(deg, pol) {deg, pol, WHEEL_DIRECTION, WHEEL_DIRECTION, 160, 210, 5, 10, 60}
 constexpr WheelConfig kWheels[4] = {
-  WHEEL_DEFAULT(45, 1), WHEEL_DEFAULT(225, -1), WHEEL_DEFAULT(315, 1), WHEEL_DEFAULT(135, -1),
+  WHEEL_DEFAULT(315, 1), WHEEL_DEFAULT(45, 1), WHEEL_DEFAULT(135, -1), WHEEL_DEFAULT(225, -1),
 };
 #undef WHEEL_DEFAULT
 #undef WHEEL_DIRECTION
@@ -151,7 +158,9 @@ inline Mix solve(const WheelConfig (&wheels)[4], int direction, int power, int t
       continue;
     }
     // Wheels fighting each other (the null-space pattern) waste torque.
-    const float fight = fabsf(w[0] + w[1] - w[2] - w[3]) / 4;
+    float fight = 0;
+    for (int i = 0; i < 4; ++i) fight += w[i] * sinf(2 * wheels[i].degrees * kDegToRad);
+    fight = fabsf(fight) / 4;
     // Unwanted rotation is weighted heavily: without a gyro nothing else corrects it.
     const float cost = error / 45.0f + 4 * fabsf(rot - tr) + 0.25f * fight + switching +
                        0.2f * fabsf(hypotf(vx, vy) - hypotf(tx, ty));
@@ -173,6 +182,11 @@ inline Mix solve(const WheelConfig (&wheels)[4], int direction, int power, int t
 class Drive {
 public:
   explicit Drive(const WheelConfig (&wheels)[4] = kWheels) : wheels_(wheels) {}
+  uint32_t rampMs = kStartRampMs;
+  uint32_t brakeMs = 0;
+  bool braking(uint32_t now) const {
+    return braked_ && uint32_t(now - brakeStartMs_) < (brakeMs < kBrakeLimitMs ? brakeMs : kBrakeLimitMs);
+  }
 
   void command(int direction, int power, int turn, uint32_t now, bool avoid = false) {
     const Mix next = avoid ? solve(wheels_, direction, power, 0, nullptr, kMaxAvoidErrorDeg)
@@ -199,11 +213,17 @@ public:
   }
 
   void stop(uint32_t now) {
+    const bool moving = current_[0] || current_[1] || current_[2] || current_[3];
     for (int i = 0; i < 4; ++i) target_[i] = 0;
     halt(now);
+    if (moving && brakeMs) {
+      braked_ = true;
+      brakeStartMs_ = now;
+    }
   }
 
   void update(uint32_t now) {
+    if (braked_ && !braking(now)) braked_ = false;
     if (waiting_) {
       if (int32_t(now - waitUntil_) < 0) return;
       waiting_ = false;
@@ -221,11 +241,23 @@ public:
         const bool stationary = !lastSign_[i] || !spun_[i] || sign != lastSign_[i] ||
                                 uint32_t(now - stoppedMs_[i]) >= kMovingMemoryMs;
         boosting_[i] = stationary && w.boostMs;
+        // Wheels started together share the ramp factor, so their ratio holds while accelerating.
+        ramp_[i] = stationary && !avoid_ ? rampMs : 0;
         startedMs_[i] = now;
-        int duty = boosting_[i] ? (d.startDuty > abs_(target) ? d.startDuty : abs_(target)) : abs_(target);
-        if (duty > kDutyLimit) duty = kDutyLimit;
-        current_[i] = sign * duty;
+        current_[i] = sign * (ramp_[i] ? rampDuty(startDutyNow(i, d), kTickMs, ramp_[i]) : startDutyNow(i, d));
         lastSign_[i] = sign;
+        braked_ = false;
+        continue;
+      }
+      if (ramp_[i]) {
+        const uint32_t elapsed = uint32_t(now - startedMs_[i]);
+        if (elapsed < ramp_[i] && !avoid_) {
+          current_[i] = sign * rampDuty(startDutyNow(i, d), elapsed + kTickMs, ramp_[i]);
+        } else {
+          current_[i] = sign * startDutyNow(i, d);
+          startedMs_[i] = now;  // the boost time counts from the end of the ramp
+          ramp_[i] = 0;
+        }
         continue;
       }
       if (boosting_[i]) {
@@ -251,9 +283,19 @@ public:
 
 private:
   static int abs_(int v) { return v < 0 ? -v : v; }
+  int startDutyNow(int i, const DirectionConfig &d) const {
+    const int target = abs_(target_[i]);
+    const int duty = boosting_[i] && d.startDuty > target ? d.startDuty : target;
+    return duty > kDutyLimit ? kDutyLimit : duty;
+  }
+  static int rampDuty(int full, uint32_t elapsed, uint32_t length) {
+    const int duty = elapsed >= length ? full : int(full * elapsed / length);
+    return duty < 1 ? 1 : duty;
+  }
   static uint32_t boostLimit(const WheelConfig &w) { return w.boostMs < kBoostLimitMs ? w.boostMs : kBoostLimitMs; }
   void haltWheel(int i, uint32_t now) {
-    spun_[i] = uint32_t(now - startedMs_[i]) >= boostLimit(wheels_[i]);
+    spun_[i] = !ramp_[i] && uint32_t(now - startedMs_[i]) >= boostLimit(wheels_[i]);
+    ramp_[i] = 0;
     current_[i] = 0;
     boosting_[i] = false;
     stoppedMs_[i] = now;
@@ -264,16 +306,21 @@ private:
   Mix mix_;
   int target_[4] = {}, current_[4] = {};
   int lastSign_[4] = {};
-  uint32_t stoppedMs_[4] = {}, startedMs_[4] = {}, waitUntil_ = 0, tickMs_ = 0;
-  bool boosting_[4] = {}, spun_[4] = {}, waiting_ = false, avoid_ = false;
+  uint32_t stoppedMs_[4] = {}, startedMs_[4] = {}, ramp_[4] = {}, waitUntil_ = 0, tickMs_ = 0, brakeStartMs_ = 0;
+  bool boosting_[4] = {}, spun_[4] = {}, waiting_ = false, avoid_ = false, braked_ = false;
 };
 
 // USB bench diagnostics. Nothing moves until "diag" is typed, and every motion expires by itself.
+// Bench motor M1..M4 -> channel, and the channel sign that equals the bench "+".
+constexpr int kChannelOfMotor[4] = {2, 1, 0, 3};
+constexpr int kSignOfMotor[4] = {-1, 1, 1, -1};
+
 class Diag {
 public:
   static constexpr uint32_t kMaxMs = 1500, kDefaultMs = 700, kKickMs = 100;
 
   bool active() const { return active_; }
+  bool braking(uint32_t now) const { return !running_ && drive_.braking(now); }
 
   // Returns a message for the serial monitor.
   const char *line(const char *text, uint32_t now) {
@@ -290,6 +337,22 @@ public:
       return "reverse pause, retry";
     int a = 0, b = 0, c = 0, ms = kDefaultMs;
     char way = 0;
+    if (sscanf(text, "b %d", &a) == 1) {
+      if (a < 0 || a > int(kBrakeLimitMs)) return "out of range";
+      drive_.brakeMs = uint32_t(a);
+      return "brake time set for diag moves";
+    }
+    // Bench names: "p M1 + 160", "k M1 + 180 160".
+    if (sscanf(text, "p M%d %c %d %d", &a, &way, &b, &ms) >= 3) {
+      if (!benchMotor(a, way)) return "out of range";
+      return pulse(a, way, b, b, ms, now);
+    }
+    ms = kDefaultMs;
+    if (sscanf(text, "k M%d %c %d %d %d", &a, &way, &b, &c, &ms) >= 4) {
+      if (!benchMotor(a, way)) return "out of range";
+      return pulse(a, way, b, c, ms, now);
+    }
+    ms = kDefaultMs;
     if (sscanf(text, "p %d %c %d %d", &a, &way, &b, &ms) >= 3) return pulse(a, way, b, b, ms, now);
     ms = kDefaultMs;
     if (sscanf(text, "k %d %c %d %d %d", &a, &way, &b, &c, &ms) >= 4) return pulse(a, way, b, c, ms, now);
@@ -322,6 +385,13 @@ public:
 
 private:
   static bool validMs(int ms) { return ms > 0 && ms <= int(kMaxMs); }
+  // Rewrites M-number and +/- into channel and f/r.
+  static bool benchMotor(int &motor, char &way) {
+    if (motor < 1 || motor > 4 || (way != '+' && way != '-')) return false;
+    way = (way == '+' ? 1 : -1) * kSignOfMotor[motor - 1] > 0 ? 'f' : 'r';
+    motor = kChannelOfMotor[motor - 1];
+    return true;
+  }
   const char *pulse(int w, char way, int first, int then, int ms, uint32_t now) {
     if (w < 0 || w > 3 || (way != 'f' && way != 'r') || first < 0 || first > kDutyLimit || then < 0 ||
         then > kDutyLimit || !validMs(ms)) return "out of range";

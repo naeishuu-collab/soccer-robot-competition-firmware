@@ -16,12 +16,14 @@ static int failed = 0;
 static void motor() {
   using namespace wheel;
   Drive stall;
+  stall.rampMs = 0;
   stall.command(0, 160, 0, 1000);
   stall.stop(1020);  // stopped before the boost could break the wheels loose
   stall.command(0, 160, 0, 1050);
   CHECK("restart after an unfinished boost is boosted again", stall.duty(0) == 180);
 
   Drive jump;
+  jump.rampMs = 0;
   jump.command(0, 120, 0, 1000);
   jump.command(0, 210, 0, 1020);
   jump.update(1065);
@@ -29,11 +31,13 @@ static void motor() {
 
   // From a lopsided mix into a line escape: faster wheels must come down at once.
   Drive lop;
+  lop.rampMs = 0;
   lop.command(30, 210, 0, 1000);
   lop.update(1100);
   lop.command(45, 175, 0, 1200, true);
   lop.update(1201);
-  CHECK("escape starts with matched wheel duties", lop.duty(0) == lop.duty(1) && lop.duty(0) == lop.target(0));
+  CHECK("escape starts with matched wheel duties", abs(lop.duty(1)) == abs(lop.duty(3)) && lop.duty(1) == lop.target(1) &&
+        !lop.duty(0) && !lop.duty(2));  // 45 degrees drives M2 and M4 only
 
   Diag d;
   d.line("diag", 5000);
