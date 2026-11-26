@@ -199,6 +199,7 @@ constexpr int16_t IR_FRONT_DEGREES = 0;
 constexpr int8_t IR_ANGLE_SIGN = -1;
 
 constexpr uint8_t BNO_ADDRESS = 0x28;
+constexpr bool BNO_ENABLED = false; // Set true after the BNO055 is available again.
 constexpr int8_t HEADING_TURN_SIGN = 1; // Verify direction with wheels raised.
 float headingReference = NAN;
 float headingCurrent = NAN;
@@ -370,16 +371,18 @@ void setup() {
   pinMode(11, OUTPUT);
 
   Serial.begin(115200);
-  Wire.setSDA(4);
-  Wire.setSCL(5);
-  Wire.begin();
-  Wire.setClock(50000);
-  Wire.setTimeout(5);
-  Wire.beginTransmission(BNO_ADDRESS);
-  Wire.write(0x3D);
-  Wire.write(0x08); // IMUPLUS
-  Wire.endTransmission();
-  delay(30);
+  if (BNO_ENABLED) {
+    Wire.setSDA(4);
+    Wire.setSCL(5);
+    Wire.begin();
+    Wire.setClock(50000);
+    Wire.setTimeout(5);
+    Wire.beginTransmission(BNO_ADDRESS);
+    Wire.write(0x3D);
+    Wire.write(0x08); // IMUPLUS
+    Wire.endTransmission();
+    delay(30);
+  }
 }
 
 // ============================================================
@@ -397,8 +400,10 @@ void loop() {
 
   receiveCamera();
   const uint32_t now = millis();
-  updateHeading(now);
-  printHeading(now);
+  if (BNO_ENABLED) {
+    updateHeading(now);
+    printHeading(now);
+  }
   uint16_t rawAngle = 0;
   uint16_t strength = 0;
   bool received = false;

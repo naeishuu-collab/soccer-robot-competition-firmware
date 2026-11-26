@@ -32,6 +32,11 @@ class ChaseConfiguration(unittest.TestCase):
         self.assertRegex(source, r"digitalWrite\(11,\s*LOW\);\s*pinMode\(11,\s*OUTPUT\);")
         self.assertNotRegex(source, r"digitalWrite\(11,\s*HIGH\)")
 
+    def test_bno_is_temporarily_disabled(self):
+        source = (ROOT / "main/main.ino").read_text(encoding="utf-8")
+        self.assertRegex(source, r"constexpr\s+bool\s+BNO_ENABLED\s*=\s*false\s*;")
+        self.assertRegex(source, r"if\s*\(BNO_ENABLED\)\s*\{\s*updateHeading\(now\);")
+
 
 if __name__ == "__main__":
     unittest.main()

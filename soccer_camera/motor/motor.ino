@@ -6,10 +6,8 @@
 // MOTOR - RP2350 / TB67H450 x 4
 //
 // Channel order:
-// [0] M4 Right Rear  GPIO6,7
-// [1] M1 Left Front  GPIO12,13
-// [2] M2 Right Front GPIO11,10
-// [3] M3 Left Rear   GPIO8,9
+// [0] GPIO6,7    [1] GPIO12,13
+// [2] GPIO11,10  [3] GPIO9,8
 //
 // Direction:
 // Front=0, Right=90, Back=180, Left=270
@@ -23,8 +21,8 @@ constexpr uint8_t RS485_EN_PIN = 2;
 constexpr uint32_t RS485_BAUD = 115200;
 
 // Motor pins
-const uint8_t MOTOR_IN1[4] = {6, 12, 11, 8};
-const uint8_t MOTOR_IN2[4] = {7, 13, 10, 9};
+const uint8_t MOTOR_IN1[4] = {6, 12, 11, 9};
+const uint8_t MOTOR_IN2[4] = {7, 13, 10, 8};
 
 // PWM
 constexpr bool OUTPUTS_ENABLED = true;
@@ -46,9 +44,9 @@ constexpr int16_t WHEEL_DEGREES[4] = {
   45, 225, 315, 135
 };
 
-// Motor polarity: provisional.
+// Forward on the actual robot uses IN1 for all four channels.
 constexpr int8_t WHEEL_SIGN[4] = {
-  1, 1, 1, 1
+  1, -1, 1, -1
 };
 
 // Timing
@@ -194,6 +192,7 @@ uint16_t unpackValue(const uint8_t *data) {
 // Omni-wheel mixing
 // ============================================================
 
+// BEGIN HOST-TESTED MIXER
 void calculateWheelPWM(uint16_t direction,
                        uint16_t power,
                        int16_t output[4]) {
@@ -244,6 +243,7 @@ void calculateWheelPWM(uint16_t direction,
     output[i] = int16_t(sign * lroundf(minimumDuty + (requestedPower - minimumDuty) * fraction));
   }
 }
+// END HOST-TESTED MIXER
 
 // ============================================================
 // Motor output
