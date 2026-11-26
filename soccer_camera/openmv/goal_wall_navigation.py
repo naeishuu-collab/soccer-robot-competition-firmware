@@ -99,9 +99,11 @@ class Mirror:
         outer = [c for c in circles if self.outer * 0.55 <= blob_value(c, "r") <= self.outer * 1.2
                  and distance(blob_value(c, "x") - self.cx, blob_value(c, "y") - self.cy) <= 30]
         pairs = [(i, o) for i in inner for o in outer
-                 if blob_value(i, "r") < blob_value(o, "r")
+                 if 0.25 * blob_value(o, "r") <= blob_value(i, "r") <= 0.55 * blob_value(o, "r")
+                 and all(blob_value(i, "r") <= radius <= blob_value(o, "r")
+                         for radius, _ in cfg.GROUND_POINTS)
                  and distance(blob_value(i, "x") - blob_value(o, "x"),
-                                blob_value(i, "y") - blob_value(o, "y")) <= 12
+                                blob_value(i, "y") - blob_value(o, "y")) <= 6
                  and blob_value(o, "r") <= min(blob_value(o, "x"), blob_value(o, "y"),
                                                self.width - 1 - blob_value(o, "x"),
                                                self.height - 1 - blob_value(o, "y"))]
