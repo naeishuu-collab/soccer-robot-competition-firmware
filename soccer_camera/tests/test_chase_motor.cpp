@@ -1,17 +1,25 @@
+#include <algorithm>
+#include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
 #include <assert.h>
 
 constexpr uint8_t MSG_POLL = 1, MSG_BALL = 2, MSG_DRIVE = 3;
-constexpr int16_t PWM_MAX = 210;
+constexpr int16_t PWM_MAX = 210, MIN_RUNNING_DUTY = 160, RAMP_STEP = 5;
+constexpr uint32_t RAMP_INTERVAL_MS = 10;
 constexpr uint32_t REVERSE_PAUSE_MS = 200, COMMAND_TIMEOUT_MS = 100;
 int16_t targetPWM[4]{}, currentPWM[4]{}, appliedPWM[4]{};
+int8_t pausedSign[4]{};
+uint32_t lastRampMs = 0;
 uint32_t reverseUntil[4]{}, nowMs = 1000, invalidFrames = 0, receivedFrames = 0;
 uint32_t lastCommandMs = 0, applyCalls = 0, coordinatedReverseUntil = 0, timeoutEvents = 0;
 uint16_t receivedDirection = 0, receivedPower = 0;
 uint8_t lastSequence = 0;
 bool commandReceived = false, timedOut = true;
 
+using std::min;
+int constrain(int value, int lo, int hi) { return std::clamp(value, lo, hi); }
+int8_t signOf(int16_t value) { return int8_t((value > 0) - (value < 0)); }
 uint32_t millis() { return nowMs; }
 uint16_t unpackValue(const uint8_t *p) { return (uint16_t(p[0]) << 7) | p[1]; }
 void calculateWheelPWM(uint16_t direction, uint16_t power, int16_t output[4]) {
@@ -57,4 +65,36 @@ int main() {
   drive[5] = 0;
   handleDrive(drive);
   assert(receivedPower == 0 && targetPWM[0] == 0);
+
+  // After a normal stop, same-polarity targets can restart on the next PWM tick.
+  nowMs = 1300;
+  drive[4] = 0; drive[5] = 1;
+  handleDrive(drive);
+  updateMotors();
+  assert(currentPWM[0] == 128);
+  drive[5] = 0;
+  handleDrive(drive);
+  assert(currentPWM[0] == 0 && pausedSign[0] == 1);
+  nowMs = 1310;
+  drive[5] = 1;
+  handleDrive(drive);
+  updateMotors();
+  assert(currentPWM[0] == 128 && reverseUntil[0] == 0);
+
+  // A stop followed by an actual change of polarity preserves the dwell.
+  nowMs = 1320;
+  drive[5] = 0;
+  handleDrive(drive);
+  nowMs = 1330;
+  drive[4] = 90; drive[5] = 1; drive[7] = 1;
+  handleDrive(drive);
+  updateMotors();
+  assert(coordinatedReverseUntil == 1520 && currentPWM[0] == 0 && currentPWM[3] == 0);
+  nowMs = 1510;
+  handleDrive(drive);
+  updateMotors();
+  assert(currentPWM[0] == 0 && currentPWM[3] == 0);
+  nowMs = 1520;
+  updateMotors();
+  assert(currentPWM[0] == -128 && currentPWM[3] == 128);
 }

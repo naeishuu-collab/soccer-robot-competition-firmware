@@ -47,11 +47,14 @@ void sampleAndReply() {
   if (totalDetect > 65535) totalDetect = 65535;
 
   uint16_t direction = 0;
-  if (totalDetect && (vectorX || vectorY)) {
+  if (vectorX || vectorY) {
     float angle = atan2((float)vectorY, (float)vectorX) * 180.0 / PI;
     if (angle < 0) angle += 360.0;
     direction = (uint16_t)(angle + 0.5);
     if (direction >= 360) direction = 0;
+  } else {
+    // Opposing detections can cancel out; there is then no usable direction.
+    totalDetect = 0;
   }
   sendIR(direction, (uint16_t)totalDetect);
   if (Serial && Serial.availableForWrite() >= 48) {

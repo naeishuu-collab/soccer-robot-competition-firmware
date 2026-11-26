@@ -20,6 +20,8 @@ RAY_STEP_DEG = 360 / RAY_COUNT
 SECTOR_STEP_DEG = 45
 SECTOR_RAYS = tuple(frozenset((bearing + offset) % 360 for offset in (-30, -15, 0, 15, 30))
                     for bearing in range(0, 360, SECTOR_STEP_DEG))
+SECTOR_DIRECTIONS = tuple((math.sin(math.radians(bearing)), math.cos(math.radians(bearing)))
+                          for bearing in range(0, 360, SECTOR_STEP_DEG))
 WALL_NEIGHBOR_GAP_CM = 8
 STREAM_INTERVAL_MS = 50
 MAX_FRAME_AGE_MS = 100
@@ -223,30 +225,42 @@ def decide_navigation(ready, visible, boundaries):
         return stop
 
     away_x = away_y = 0.0
-    blocked = set()
+    blocked = {}
     for bearing, color, distance, _, _ in boundaries:
         clearance = WALL_CLEARANCE_CM if color == "BLACK" else LINE_CLEARANCE_CM
         if distance <= clearance:
-            blocked.add(bearing)
             angle = math.radians(bearing)
+            toward_x, toward_y = math.sin(angle), math.cos(angle)
+            blocked[bearing] = (toward_x, toward_y)
             weight = clearance - distance + 1
-            away_x -= math.sin(angle) * weight
-            away_y -= math.cos(angle) * weight
+            away_x -= toward_x * weight
+            away_y -= toward_y * weight
 
-    clear = set(visible) - blocked
+    clear = set(visible).difference(blocked)
     mask = 0
     for sector, rays in enumerate(SECTOR_RAYS):
         if rays.issubset(clear):
             mask |= 1 << sector
 
     if blocked:
-        length = math.sqrt(away_x ** 2 + away_y ** 2)
-        if length < 1:
-            return stop
-        vx, vy = round(35 * away_x / length), round(35 * away_y / length)
-        heading = int(math.degrees(math.atan2(vx, vy)) % 360 + 0.5) % 360
-        sector = ((heading + 22) // SECTOR_STEP_DEG) % len(SECTOR_RAYS)
-        return (vx, vy, mask, MODE_AVOID) if mask & (1 << sector) else stop
+        retreat_mask = 0
+        best = None
+        best_score = 0
+        for sector, (dx, dy) in enumerate(SECTOR_DIRECTIONS):
+            if not mask & (1 << sector):
+                continue
+            # The weighted sum ranks choices, but no choice may approach a nearby edge.
+            if any(toward_x * dx + toward_y * dy > 1e-6
+                   for toward_x, toward_y in blocked.values()):
+                continue
+            score = away_x * dx + away_y * dy
+            if score <= 1e-6:
+                continue
+            retreat_mask |= 1 << sector
+            if score > best_score:
+                best = (round(35 * dx), round(35 * dy))
+                best_score = score
+        return stop if best is None else (best[0], best[1], retreat_mask, MODE_AVOID)
 
     if len(visible) < MIN_FLOOR_RAYS or not mask:
         return stop
@@ -286,7 +300,7 @@ def main_loop(send_uart=True, display=False):
     goal_thresholds = {"YELLOW": cfg.YELLOW, "BLUE": cfg.BLUE}.get(target, ())
     uart = pyb.UART(3, 9600) if send_uart else None
     last_tx = time.ticks_ms()
-    last_mode = None
+    last_command = None
     sequence = 0
     while True:
         started = time.ticks_ms()
@@ -297,12 +311,13 @@ def main_loop(send_uart=True, display=False):
         command = decide_navigation(setup_reason is None and frame_ms <= MAX_FRAME_AGE_MS,
                                     visible, boundaries)
         mode = command[3]
-        if uart is not None and (mode != last_mode or time.ticks_diff(now, last_tx) >= STREAM_INTERVAL_MS):
+        if uart is not None and (command != last_command
+                                 or time.ticks_diff(now, last_tx) >= STREAM_INTERVAL_MS):
             vx, vy, sectors, _ = command
             uart.write(make_nav_packet(vx, vy, sectors, mode, sequence))
             sequence = (sequence + 1) & 0xff
             last_tx = now
-            last_mode = mode
+            last_command = command
         if display:
             if goal_thresholds:
                 blob, _ = find_color_blob(img, mirror, goal_thresholds, cfg.GOAL_MIN_PIXELS)

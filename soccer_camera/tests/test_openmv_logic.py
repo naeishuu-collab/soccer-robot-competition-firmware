@@ -164,7 +164,11 @@ class OpenMvNavigationTests(unittest.TestCase):
             result = nav.decide_navigation(True, VISIBLE, [edge(bearing)])
             self.assertEqual(result[:2], motion)
             self.assertEqual(result[3], nav.MODE_AVOID)
-        blocked_retreat = nav.decide_navigation(True, VISIBLE - {180}, [edge(0)])
+        alternative = nav.decide_navigation(True, VISIBLE - {180}, [edge(0)])
+        self.assertEqual(alternative[3], nav.MODE_AVOID)
+        self.assertEqual(abs(alternative[0]), 25)
+        self.assertEqual(alternative[1], -25)
+        blocked_retreat = nav.decide_navigation(True, VISIBLE - {135, 180, 225}, [edge(0)])
         self.assertEqual(blocked_retreat, (0, 0, 0, nav.MODE_WAIT))
 
     def test_corner_avoidance_and_conflicting_boundaries(self):
@@ -172,6 +176,13 @@ class OpenMvNavigationTests(unittest.TestCase):
         self.assertEqual(corner[:2], (-25, -25))
         opposite = nav.decide_navigation(True, VISIBLE, [edge(0), edge(180)])
         self.assertEqual(opposite, (0, 0, 0, nav.MODE_WAIT))
+
+    def test_retreat_mask_excludes_headings_toward_any_close_edge(self):
+        boundaries = [edge(0, cm=18), edge(135, cm=25)]
+        vx, vy, mask, mode = nav.decide_navigation(True, VISIBLE - {0, 135}, boundaries)
+        self.assertEqual((vx, vy, mode), (-25, -25, nav.MODE_AVOID))
+        self.assertFalse(mask & (1 << 4))  # 180 degrees approaches the 135-degree edge.
+        self.assertTrue(mask & (1 << 5))
 
     def test_clearance_for_wall_and_white_line(self):
         for boundary in (edge(90, "BLACK", 29), edge(90, "WHITE", 25)):
@@ -198,7 +209,7 @@ class OpenMvNavigationTests(unittest.TestCase):
         with patch.object(nav, "LINE_CLEARANCE_CM", 18):
             self.assertEqual(nav.setup_wait_reason(mirror), "CHECK GROUND_POINTS")
 
-    def test_camera_reports_white_line_and_stops_only_for_stale_frames_in_this_scene(self):
+    def test_camera_reports_white_line_sends_changed_heading_and_stops_on_stale_frame(self):
         class Frame:
             labels = []
 
@@ -224,15 +235,14 @@ class OpenMvNavigationTests(unittest.TestCase):
             draw_circle = draw_line = draw_cross
 
         class Sensor:
-            frames = iter(Frame(ball) for ball in
-                          (False, True, True, True, False, True, True, True, True))
+            frames = iter(Frame(line) for line in (None, 0, 90, 90, None, 0, 0, 0, 0))
 
             @staticmethod
             def snapshot():
                 return next(Sensor.frames)
 
         class Time:
-            timestamps = iter((0, 0, 50, 50, 100, 100, 150, 150, 200, 200,
+            timestamps = iter((0, 0, 50, 55, 70, 100, 140, 150, 200, 200,
                                250, 250, 300, 300, 350, 350, 470))
 
             @staticmethod
@@ -259,13 +269,15 @@ class OpenMvNavigationTests(unittest.TestCase):
             with patch.multiple(nav, sensor=Sensor, time=Time, pyb=Board,
                                 init_camera=lambda: None,
                                 scan_field=lambda img, _: (
-                                    VISIBLE, [edge(0)] if img.line else [edge(0, "BLACK", 35)])):
+                                    VISIBLE, [edge(img.line)] if img.line is not None else [edge(0, "BLACK", 35)])):
                 with self.assertRaises(StopIteration):
                     nav.main_loop(display=True)
         self.assertEqual([packet[5] for packet in Board.packets],
                          [nav.MODE_AVOID, nav.MODE_AVOID, nav.MODE_AVOID,
                           nav.MODE_TRACK_IR, nav.MODE_AVOID, nav.MODE_AVOID,
                           nav.MODE_AVOID, nav.MODE_WAIT])
+        self.assertEqual(Board.packets[0][1:3], bytes((0, 221)))
+        self.assertEqual(Board.packets[1][1:3], bytes((221, 0)))
         self.assertTrue(all(packet[1:4] == b"\x00\x00\x00"
                             for packet in Board.packets if packet[5] == nav.MODE_WAIT))
         self.assertEqual(Frame.labels.count("WHITE LINE: DETECTED (1, 15 cm)"), 7)
@@ -290,10 +302,18 @@ class OpenMvNavigationTests(unittest.TestCase):
             self.assertEqual(nav.find_color_blob(Frame(), mirror, nav.cfg.YELLOW, 30),
                              (true_goal, [3, 1, 1]))
 
+    def test_blue_threshold_covers_supplied_lab_sample(self):
+        for l in (21, 22):
+            for a in (8, 9):
+                for b in (-34, -33):
+                    self.assertTrue(any(nav.in_lab((l, a, b), threshold)
+                                        for threshold in nav.cfg.BLUE))
+        self.assertFalse(any(nav.in_lab((21, 8, 0), threshold) for threshold in nav.cfg.BLUE))
+
     def test_wire_format_signed_motion_checksum_and_protocol_marker(self):
         vx, vy, mask, mode = nav.decide_navigation(True, VISIBLE, [edge(90)])
         packet = nav.make_nav_packet(vx, vy, mask, mode, 42)
-        self.assertEqual(list(packet), [0x20, 221, 0, 251, 42, 1, 0x41, 108])
+        self.assertEqual(list(packet), [0x20, 221, 0, 224, 42, 1, 0x41, 119])
 
 
 if __name__ == "__main__":

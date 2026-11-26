@@ -75,6 +75,7 @@ int16_t targetPWM[4] = {};
 int16_t currentPWM[4] = {};
 
 uint32_t reverseUntil[4] = {};
+int8_t pausedSign[4] = {};
 uint32_t coordinatedReverseUntil = 0;
 
 uint32_t lastCommandMs = 0;
@@ -283,9 +284,16 @@ void applyAllMotors() {
 
 // BEGIN HOST-TESTED DRIVE HANDLER
 void pauseMotor(uint8_t motor, uint32_t now) {
+  pausedSign[motor] = signOf(currentPWM[motor]);
   currentPWM[motor] = 0;
   reverseUntil[motor] = now + REVERSE_PAUSE_MS;
   if (reverseUntil[motor] == 0) reverseUntil[motor] = 1;
+}
+
+uint32_t reverseWaitMs(uint8_t motor, int16_t target, uint32_t now) {
+  if (!reverseUntil[motor] || int32_t(pausedSign[motor]) * target >= 0) return 0;
+  const int32_t remaining = int32_t(reverseUntil[motor] - now);
+  return remaining > 0 ? uint32_t(remaining) : 0;
 }
 
 void stopAllMotors(uint32_t now) {
@@ -331,16 +339,20 @@ void handleDrive(const uint8_t *frame) {
   } else {
     int16_t nextTarget[4];
     calculateWheelPWM(direction, power, nextTarget);
-    if (avoid && !coordinatedReverseUntil) {
+    if (avoid) {
+      uint32_t waitMs = 0;
       for (uint8_t i = 0; i < 4; ++i) {
         const bool reversing = int32_t(currentPWM[i]) * nextTarget[i] < 0;
-        const bool waiting = reverseUntil[i] && int32_t(now - reverseUntil[i]) < 0;
-        if (reversing || waiting) {
-          stopAllMotors(now);
-          coordinatedReverseUntil = now + REVERSE_PAUSE_MS;
-          if (!coordinatedReverseUntil) coordinatedReverseUntil = 1;
-          break;
-        }
+        const uint32_t wheelWait = reversing ? REVERSE_PAUSE_MS
+                                             : reverseWaitMs(i, nextTarget[i], now);
+        if (wheelWait > waitMs) waitMs = wheelWait;
+      }
+      const int32_t currentWait = coordinatedReverseUntil
+                                      ? int32_t(coordinatedReverseUntil - now) : 0;
+      if (waitMs && int32_t(waitMs) > currentWait) {
+        stopAllMotors(now);
+        coordinatedReverseUntil = now + waitMs;
+        if (!coordinatedReverseUntil) coordinatedReverseUntil = 1;
       }
     }
     memcpy(targetPWM, nextTarget, sizeof(targetPWM));
@@ -378,8 +390,6 @@ void checkTimeout() {
   }
 }
 
-// END HOST-TESTED DRIVE HANDLER
-
 // ============================================================
 // Motor ramp
 // ============================================================
@@ -403,12 +413,14 @@ void updateMotors() {
     const int16_t target = targetPWM[i];
     const int16_t current = currentPWM[i];
 
-    if (reverseUntil[i] != 0) {
-      if (int32_t(now - reverseUntil[i]) < 0) {
+    if (reverseUntil[i]) {
+      if (int32_t(now - reverseUntil[i]) >= 0) {
+        reverseUntil[i] = 0;
+      } else if (target == 0 || reverseWaitMs(i, target, now)) {
         continue;
+      } else {
+        reverseUntil[i] = 0;
       }
-
-      reverseUntil[i] = 0;
     }
 
     if (current == 0) {
@@ -423,6 +435,8 @@ void updateMotors() {
 
   applyAllMotors();
 }
+
+// END HOST-TESTED DRIVE HANDLER
 
 // ============================================================
 // USB debug
