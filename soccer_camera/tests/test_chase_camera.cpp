@@ -48,7 +48,11 @@ int main() {
   chooseChaseMotion(camera, 10, true, 359, 180, 128, direction, power);
   assert(direction == 0 && power == 180);
   chooseChaseMotion(camera, 10, false, 270, 180, 128, direction, power);
-  assert(power == 180);
+  assert(power == 0);  // no ball bearing: do not drive
+  camera.mode = 0;
+  chooseChaseMotion(camera, 10, true, 270, 180, 128, direction, power);
+  assert(power == 0);  // camera cannot confirm a safe direction
+  camera.mode = 2;
   chooseChaseMotion(camera, 211, true, 270, 180, 128, direction, power);
   assert(power == 0);
   camera.mode = 1; camera.x = 1; camera.y = 0;
@@ -68,6 +72,8 @@ int main() {
   assert(cameraAllowsMotion(camera, 149));
   assert(!cameraAllowsMotion(camera, 150));
   chooseChaseMotion(camera, 149, true, 360, 180, 128, direction, power);
+  assert(power == 0);
+  chooseChaseMotion(camera, 149, true, 90, 180, 128, direction, power);
   assert(power == 180);
   frame[5] = 5; frame[6] = 0x20; seal(frame);
   assert(!validCameraFrame(frame));

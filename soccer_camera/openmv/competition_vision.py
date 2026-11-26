@@ -11,7 +11,8 @@ APPROACH_LIMIT_DEG = 60  # Never head closer than this to a ray with a nearby li
 ESCAPE_LIMIT_DEG = 75
 RELEASE_MARGIN_CM = 5
 RELEASE_FRAMES = 2
-GOAL_HOLD_MS = 300
+GOAL_HOLD_MS = 800  # must outlast the slowest goal detection period
+BALL_HOLD_MS = 450
 UNKNOWN_ANGLE = 0xFFFF
 UNKNOWN_BYTE = 255
 PACKET_SIZE = 37
@@ -81,6 +82,9 @@ class LineGuard:
         if close:
             scores = {h: min(abs(wrap(h - b)) for b in close) for h in open_sectors}
             good = {h: s for h, s in scores.items() if s >= ESCAPE_LIMIT_DEG}
+            # Prefer ways out that do not head toward a second, slightly farther line.
+            good = {h: s for h, s in good.items()
+                    if all(abs(wrap(h - b)) >= APPROACH_LIMIT_DEG for b in blocked)} or good
             if good:
                 # Farthest from every near line; keep the previous choice unless clearly worse.
                 away_x = sum(-math.sin(math.radians(b)) * (self.clearance - lines[b] + 6) for b in close)
@@ -123,7 +127,8 @@ def table_distance(table, radius):
 class Track:
     """One tracked object: candidate choice, circular smoothing, confidence and short hold."""
 
-    def __init__(self, table):
+    def __init__(self, table, hold_ms=GOAL_HOLD_MS):
+        self.hold_ms = hold_ms
         self.table = table
         self.bearing = None
         self.distance = None
@@ -134,7 +139,7 @@ class Track:
 
     def update(self, now, candidates):
         """candidates: (bearing, quality 0..1, radius_px, width_deg)."""
-        if self.bearing is not None and now - self.seen_ms > GOAL_HOLD_MS:
+        if self.bearing is not None and now - self.seen_ms > self.hold_ms:
             self.bearing, self.hits = None, 0
         if not candidates:
             self.confidence = int(self.confidence * 0.7)
@@ -159,7 +164,7 @@ class Track:
         self.seen_ms = now
 
     def fields(self, now):
-        if self.bearing is None or now - self.seen_ms > GOAL_HOLD_MS:
+        if self.bearing is None or now - self.seen_ms > self.hold_ms:
             return None, None, 0, 0, UNKNOWN_BYTE
         age = min(254, int((now - self.seen_ms) / 10))
         return self.bearing, self.distance, self.confidence, self.width, age
@@ -266,7 +271,7 @@ class Pipeline:
         self.mirror = mirror
         self.max_frame_ms = max_frame_ms
         self.guard = LineGuard(clearance_cm, getattr(cfg, "LINE_BLOCK_CM", clearance_cm + 10))
-        self.ball = Track(getattr(cfg, "BALL_DISTANCE", ()))
+        self.ball = Track(getattr(cfg, "BALL_DISTANCE", ()), BALL_HOLD_MS)
         goal_table = getattr(cfg, "GOAL_DISTANCE", ())
         self.goals = {"YELLOW": Track(goal_table), "BLUE": Track(goal_table)}
         self.sequence = 0
@@ -289,7 +294,8 @@ class Pipeline:
     def step(self, img, now, ready, frame_ms, visible, boundaries, clock=None):
         cfg = self.cfg
         mask, escape, nearest, count = self.guard.update(ready, visible, boundaries)
-        slow = frame_ms > self.max_frame_ms * 0.7
+        # Detection time delays the packet too, so it counts against the line budget.
+        slow = frame_ms + self.timing["ball"] + self.timing["goals"] > self.max_frame_ms * 0.7
         ball_period, goal_period = (4, 6) if slow else (2, 3)
         clock = clock or (lambda: 0)
         self.frame += 1

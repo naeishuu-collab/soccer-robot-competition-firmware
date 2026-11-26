@@ -508,6 +508,8 @@ void printDebug() {
 wheel::Drive modelDrive;
 wheel::Diag diag;
 uint32_t startRequestUs = 0, startLatencyUs = 0;
+uint32_t diagExitMs = 0;
+bool diagCooling = false;  // after diag, wait one reverse pause before obeying MAIN
 
 void readDiagSerial(uint32_t now) {
   static char text[32];
@@ -527,6 +529,11 @@ void readDiagSerial(uint32_t now) {
       stopAllMotors(now);
       modelDrive.stop(now);
       timedOut = true;  // leaving diag waits for a fresh MAIN command
+      if (wasActive) {
+        diagExitMs = now;
+        diagCooling = true;
+        applyAllMotors();
+      }
     }
   }
 }
@@ -611,8 +618,12 @@ void setup() {
 void loop() {
   const uint32_t now = millis();
   readDiagSerial(now);
+  if (diagCooling && now - diagExitMs >= REVERSE_PAUSE_MS) diagCooling = false;
   if (diag.active()) {
     runDiag(now);
+  } else if (diagCooling) {
+    uint8_t frame[FRAME_SIZE];
+    receiver.receive(frame);
   } else if (ROBOT_UPGRADE) {
     runModel(now);
   } else {

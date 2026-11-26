@@ -55,6 +55,11 @@ class LineGuardTests(unittest.TestCase):
         mask, escape, _, _ = v.LineGuard(25, 35).update(True, ALL, lines(*near))
         self.assertEqual((mask, escape), (0, None))
 
+    def test_escape_avoids_a_second_farther_line(self):
+        near = lines(*(wall(0, 15, 15) + wall(180, 32, 15)))
+        escape = v.LineGuard(25, 35).update(True, ALL, near)[1]
+        self.assertIn(escape, (90, 112.5, 247.5, 270))
+
     def test_separate_lines_are_counted(self):
         count = v.LineGuard(25, 35).update(True, ALL, lines(*(wall(0, 30, 15) + wall(180, 30, 15))))[3]
         self.assertEqual(count, 2)
@@ -85,7 +90,7 @@ class RecognitionTests(unittest.TestCase):
         self.assertEqual(t.confidence, 100)
         t.update(150, [])
         self.assertLess(t.confidence, 100)
-        self.assertIsNone(t.fields(500)[0])
+        self.assertIsNone(t.fields(1000)[0])
 
     def test_track_prefers_continuity_and_resets_confidence_on_jump(self):
         t = v.Track(())

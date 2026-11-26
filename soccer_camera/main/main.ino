@@ -3,6 +3,13 @@
 #include <math.h>
 #include <Wire.h>
 #include <SerialPIO.h>
+#include "main_logic.h"
+
+// 0 = field-tested chase (default). 1 = camera protocol 2, filtered IR, heading modes and tactics.
+// Build MAIN, MOTOR and IR together and set PROTOCOL = 2 on the camera. Not verified on hardware.
+#ifndef ROBOT_UPGRADE
+#define ROBOT_UPGRADE 0
+#endif
 
 struct CameraState;
 
@@ -143,11 +150,14 @@ inline void chooseChaseMotion(const CameraState &camera, uint32_t nowMs, bool ba
                               uint16_t &direction, uint16_t &power) {
   direction = 0;
   power = 0;
-  if (!cameraAllowsMotion(camera, nowMs)) return;
+  // Mode 0: the camera cannot confirm any safe direction.
+  if (!cameraAllowsMotion(camera, nowMs) || camera.mode == 0) return;
   if (camera.mode == 1 && (camera.x || camera.y)) {
     direction = cameraAvoidDirection(camera.x, camera.y);
+  } else if (ballFound && ballDirection < 360) {
+    direction = ballDirection;
   } else {
-    direction = ballFound && ballDirection < 360 ? ballDirection : 0;
+    return;
   }
   // At the configured PWM floor the wheel mixer reliably resolves the eight sector centers.
   direction = uint16_t(nearestSector(direction) * 45);
@@ -187,8 +197,10 @@ constexpr uint32_t IR_REPLY_TIMEOUT_MS = 100;
 // Movement
 // Initial commissioning limits. Verify that both settings move reliably on the floor.
 constexpr uint16_t MOVE_POWER = 160;
-constexpr uint16_t AVOID_POWER = 128;
+// Not below the MOTOR running floor: 128 could leave the robot stalled on a line.
+constexpr uint16_t AVOID_POWER = 160;
 constexpr uint16_t MAX_POWER = 200;
+constexpr uint32_t BALL_HOLD_MS = 500;  // keep the last bearing this long after the ball lock
 
 static_assert(AVOID_POWER <= MOVE_POWER && MOVE_POWER <= MAX_POWER,
               "MOVE_POWER exceeds MAX_POWER");
@@ -262,7 +274,9 @@ uint8_t calculateCRC(const uint8_t *frame) {
 }
 
 IrReplyReceiver irReceiver;
-SerialPIO cameraSerial(2, 3, 128);
+constexpr uint32_t CAMERA_BAUD = ROBOT_UPGRADE ? 115200 : 9600;
+SerialPIO cameraSerial(2, 3, 256);
+bool holdStop = false;  // USB 'd' / 's': diagnostics and soft stop, 'g' resumes
 
 CameraState camera;
 uint8_t cameraFrame[8] = {};
@@ -342,6 +356,7 @@ uint16_t convertDirection(uint16_t irAngle) {
 
 void sendDrive(uint8_t sequence, uint16_t direction, uint16_t power, bool avoid = false) {
   uint8_t frame[FRAME_SIZE] = {};
+  if (holdStop) direction = power = 0;
   frame[0] = FRAME_START;
   frame[1] = MSG_DRIVE;
   frame[2] = sequence & 0x7F;
@@ -366,7 +381,7 @@ void setup() {
   Serial1.setRX(PIN_RS485_RX);
   Serial1.begin(RS485_BAUD);
 
-  cameraSerial.begin(9600);
+  cameraSerial.begin(CAMERA_BAUD);
   digitalWrite(11, LOW);
   pinMode(11, OUTPUT);
 
@@ -382,6 +397,139 @@ void setup() {
     Wire.write(0x08); // IMUPLUS
     Wire.endTransmission();
     delay(30);
+  }
+  if (ROBOT_UPGRADE) {
+    Wire.setSDA(4);
+    Wire.setSCL(5);
+    Wire.begin();
+    Wire.setClock(50000);
+    Wire.setTimeout(5, true);
+  }
+}
+
+// ============================================================
+// Upgrade path (ROBOT_UPGRADE=1)
+// ============================================================
+
+bool bnoWrite(uint8_t reg, uint8_t value) {
+  Wire.beginTransmission(BNO_ADDRESS);
+  Wire.write(reg);
+  Wire.write(value);
+  return Wire.endTransmission() == 0;
+}
+
+bool bnoRead(uint8_t reg, uint8_t *data, uint8_t size) {
+  Wire.beginTransmission(BNO_ADDRESS);
+  Wire.write(reg);
+  if (Wire.endTransmission(false) != 0 || Wire.requestFrom(BNO_ADDRESS, size) != size) return false;
+  for (uint8_t i = 0; i < size; ++i) data[i] = Wire.read();
+  return true;
+}
+
+// Probe -> config -> IMUPLUS (magnetometer unused, so motor fields do not steer it) -> read.
+// No delay(); a missing sensor costs one I2C timeout (5 ms) per second.
+void updateBno(uint32_t now, brain::BnoSample &sample) {
+  static uint8_t stage = 0;
+  static uint32_t nextMs = 500;
+  if (int32_t(now - nextMs) < 0) return;
+  uint8_t data[2] = {};
+  uint8_t calibration = 0;
+  bool ok = false;
+  if (stage == 0) {
+    ok = bnoRead(0x00, data, 1) && data[0] == 0xA0 && bnoWrite(0x3D, 0x00);
+    nextMs = now + 25;
+  } else if (stage == 1) {
+    ok = bnoWrite(0x3D, 0x08);
+    nextMs = now + 30;
+  } else {
+    ok = bnoRead(0x35, &calibration, 1) && bnoRead(0x1A, data, 2);
+    const uint16_t raw = uint16_t(data[0] | data[1] << 8);
+    sample.ok = ok && raw < 5760 && ((calibration >> 4) & 3) == 3;  // gyro calibrated
+    sample.yaw = raw / 16.0f;
+    sample.stampMs = now;
+    nextMs = now + 20;
+  }
+  if (!ok) {
+    stage = 0;
+    sample.ok = false;
+    nextMs = now + 1000;
+  } else if (stage < 2) {
+    ++stage;
+  }
+}
+
+void upgradeLoop() {
+  static brain::Brain robot;
+  static brain::CameraParser parser;
+  static brain::CameraData cameraData;
+  static brain::IrReceiver irFrame;
+  static brain::IrData irData;
+  static brain::BnoSample bno;
+  static brain::Output out;
+  static uint8_t sequence = 0;
+  static uint32_t lastPollMs = 0, lastDriveMs = 0, lastLogMs = 0, lastUs = 0, loopMaxUs = 0;
+  static uint32_t pollUs = 0, irRoundTripUs = 0, cameraGapMaxMs = 0, brainMaxUs = 0;
+  static bool waitingForIr = false, urgent = false;
+
+  const uint32_t us = micros();
+  if (lastUs && us - lastUs > loopMaxUs) loopMaxUs = us - lastUs;
+  lastUs = us;
+
+  while (cameraSerial.available()) {
+    const uint32_t previous = cameraData.receivedMs;
+    if (parser.push(uint8_t(cameraSerial.read()), millis(), cameraData)) {
+      if (previous && cameraData.receivedMs - previous > cameraGapMaxMs) cameraGapMaxMs = cameraData.receivedMs - previous;
+      if (!cameraData.ready || cameraData.escaping) urgent = true;
+    }
+  }
+  const uint32_t now = millis();
+  while (Serial1.available()) {
+    const uint8_t byte = Serial1.read();
+    brain::IrData reply = irData;
+    if (waitingForIr && irFrame.push(byte, reply)) {
+      reply.received = true;
+      reply.angle = convertDirection(reply.angle);
+      reply.stampMs = now;
+      irData = reply;
+      irRoundTripUs = micros() - pollUs;
+      waitingForIr = false;
+      delayMicroseconds(50);
+    }
+  }
+  if (waitingForIr && now - lastPollMs >= IR_REPLY_TIMEOUT_MS) waitingForIr = false;
+  if (waitingForIr) return;  // never transmit inside the IR reply window
+
+  updateBno(now, bno);
+  if (urgent || now - lastDriveMs >= 20) {
+    const uint32_t start = micros();
+    out = robot.step(cameraData, irData, bno, millis());
+    if (micros() - start > brainMaxUs) brainMaxUs = micros() - start;
+    headingTurn = int8_t(out.turn);
+    sendDrive(sequence++, out.direction, out.power, out.avoid);
+    lastDriveMs = now;
+    urgent = false;
+  }
+  if (now - lastPollMs >= IR_POLL_INTERVAL_MS) {
+    const uint8_t poll[] = {0xA5, 0x5A, 0x02, 0xFD};
+    irFrame.reset();
+    sendRs485(poll, sizeof(poll));
+    lastPollMs = millis();
+    pollUs = micros();
+    waitingForIr = true;
+  }
+  if (now - lastLogMs >= 500 && Serial && Serial.availableForWrite() >= 240) {
+    lastLogMs = now;
+    Serial.printf("%s%s %s mode=%s%s dir=%u spd=%u turn=%d ball=%s %d c%u d%d goal=%d\n",
+                  holdStop ? "HOLD " : "", brain::name(out.tactic), out.reason, brain::name(robot.heading.mode),
+                  robot.heading.disagreement ? "(mismatch)" : "", out.direction, out.power, out.turn,
+                  brain::name(robot.ball.state), int(robot.ball.bearing), robot.ball.confidence,
+                  robot.ball.distanceCm, isfinite(out.goal) ? int(out.goal) : -1);
+    Serial.printf("cam=%u ready=%d mask=%04x err=%lu gap=%lums ir c%u f%03x rtt=%luus bno=%d loop=%luus brain=%luus\n",
+                  unsigned(now - cameraData.receivedMs), int(cameraData.ready), cameraData.mask,
+                  static_cast<unsigned long>(parser.errors), static_cast<unsigned long>(cameraGapMaxMs),
+                  irData.confidence, irData.faults, static_cast<unsigned long>(irRoundTripUs), int(bno.ok),
+                  static_cast<unsigned long>(loopMaxUs), static_cast<unsigned long>(brainMaxUs));
+    loopMaxUs = brainMaxUs = cameraGapMaxMs = 0;
   }
 }
 
@@ -399,6 +547,18 @@ void loop() {
   static IrBallLock ballLock;
   static uint16_t lastDriveDirection = 0;
   static uint16_t lastDrivePower = 0;
+  static uint16_t lastBallDirection = 360;
+  static uint32_t lastBallMs = 0;
+
+  while (Serial.available()) {
+    const int command = Serial.read();
+    if (command == 'd' || command == 's') holdStop = true;
+    if (command == 'g') holdStop = false;
+  }
+  if (ROBOT_UPGRADE) {
+    upgradeLoop();
+    return;
+  }
 
   receiveCamera();
   const uint32_t now = millis();
@@ -445,13 +605,18 @@ void loop() {
 
   // Never transmit during the IR reply window. Send a pending stop before a new drive.
   if (waitingForIr) return;
-  if (replyExpired || (lastDrivePower && !cameraAllowsMotion(camera, now))) {
+  if (replyExpired || (lastDrivePower && (!cameraAllowsMotion(camera, now) || camera.mode == 0))) {
     sendDrive(sequence++, 0, 0);
     lastDrivePower = 0;
   } else if (received) {
     uint16_t direction = 0;
     uint16_t power = 0;
-    chooseChaseMotion(camera, now, true, ballLock.active(now) ? ballLock.direction() : lastDriveDirection,
+    if (ballLock.active(now)) {
+      lastBallDirection = ballLock.direction();
+      lastBallMs = now;
+    }
+    const bool ballHeld = lastBallDirection < 360 && now - lastBallMs <= BALL_HOLD_MS;
+    chooseChaseMotion(camera, now, ballHeld, lastBallDirection,
                       MOVE_POWER, AVOID_POWER, direction, power);
     sendDrive(sequence++, direction, power, camera.mode == 1);
     lastDriveDirection = direction;

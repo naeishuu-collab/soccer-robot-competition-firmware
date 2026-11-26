@@ -29,7 +29,13 @@ int main() {
           assert(fabsf(m.speed[i]) <= 1.0001f);
           assert(m.speed[i] == 0 || fabsf(m.speed[i]) >= 0.649f);
         }
-        if (turn == 0) assert(m.feasible && m.errorDeg <= 23);
+        assert(m.feasible && m.errorDeg <= kMaxDirectionErrorDeg);
+        if (turn == 0) {
+          assert(m.errorDeg <= 23);
+          float spin = 0;
+          for (int i = 0; i < 4; ++i) spin += m.speed[i] * kWheels[i].polarity / 4;
+          assert(fabsf(spin) < 0.001f);  // translation never adds rotation
+        }
         if (!m.feasible) for (int i = 0; i < 4; ++i) assert(m.speed[i] == 0);
       }
     }
@@ -76,12 +82,15 @@ int main() {
   assert(d.duty(0) == 0);
   d.command(180, 160, 0, 1420);
   assert(d.duty(0) < 0);
-  // Chatter cannot hold the wheel at boost duty.
+  // A still-turning wheel is not boosted again; a stationary one always is (no stall at hold duty).
   Drive c;
   c.command(0, 160, 0, 1000);
   c.stop(1010);
-  c.command(0, 160, 0, 1100);
-  assert(c.duty(0) < 180);
+  c.command(0, 160, 0, 1050);
+  assert(c.duty(0) == c.target(0) && c.duty(0) < 180);
+  c.stop(1060);
+  c.command(0, 160, 0, 1160);
+  assert(c.duty(0) == 180);
   // millis wrap during a reverse pause.
   Drive wrap;
   wrap.command(0, 160, 0, UINT32_MAX - 50);
@@ -113,6 +122,11 @@ int main() {
   assert(t.duty(0, 1200) == 0);
   t.line("m 90 160 0", 1500);
   assert(t.duty(0, 1500) != 0);
-  t.line("exit", 1510);
-  assert(!t.active() && t.duty(0, 1510) == 0);
+  t.line("p 0 r 160", 1510);
+  assert(t.duty(0, 1511) == 0);  // reverses the wheel the move just drove
+  t.line("p 2 f 160", 1600);
+  t.line("m 270 160 0", 1650);
+  assert(t.duty(0, 1651) == 0);  // pulse then move also waits
+  t.line("exit", 1700);
+  assert(!t.active() && t.duty(0, 1700) == 0);
 }

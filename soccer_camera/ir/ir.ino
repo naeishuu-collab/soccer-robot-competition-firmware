@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include "ir_logic.h"
 
 // Keep the chase (3) per-poll sampling and raw sensor-index angle.
 constexpr uint8_t SENSOR_COUNT = 12;
@@ -12,6 +13,9 @@ const int16_t cosTable[SENSOR_COUNT] = {1000, 866, 500, 0, -500, -866, -1000, -8
 const int16_t sinTable[SENSOR_COUNT] = {0, 500, 866, 1000, 866, 500, 0, -500, -866, -1000, -866, -500};
 const uint32_t SAMPLE_TIME_US = 5000;
 uint16_t detectCount[SENSOR_COUNT];
+
+irx::Filter irFilter;
+bool verbose = false;  // USB 'v' toggles per-sensor output
 
 enum RequestState { WAIT_POLL, READ_POLL_2, READ_POLL_CMD, READ_POLL_END };
 RequestState requestState = WAIT_POLL;
@@ -62,16 +66,60 @@ void sampleAndReply() {
   }
 }
 
+// Command 0x02: normalized, filtered reply with confidence and fault mask.
+void sampleFiltered(bool reply) {
+  for (uint8_t i = 0; i < SENSOR_COUNT; i++) detectCount[i] = 0;
+  uint32_t samples = 0;
+  const uint32_t startTime = micros();
+  while ((uint32_t)(micros() - startTime) < SAMPLE_TIME_US) {
+    for (uint8_t i = 0; i < SENSOR_COUNT; i++) {
+      if (digitalRead(sensorPins[i]) == LOW) detectCount[i]++;
+    }
+    ++samples;
+  }
+  const irx::Result result = irFilter.update(detectCount, samples);
+  if (reply) {
+    uint8_t frame[irx::kReplySize];
+    irx::encode(result, frame);
+    digitalWrite(RS485_DE_PIN, HIGH);
+    delayMicroseconds(20);
+    Serial1.write(frame, sizeof(frame));
+    Serial1.flush();
+    delayMicroseconds(20);
+    digitalWrite(RS485_DE_PIN, LOW);
+  }
+  static uint32_t lastPrintMs = 0;
+  if (verbose && millis() - lastPrintMs >= 200 && Serial && Serial.availableForWrite() >= 160) {
+    lastPrintMs = millis();
+    // Unfiltered angle from this sample window, for comparison with the filtered one.
+    int32_t x = 0, y = 0;
+    Serial.print("permille");
+    for (uint8_t i = 0; i < SENSOR_COUNT; i++) {
+      Serial.printf(" %u", irFilter.raw(i));
+      x += int32_t(irFilter.raw(i)) * cosTable[i];
+      y += int32_t(irFilter.raw(i)) * sinTable[i];
+    }
+    const int raw = x || y ? (int(lroundf(atan2f(float(y), float(x)) * 57.29578f)) + 360) % 360 : -1;
+    Serial.printf("\nraw=%d filtered=%u strength=%u confidence=%u faults=%03x\n", raw, result.angle,
+                  result.strength, result.confidence, result.faults);
+  }
+}
+
 void processRequestByte(uint8_t data) {
+  static uint8_t command = 1;
   switch (requestState) {
     case WAIT_POLL: if (data == 0xA5) requestState = READ_POLL_2; break;
     case READ_POLL_2:
       requestState = data == 0x5A ? READ_POLL_CMD : (data == 0xA5 ? READ_POLL_2 : WAIT_POLL);
       break;
-    case READ_POLL_CMD: requestState = data == 0x01 ? READ_POLL_END : WAIT_POLL; break;
+    case READ_POLL_CMD:
+      command = data;
+      requestState = data == 0x01 || data == 0x02 ? READ_POLL_END : WAIT_POLL;
+      break;
     case READ_POLL_END:
       requestState = WAIT_POLL;
-      if (data == 0xFE) sampleAndReply();
+      if (command == 0x01 && data == 0xFE) sampleAndReply();
+      if (command == 0x02 && data == 0xFD) sampleFiltered(true);
       break;
   }
 }
@@ -87,5 +135,12 @@ void setup() {
 }
 
 void loop() {
-  while (Serial1.available()) processRequestByte((uint8_t)Serial1.read());
+  static uint32_t lastBusMs = 0;
+  while (Serial1.available()) {
+    processRequestByte((uint8_t)Serial1.read());
+    lastBusMs = millis();
+  }
+  while (Serial.available()) if (Serial.read() == 'v') verbose = !verbose;
+  // Bench diagnostics without MAIN: sample locally while the bus is quiet; nothing is transmitted.
+  if (verbose && millis() - lastBusMs >= 500) sampleFiltered(false);
 }

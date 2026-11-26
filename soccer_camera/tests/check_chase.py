@@ -20,8 +20,8 @@ class ChaseConfiguration(unittest.TestCase):
         source = (ROOT / "main/main.ino").read_text(encoding="utf-8")
         for name, value in (("PIN_RS485_TX", 0), ("PIN_RS485_RX", 1), ("PIN_RS485_EN", 8)):
             self.assertRegex(source, rf"\b{name}\s*=\s*{value}\s*;")
-        self.assertRegex(source, r"SerialPIO\s+cameraSerial\(2,\s*3,\s*128\)")
-        self.assertRegex(source, r"cameraSerial\.begin\(9600\)")
+        self.assertRegex(source, r"SerialPIO\s+cameraSerial\(2,\s*3,\s*256\)")
+        self.assertRegex(source, r"CAMERA_BAUD\s*=\s*ROBOT_UPGRADE \? 115200 : 9600")
         self.assertNotRegex(source, r"Serial2\.set(?:TX|RX)\([23]\)")
         self.assertRegex(source, r"IR_FRONT_DEGREES\s*=\s*0\s*;")
         self.assertRegex(source, r"IR_ANGLE_SIGN\s*=\s*-1\s*;")
@@ -36,6 +36,13 @@ class ChaseConfiguration(unittest.TestCase):
         source = (ROOT / "main/main.ino").read_text(encoding="utf-8")
         self.assertRegex(source, r"constexpr\s+bool\s+BNO_ENABLED\s*=\s*false\s*;")
         self.assertRegex(source, r"if\s*\(BNO_ENABLED\)\s*\{\s*updateHeading\(now\);")
+
+    def test_upgrade_is_off_by_default_on_every_board(self):
+        for sketch in ("main/main.ino", "motor/motor.ino"):
+            source = (ROOT / sketch).read_text(encoding="utf-8")
+            self.assertRegex(source, r"#define ROBOT_UPGRADE 0")
+        config = (ROOT / "openmv/camera_calibration.py").read_text(encoding="utf-8")
+        self.assertRegex(config, r"(?m)^PROTOCOL = 1$")
 
 
 if __name__ == "__main__":

@@ -12,8 +12,8 @@ constexpr float kDegToRad = 0.01745329252f;
 constexpr int kDutyLimit = 210;               // Do not raise without hardware verification.
 constexpr uint32_t kReversePauseMs = 200;     // Reverse protection, never bypassed by boost.
 constexpr uint32_t kBoostLimitMs = 150;       // Hard ceiling for any configured boost.
-constexpr uint32_t kBoostRearmMs = 300;       // A stop/start chatter cannot re-boost faster than this.
-constexpr uint32_t kMovingMemoryMs = 80;      // A wheel stopped for less than this is still turning.
+// A wheel stopped for less than this is still turning and gets no boost; this also bounds boost duty.
+constexpr uint32_t kMovingMemoryMs = 80;
 constexpr uint32_t kTickMs = 10;
 constexpr float kMaxDirectionErrorDeg = 30;   // Larger error: do not move at all.
 
@@ -147,7 +147,8 @@ inline Mix solve(const WheelConfig (&wheels)[4], int direction, int power, int t
     }
     // Wheels fighting each other (the null-space pattern) waste torque.
     const float fight = fabsf(w[0] + w[1] - w[2] - w[3]) / 4;
-    const float cost = error / 45.0f + fabsf(rot - tr) + 0.25f * fight + switching +
+    // Unwanted rotation is weighted heavily: without a gyro nothing else corrects it.
+    const float cost = error / 45.0f + 4 * fabsf(rot - tr) + 0.25f * fight + switching +
                        0.2f * fabsf(hypotf(vx, vy) - hypotf(tx, ty));
     if (cost < bestCost) {
       bestCost = cost;
@@ -157,6 +158,8 @@ inline Mix solve(const WheelConfig (&wheels)[4], int direction, int power, int t
   }
   out.errorDeg = bestError;
   out.feasible = bestCost < 1e9f && bestError <= kMaxDirectionErrorDeg;
+  // Heading correction must never block a translation (line escape included).
+  if (!out.feasible && turn && s > 0) return solve(wheels, direction, power, 0, previous);
   if (out.feasible) for (int i = 0; i < 4; ++i) out.speed[i] = best[i] * wheels[i].polarity;
   return out;
 }
@@ -209,9 +212,8 @@ public:
       if (!current_[i]) {
         const bool stationary = !lastSign_[i] || uint32_t(now - stoppedMs_[i]) >= kMovingMemoryMs ||
                                 sign != lastSign_[i];
-        const bool armed = !boosted_[i] || uint32_t(now - boostStartMs_[i]) >= kBoostRearmMs;
-        boosting_[i] = stationary && armed && w.boostMs;
-        if (boosting_[i]) { boosted_[i] = true; boostStartMs_[i] = now; }
+        boosting_[i] = stationary && w.boostMs;
+        if (boosting_[i]) boostStartMs_[i] = now;
         int duty = boosting_[i] ? (d.startDuty > abs_(target) ? d.startDuty : abs_(target)) : abs_(target);
         if (duty > kDutyLimit) duty = kDutyLimit;
         current_[i] = sign * duty;
@@ -248,7 +250,7 @@ private:
   int target_[4] = {}, current_[4] = {};
   int lastSign_[4] = {};
   uint32_t stoppedMs_[4] = {}, boostStartMs_[4] = {}, waitUntil_ = 0, tickMs_ = 0;
-  bool boosting_[4] = {}, boosted_[4] = {}, waiting_ = false;
+  bool boosting_[4] = {}, waiting_ = false;
 };
 
 // USB bench diagnostics. Nothing moves until "diag" is typed, and every motion expires by itself.
@@ -273,6 +275,7 @@ public:
     if (sscanf(text, "m %d %d %d %d", &a, &b, &c, &ms) >= 3) {
       if (a < 0 || a >= 360 || b < 0 || b > kDutyLimit || c < -40 || c > 40 || !validMs(ms)) return "out of range";
       end(now);
+      if (pulsed_ && uint32_t(now - pulseEndMs_) < kReversePauseMs) return "reverse pause, retry";
       wheel_ = -1;
       drive_.command(a, b, c, now);
       start(now, ms);
@@ -310,15 +313,23 @@ private:
   }
   void start(uint32_t now, int ms) { running_ = true; startMs_ = now; durationMs_ = uint32_t(ms); }
   void end(uint32_t now) {
-    if (running_ && wheel_ >= 0) endMs_[wheel_] = now;
+    if (running_ && wheel_ >= 0) {
+      endMs_[wheel_] = pulseEndMs_ = now;
+      pulsed_ = true;
+    } else if (running_) {
+      for (int i = 0; i < 4; ++i) {
+        const int d = drive_.duty(i);
+        if (d) { lastSign_[i] = d < 0 ? -1 : 1; endMs_[i] = now; }
+      }
+    }
     running_ = false;
     drive_.stop(now);
   }
 
   Drive drive_;
-  bool active_ = false, running_ = false;
+  bool active_ = false, running_ = false, pulsed_ = false;
   int wheel_ = -1, sign_ = 1, first_ = 0, then_ = 0, lastSign_[4] = {};
-  uint32_t startMs_ = 0, durationMs_ = 0, endMs_[4] = {};
+  uint32_t startMs_ = 0, durationMs_ = 0, endMs_[4] = {}, pulseEndMs_ = 0;
   char reply_[48] = {};
 };
 

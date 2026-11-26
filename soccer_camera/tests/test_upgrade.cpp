@@ -1,0 +1,362 @@
+// Upgrade path: protocols, IR filter, heading modes, ball tracking, tactics.
+#include <math.h>
+#include <stdint.h>
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include "ir_logic.h"
+#include "main_logic.h"
+#include <assert.h>
+using namespace brain;
+
+static void loadGolden(uint8_t *packet) {
+  char path[512];
+  strncpy(path, __FILE__, sizeof(path) - 40);
+  path[sizeof(path) - 40] = 0;
+  char *end = path + strlen(path);
+  while (end > path && end[-1] != '/' && end[-1] != '\\') --end;
+  strcpy(end, "camera_v2_golden.txt");
+  FILE *f = fopen(path, "r");
+  assert(f);
+  for (int i = 0; i < kCameraSize; ++i) {
+    unsigned value = 0;
+    const int read = fscanf(f, "%x", &value);
+    assert(read == 1);
+    packet[i] = uint8_t(value);
+  }
+  fclose(f);
+}
+
+static bool feed(CameraParser &p, const uint8_t *data, int size, uint32_t now, CameraData &out) {
+  bool got = false;
+  for (int i = 0; i < size; ++i) got = p.push(data[i], now, out) || got;
+  return got;
+}
+
+static void protocols() {
+  uint8_t golden[kCameraSize];
+  loadGolden(golden);  // produced by the Python encoder; test_competition_vision.py checks the same file
+  CameraParser p;
+  CameraData d;
+  assert(feed(p, golden, kCameraSize, 100, d));
+  assert(d.ready && !d.escaping && d.targetBlue && d.targetValid && d.mask == 0xFF0F && d.escape == kUnknown);
+  assert(d.line == 350 && d.lineCm == 31 && d.lineCount == 1);
+  assert(d.ball.seen && d.ball.bearing == 10 && d.ball.distanceCm == -1 && d.ball.confidence == 80 && d.ball.stampMs == 80);
+  assert(d.yellow.distanceCm == 120 && d.blue.bearing == 180 && d.blue.distanceCm == -1 && d.blue.stampMs == 70);
+  assert(d.heading == 355 && d.headingConfidence == 55 && d.frameMs == 33);
+  assert(!feed(p, golden, kCameraSize, 150, d));  // repeated sequence is stale
+  // Every single-byte corruption and truncation is rejected; garbage prefixes resynchronize.
+  for (int i = 0; i < kCameraSize; ++i) {
+    uint8_t bad[kCameraSize];
+    memcpy(bad, golden, sizeof(bad));
+    bad[i] ^= 0x01;
+    CameraParser q;
+    CameraData e;
+    assert(!feed(q, bad, kCameraSize, 100, e) && !e.received);
+    assert(feed(q, golden, kCameraSize, 200, e));
+  }
+  CameraParser q;
+  CameraData e;
+  const uint8_t junk[] = {0x20, 0, 0, 0xFF, 0, 2, 0x40, 0x9D, 0xC5, 0xC5, 0x5C, 9};
+  assert(!feed(q, junk, sizeof(junk), 100, e));
+  assert(feed(q, golden, kCameraSize, 101, e));
+  CameraParser r;
+  CameraData f;
+  feed(r, golden, 20, 100, f);
+  assert(feed(r, golden, kCameraSize, 200, f));  // partial frame times out
+
+  irx::Result sent;
+  sent.angle = 270; sent.strength = 0xAA55; sent.confidence = 88; sent.faults = 0x801;
+  uint8_t wire[irx::kReplySize];
+  irx::encode(sent, wire);
+  IrReceiver receiver;
+  IrData got;
+  bool ok = false;
+  for (uint8_t byte : wire) ok = receiver.push(byte, got);
+  assert(ok && got.angle == 270 && got.strength == 0xAA55 && got.confidence == 88 && got.faults == 0x801);
+  wire[2] ^= 1;
+  receiver.reset();
+  for (uint8_t byte : wire) assert(!receiver.push(byte, got));
+  const uint8_t legacy[] = {0xAA, 0, 90, 0, 5, 0x55};
+  receiver.reset();
+  for (uint8_t byte : legacy) assert(!receiver.push(byte, got));
+}
+
+static void irFilterTests() {
+  uint16_t count[12] = {};
+  irx::Filter f;
+  count[3] = 400;
+  irx::Result r = f.update(count, 1000);
+  assert(r.angle == 90 && r.confidence == 100 && r.strength == 400);
+  // Opposing detections: strong but no direction, so low confidence.
+  count[9] = 380;
+  r = f.update(count, 1000);
+  assert(r.confidence < 10);
+  // A weak reflection on the far side is ignored; sample-count normalization.
+  irx::Filter g;
+  memset(count, 0, sizeof(count));
+  count[0] = 800; count[6] = 60;
+  r = g.update(count, 2000);
+  assert(r.angle == 0 && r.confidence == 100 && r.strength == 400);
+  // Wraparound smoothing and fast following.
+  irx::Filter h;
+  memset(count, 0, sizeof(count));
+  count[11] = 500; h.update(count, 1000);
+  count[11] = 0; count[1] = 500;
+  r = h.update(count, 1000);
+  assert(r.angle > 330 || r.angle <= 30);
+  count[1] = 0; count[6] = 500;
+  assert(h.update(count, 1000).angle == 180);
+  // Stuck sensor: excluded after persisting, restored after it behaves.
+  irx::Filter s;
+  memset(count, 0, sizeof(count));
+  count[5] = 1000; count[0] = 400;
+  for (int i = 0; i < 100; ++i) r = s.update(count, 1000);
+  assert((r.faults & (1 << 5)) && r.angle == 0);
+  count[5] = 300;
+  for (int i = 0; i < 10; ++i) r = s.update(count, 1000);
+  assert(!r.faults);
+  // Dead sensor between two active neighbours.
+  irx::Filter dead;
+  memset(count, 0, sizeof(count));
+  count[1] = 600; count[3] = 600;
+  for (int i = 0; i < 100; ++i) r = dead.update(count, 1000);
+  assert(r.faults == (1 << 2) && r.angle == 60);
+  memset(count, 0, sizeof(count));
+  r = dead.update(count, 1000);
+  assert(r.strength == 0 && r.confidence == 0);
+}
+
+struct World {
+  CameraData cam;
+  IrData ir;
+  BnoSample bno;
+  Brain robot;
+  uint32_t now = 1000;
+  float yaw = 0;
+  bool bnoOn = false, camOn = true, irOn = true, ball = true;
+  World() {
+    cam.received = cam.ready = cam.targetValid = true;
+    cam.mask = 0xFFFF;
+    ir.received = true;
+    ir.confidence = 90;
+  }
+  void goal(float bearing) { cam.yellow.seen = true; cam.yellow.bearing = bearing; cam.yellow.confidence = 90; }
+  Output run(int steps = 1) {
+    Output out;
+    for (int i = 0; i < steps; ++i) {
+      now += 20;
+      if (camOn) { cam.receivedMs = now; ++cam.sequence; cam.yellow.stampMs = cam.blue.stampMs = now; }
+      if (irOn) { ir.stampMs = now; ir.strength = ball ? 500 : 0; }
+      if (bnoOn) { bno.ok = true; bno.yaw = yaw; bno.stampMs = now; }
+      out = robot.step(cam, ir, bno, now);
+    }
+    return out;
+  }
+};
+
+static void headingModes() {
+  World w;
+  w.ir.angle = 0;
+  Output o = w.run(10);
+  assert(w.robot.heading.mode == Mode::DEGRADED && o.turn == 0 && o.power > 0);  // restricted IR tracking
+  assert(o.power == w.robot.cfg.speedSlow);
+  // Vision only, goal-relative: not a heading.
+  w.goal(20);
+  o = w.run(10);
+  assert(w.robot.heading.mode == Mode::VISION_ONLY && !w.robot.heading.absolute);
+  // Absolute vision heading across the 0/360 seam.
+  w.cam.heading = 340; w.cam.headingConfidence = 80;
+  o = w.run(30);
+  assert(w.robot.heading.absolute && fabsf(w.robot.heading.heading() + 20) < 0.1f && o.turn > 0);
+  // BNO recovers with an unrelated zero: no jump, then FUSED.
+  w.bnoOn = true; w.yaw = 200;
+  o = w.run(30);
+  assert(w.robot.heading.mode == Mode::FUSED && fabsf(w.robot.heading.heading() + 20) < 1);
+  // Persistent disagreement with confident vision: fall back to vision.
+  w.cam.heading = 90; w.cam.headingConfidence = 90;
+  w.run(40);
+  assert(w.robot.heading.mode == Mode::VISION_ONLY && w.robot.heading.disagreement);
+  w.cam.headingConfidence = 55;
+  w.run(2);
+  assert(w.robot.heading.mode == Mode::BNO_ONLY);
+  // Vision lost: BNO only.
+  w.cam.heading = kUnknown; w.cam.headingConfidence = 0;
+  w.run(10);
+  assert(w.robot.heading.mode == Mode::BNO_ONLY && w.robot.heading.absolute);
+  // BNO disconnect while running: degraded, no invented heading, no turn.
+  w.bnoOn = false;
+  w.cam.yellow.seen = false;
+  o = w.run(20);
+  assert(w.robot.heading.mode == Mode::DEGRADED && !w.robot.heading.absolute && o.turn == 0);
+
+  // Power-on with BNO only, across the seam: first sample is the reference; turn slews.
+  World b;
+  b.bnoOn = true; b.yaw = 359;
+  b.run(20);
+  assert(b.robot.heading.mode == Mode::BNO_ONLY && fabsf(b.robot.heading.heading()) < 0.1f);
+  b.yaw = 14; o = b.run();
+  assert(abs(o.turn) <= b.robot.cfg.turnSlew);
+  o = b.run(20);
+  assert(o.turn < 0 && o.turn >= -b.robot.cfg.turnMax);
+  b.yaw = 4; o = b.run(20);
+  assert(o.turn < 0);  // hysteresis keeps correcting between exit and enter
+  b.yaw = 359; o = b.run(20);
+  assert(o.turn == 0);
+  // A single wild sample is ignored.
+  b.yaw = 180; b.run();
+  assert(fabsf(b.robot.heading.heading()) < 1);
+  b.yaw = 359; b.run();
+  assert(fabsf(b.robot.heading.heading()) < 1);
+}
+
+static void safety() {
+  World w;
+  w.goal(0);
+  w.camOn = false;
+  Output o = w.run();
+  w.now += 300;
+  o = w.robot.step(w.cam, w.ir, w.bno, w.now);
+  assert(o.tactic == Tactic::SAFE_STOP && !o.power && !o.turn && strcmp(o.reason, "camera link") == 0);
+  w.camOn = true; w.irOn = false;
+  o = w.run(10);
+  assert(o.tactic == Tactic::SAFE_STOP && !o.power);
+  w.irOn = true; w.cam.ready = false; w.cam.mask = 0;
+  assert(w.run().power == 0);
+  w.cam.ready = true;
+  assert(w.run().tactic == Tactic::SAFE_STOP);  // nothing open
+  w.cam.mask = 1u << 8; w.cam.escaping = true; w.cam.escape = 180;
+  o = w.run();
+  assert(o.tactic == Tactic::AVOID_LINE && o.direction == 180 && o.power == w.robot.cfg.speedAvoid && o.avoid && !o.turn);
+  w.cam.escape = 0;
+  assert(w.run().power == 0);
+  // Line mask beats the ball.
+  w.cam.escaping = false; w.cam.escape = kUnknown;
+  w.cam.mask = uint16_t(~((1u << 15) | 1u | (1u << 1) | (1u << 2) | (1u << 14)));
+  w.ir.angle = 0;
+  o = w.run(5);
+  assert(o.power == w.robot.cfg.speedSlow && sectorOpen(w.cam.mask, sectorOf(o.direction)) && o.direction != 0);
+  w.cam.mask = 1u << 8;  // only straight back, ball ahead
+  o = w.run();
+  assert(!o.power);
+  for (int mask = 0; mask < 65536; mask += 7) {
+    for (int wanted = 0; wanted < 360; wanted += 13) {
+      const int d = safeDirection(uint16_t(mask), float(wanted));
+      assert(d < 0 || sectorOpen(uint16_t(mask), sectorOf(float(d))));
+    }
+  }
+}
+
+static void ballStates() {
+  World w;
+  w.ball = false;
+  Output o = w.run(5);
+  assert(w.robot.ball.state == BallState::WAIT && !o.power);  // never seen: wait
+  w.ball = true; w.ir.angle = 30; w.run(5);
+  assert(w.robot.ball.state == BallState::TRACK);
+  w.ir.angle = 200; w.run();
+  assert(fabsf(wrap(w.robot.ball.bearing - 30)) < 5);  // one reflection ignored
+  w.run(2);
+  assert(fabsf(wrap(w.robot.ball.bearing - 200)) < 5);
+  w.ball = false;
+  w.run(7);
+  assert(w.robot.ball.state == BallState::PREDICT);
+  w.run(15);
+  assert(w.robot.ball.state == BallState::SEARCH);
+  o = w.run(80);
+  assert(w.robot.ball.state == BallState::WAIT && !o.power);  // never drives forever
+  w.ball = true; w.ir.angle = 90; w.run(2);
+  assert(w.robot.ball.state == BallState::TRACK && fabsf(wrap(w.robot.ball.bearing - 90)) < 5);  // reacquired
+  // Moving ball: positive rate, lead ahead, wraparound.
+  World m;
+  for (int i = 0; i < 30; ++i) { m.ir.angle = uint16_t((340 + i * 2) % 360); m.run(); }
+  assert(m.robot.ball.rate > 40 && wrap(m.robot.ball.lead() - m.robot.ball.bearing) > 0);
+  // Low confidence IR is not used; an agreeing camera raises confidence.
+  World c;
+  c.ir.confidence = 10;
+  c.run(3);
+  assert(c.robot.ball.state == BallState::WAIT);
+  c.ir.confidence = 60; c.ir.angle = 355;
+  c.cam.ball.seen = true; c.cam.ball.bearing = 5; c.cam.ball.confidence = 60;
+  for (int i = 0; i < 5; ++i) { c.cam.ball.stampMs = c.now + 20; c.run(); }
+  assert(c.robot.ball.confidence > 60 && fabsf(wrap(c.robot.ball.bearing)) < 6);
+}
+
+static void tactics() {
+  World w;
+  w.goal(0);
+  w.ir.angle = 0;
+  Output o = w.run(5);
+  assert(o.tactic == Tactic::ATTACK && o.direction == 0 && o.power == w.robot.cfg.speedAttack);
+  o = w.run(160);
+  assert(w.robot.ball.state == BallState::TRACK);
+  World stall;
+  stall.goal(0);
+  bool recovered = false;
+  for (int i = 0; i < 200; ++i) {
+    o = stall.run();
+    if (o.tactic == Tactic::RECOVER) { recovered = true; assert(o.direction == 180); }
+  }
+  assert(recovered);
+  // Ball to the right of the goal line: go further right to get behind it.
+  World r;
+  r.goal(0); r.ir.angle = 90;
+  o = r.run(5);
+  assert(o.tactic == Tactic::ORBIT && o.direction == 180);
+  r.ir.angle = 270; o = r.run(5);
+  assert(o.tactic == Tactic::ORBIT && o.direction == 180);
+  World a;
+  a.goal(0); a.ir.angle = 30;
+  o = a.run(5);
+  assert(o.tactic == Tactic::ALIGN && o.direction > 30 && o.direction <= 90);
+  // Ball straight behind: one side is chosen and kept; a line flips it.
+  World b;
+  b.goal(0); b.ir.angle = 180;
+  const uint16_t first = b.run(5).direction;
+  assert(first == 270 || first == 90);
+  assert(b.run(20).direction == first);
+  b.cam.mask = first == 270 ? 0x01FF : 0xFF01;  // close the chosen side
+  o = b.run(5);
+  assert(o.power && o.direction != first);
+  // Only our own goal visible: attack away from it.
+  World own;
+  own.cam.blue.seen = true; own.cam.blue.bearing = 0; own.cam.blue.confidence = 90;
+  own.ir.angle = 0;
+  own.cam.blue.distanceCm = 100;
+  o = own.run(10);
+  assert(o.tactic == Tactic::ORBIT && fabsf(o.goal - 180) < 1 && o.direction != 0);
+  // Ball lost: retreat toward own goal only for a limited time.
+  own.ball = false;
+  o = own.run(30);
+  assert(o.tactic == Tactic::SEARCH && o.power && o.direction == 0);
+  o = own.run(100);
+  assert(!o.power);
+  // Without a calibrated own-goal distance the robot does not retreat blind.
+  World blind;
+  blind.cam.blue.seen = true; blind.cam.blue.bearing = 180; blind.cam.blue.confidence = 90;
+  blind.run(10);
+  blind.ball = false;
+  assert(!blind.run(30).power);
+  // A held camera ball (unchanged stamp) does not keep the track alive.
+  World held;
+  held.irOn = true; held.ball = false;
+  held.cam.ball.seen = true; held.cam.ball.confidence = 80; held.cam.ball.stampMs = held.now + 20;
+  held.run(15);
+  assert(held.robot.ball.state != BallState::TRACK);
+  // millis wrap keeps working.
+  World z;
+  z.now = UINT32_MAX - 100;
+  z.goal(0);
+  o = z.run(20);
+  assert(o.tactic == Tactic::ATTACK);
+}
+
+int main() {
+  protocols();
+  irFilterTests();
+  headingModes();
+  safety();
+  ballStates();
+  tactics();
+  puts("upgrade tests passed");
+}
