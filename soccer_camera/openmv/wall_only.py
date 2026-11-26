@@ -1,4 +1,7 @@
-"""Wall diagnostic and legacy 0x02/0x14 sender."""
+"""壁検出の診断スクリプトと旧式0x02/0x14送信例。現行chase用のMAIN通信とは別系統。
+検出やミラー走査の共通処理はgoal_wall_navigation.pyから借りる。現行機へ接続する前に
+受信側の期待する形式と一致するか確認すること。
+"""
 from goal_wall_navigation import (Mirror, blob_value, cfg, draw_mirror, find_color_blob,
                                   init_camera, pyb, scan_field, sensor, time)
 
@@ -11,6 +14,7 @@ LOG_INTERVAL_MS = 1000
 
 
 def find_rectangular_wall(img):
+    """ミラー未装着時の画像から、黒い四角形状の壁候補を選ぶ。"""
     counts = [0, 0, 0]
     best = None
     for blob in img.find_blobs([cfg.BLACK], pixels_threshold=WALL_KEEP_PIXELS,
@@ -29,6 +33,7 @@ def find_rectangular_wall(img):
 
 
 class WallTrack:
+    """壁候補の中心を平滑化し、連続フレームで小さい候補も維持する。"""
     def __init__(self):
         self.x = self.y = None
 

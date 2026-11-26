@@ -1,3 +1,6 @@
+// MAIN基板: IRのボール方位とOpenMVの走行可能方向を統合し、MOTOR基板へ移動指令を送る。
+// 関連: main_logic.h は拡張制御用の純粋ロジック、ir/ir.ino はIR応答、
+// openmv/goal_wall_navigation.py は床・白線の判定を担当する。通常設定は実機確認済み系統。
 #include <Arduino.h>
 #include <string.h>
 #include <math.h>

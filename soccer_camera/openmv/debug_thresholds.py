@@ -1,4 +1,6 @@
-"""LAB and exposure diagnostics. Copy both competition Python modules beside this script."""
+"""色しきい値・露出・検出候補の診断用。検出関数はgoal_wall_navigation.pyから再利用する。
+ここでLAB値やROIを観察し、調整値はcamera_calibration.pyへ反映する。走行制御用ではない。
+"""
 from goal_wall_navigation import (GOAL_COLORS, Mirror, ball_like, blob_value, cfg, draw_goal, draw_mirror, overlaps_ball,
                                   find_color_blob, init_camera, sensor, time)
 

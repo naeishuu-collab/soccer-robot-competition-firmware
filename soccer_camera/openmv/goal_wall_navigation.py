@@ -1,4 +1,8 @@
-"""H7 Plus competition camera. Copy camera_calibration.py alongside main.py."""
+"""現行OpenMVプログラム。ミラー画像から床の安全方向と白線回避方向を求め、MAINへUART送信する。
+camera_calibration.pyの校正値を使い、MAIN側main.inoの8バイト受信形式と対になる。
+カメラ表示・しきい値診断スクリプトも、このファイルの検出関数と初期化処理を再利用する。
+OpenMVにはこのファイルをmain.pyとして置き、camera_calibration.pyを同じ場所に保存する。
+"""
 import math
 
 import camera_calibration as cfg
@@ -74,6 +78,7 @@ def init_camera():
 
 
 class Mirror:
+    """全周ミラーの中心/リングを管理し、放射状の床サンプルを画像座標へ対応付ける。"""
     def __init__(self, width, height, frame=None):
         self.width = width
         self.height = height
@@ -183,6 +188,7 @@ class Mirror:
 
 
 def find_color_blob(img, mirror, thresholds, min_pixels, accept=None, dense_search=False):
+    """ミラーの有効領域から色領域を選ぶ。ボールとゴールの検出で共用する入口。"""
     counts = [0, 0, 0]  # Color components, too small, rejected by mirror geometry.
     best = None
     best_pixels = 0
@@ -252,6 +258,7 @@ def scan_ray(samples, color_at, include_wall=False):
 
 
 def scan_field(img, mirror, white_candidates=None, include_wall=False):
+    """各方位の床色を調べ、走行可能セクターと境界候補を作る。"""
     low_saturation = getattr(cfg, "GREEN_LOW_SATURATION", None)
 
     def color_at(x, y):
@@ -308,6 +315,7 @@ def wait_detail(setup_reason, frame_ms, visible):
 
 
 def decide_navigation(ready, visible, boundaries):
+    """床観測と白線境界から、MAINへ渡す停止/直進/回避モードを選ぶ。"""
     stop = (0, 0, 0, MODE_WAIT)
     if not ready:
         return stop
@@ -355,6 +363,7 @@ def decide_navigation(ready, visible, boundaries):
 
 
 def make_nav_packet(vx, vy, sectors, mode, sequence):
+    """MAINの受信形式に合わせて、方向・セクターマスク・連番・検査値を8バイト化する。"""
     flags = FLAG_DIRECTIONAL | (FLAG_VIRTUAL_LINE if mode == MODE_AVOID else 0)
     packet = bytearray((0x20, vx & 0xff, vy & 0xff, sectors, sequence, mode, flags, 0))
     for byte in packet[:7]:
@@ -388,6 +397,7 @@ def draw_goal(img, blob, name):
 
 
 def main_loop(send_uart=True, display=False):
+    """撮影→検出→安全方向決定→必要ならMAINへ送信、をフレームごとに繰り返す。"""
     init_camera()
     frame = sensor.snapshot()
     mirror = Mirror(frame.width(), frame.height(), frame)

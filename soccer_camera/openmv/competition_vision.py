@@ -1,6 +1,7 @@
-"""Protocol 2 recognition: line guard, goals, ball, vision heading, packet.
-
-Copy next to main.py and set PROTOCOL = 2 in camera_calibration.py (MAIN must be built with ROBOT_UPGRADE).
+"""OpenMV側の拡張ビジョン処理。goal_wall_navigation.pyの校正/画像処理を土台に、
+ボール・ゴール・ライン・姿勢情報を拡張パケットにまとめる。MAINの拡張処理
+(main/main_logic.h)と対になる実験経路で、現行の標準プログラムとは別に選択する。
+この経路を使う場合はPROTOCOL=2にし、MAINもROBOT_UPGRADE=1で同時にビルドする。
 """
 import math
 
@@ -39,7 +40,7 @@ def value(blob, name):
 
 
 class LineGuard:
-    """Turns ray distances into a clear-sector mask and a continuous escape heading."""
+    """白線の観測距離から安全セクターと回避方位を作り、一時的な見失いによる急変を抑える。"""
 
     def __init__(self, clearance_cm, block_cm):
         self.clearance = clearance_cm
@@ -132,7 +133,7 @@ def table_distance(table, radius):
 
 
 class Track:
-    """One tracked object: candidate choice, circular smoothing, confidence and short hold."""
+    """対象候補をフレーム間で対応付け、方位の平滑化・信頼度・短時間保持を行う。"""
 
     def __init__(self, table, hold_ms=GOAL_HOLD_MS):
         self.hold_ms = hold_ms
@@ -178,7 +179,7 @@ class Track:
 
 
 def blob_candidate(blob, mirror, min_pixels, ball):
-    """Returns (bearing, quality, radius, width_deg) or None."""
+    """大きさ・ミラー範囲・ボールとの重なりを確認し、(方位, 品質, 半径, 視角)を返す。"""
     pixels = value(blob, "pixels")
     cx, cy = value(blob, "cx"), value(blob, "cy")
     if pixels < min_pixels or (mirror.ring_ready and not mirror.pixels_on_ring(cx, cy)):
@@ -236,6 +237,7 @@ def crc16(data):
 
 
 def make_packet(sequence, flags, mask, escape, nearest, line_count, ball, yellow, blue, heading, frame_ms):
+    """検出結果をMAIN拡張側が読む固定長パケットへ符号化し、CRCを付ける。"""
     packet = bytearray((0xC5, 0x5C, 2, PACKET_SIZE, sequence & 0xFF, flags))
 
     def angle(a):
@@ -271,7 +273,7 @@ def make_packet(sequence, flags, mask, escape, nearest, line_count, ball, yellow
 
 
 class Pipeline:
-    """Line detection runs every frame; goals and ball run less often, even less when slow."""
+    """拡張ビジョンの1フレーム処理をまとめる。ラインは毎フレーム、ゴールとボールは負荷に応じて間引く。"""
 
     def __init__(self, cfg, mirror, clearance_cm, max_frame_ms):
         self.cfg = cfg

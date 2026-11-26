@@ -1,4 +1,7 @@
-"""Measurements for the H7 Plus with its competition mirror installed."""
+"""H7 Plus＋全周ミラー用の校正値。goal_wall_navigation.pyが読み、検出・距離・UART設定へ反映する。
+値はカメラ設置状態に依存する。特にミラー中心/半径、前方角、色しきい値、床距離は実機で測る。
+competition_vision.pyへ切り替える場合はPROTOCOLとMAIN側ROBOT_UPGRADE設定も対応させる。
+"""
 
 FRAME_SIZE = "QVGA"
 # Enter (image_width, image_height), (center_x, center_y), and (inner_px, outer_px).

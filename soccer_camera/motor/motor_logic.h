@@ -1,3 +1,6 @@
+// MOTOR制御ロジック。motor.inoから呼ばれる純粋C++部で、方向合成・出力制限・逆転保護を行う。
+// MAINが送る「前を0度とした方向・出力・旋回量」を4輪それぞれの速度/PWMへ変換する。
+// 数値は未校正の暫定値を含むため、実機設定は docs/UPGRADE_2026-11-26_JA.md と照合する。
 // Wheel model for the high-minimum-duty motors. Pure C++ (host tested).
 // Every number in kWheels is a PLACEHOLDER until measured on the robot (see docs/UPGRADE_2026-11-26_JA.md).
 #pragma once

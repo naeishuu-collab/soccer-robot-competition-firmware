@@ -1,3 +1,6 @@
+// MAIN拡張制御用ロジック（ROBOT_UPGRADE=1）。main.inoから呼ばれる純粋C++部で、基板I/Oを持たない。
+// カメラの拡張パケットと ir/ir_logic.h の拡張応答を解釈し、方位推定・ボール追跡・戦術判断をまとめる。
+// 標準構成では無効。数値や機能の一部は実機未検証なので、有効化時はMAIN/MOTOR/IR/OpenMVを揃える。
 // Upgrade-path logic for MAIN (ROBOT_UPGRADE=1). Pure C++ (host tested).
 // Angles: degrees clockwise from the robot's front. All gains and limits below are unverified.
 #pragma once

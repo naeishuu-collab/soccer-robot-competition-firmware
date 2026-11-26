@@ -1,3 +1,5 @@
+// 拡張IR処理: ir.inoから使う、センサー値の補正・反射ノイズ抑制・信頼度・故障検出のロジック。
+// MAIN側の拡張受信処理（main/main_logic.h）と応答形式を共有する。通常の旧コマンド応答には適用しない。
 // Filtered IR bearing with confidence and sensor fault handling (poll command 0x02). Host tested.
 // The legacy command 0x01 reply does not use any of this.
 #pragma once

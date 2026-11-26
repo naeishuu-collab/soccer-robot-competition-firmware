@@ -1,3 +1,6 @@
+// MOTOR基板: MAINからRS-485で受け取った方向・出力指令を4輪のPWM/極性に変換する。
+// motor_logic.hがホイール合成、逆転待ち、始動補助を担当し、本ファイルは通信・GPIO・安全停止を担当。
+// MAINの指令が途切れた場合もウォッチドッグで停止する。車輪定数の実機校正状態はヘッダーを参照。
 #include <Arduino.h>
 #include <math.h>
 #include <string.h>
