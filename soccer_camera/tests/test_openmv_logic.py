@@ -18,9 +18,42 @@ VISIBLE = set(range(0, 360, 15))
 
 
 class OpenMvNavigationTests(unittest.TestCase):
+    def test_ball_shape_distinguishes_round_blob_from_goal_shapes(self):
+        class Blob:
+            def __init__(self, w, h, pixels):
+                self.w, self.h, self.pixels = w, h, pixels
+
+        self.assertTrue(nav.ball_like(Blob(20, 20, 310)))
+        self.assertFalse(nav.ball_like(Blob(40, 15, 450)))
+        self.assertFalse(nav.ball_like(Blob(20, 20, 400)))
+        self.assertFalse(nav.ball_like(Blob(0, 20, 0)))
+
+    def test_startup_detects_matching_circles_and_rechecks_ground_calibration(self):
+        class Circle:
+            def __init__(self, x, y, r):
+                self.x, self.y, self.r = x, y, r
+
+        class Frame:
+            def __init__(self, circles):
+                self.circles = circles
+
+            def find_circles(self, **kwargs):
+                return self.circles
+
+        with patch.multiple(nav.cfg, IMAGE_SIZE=(320, 240), MIRROR_CENTER=(160, 120),
+                            MIRROR_RING=(40, 100), GROUND_POINTS=((50, 18), (74, 50))):
+            mirror = nav.Mirror(320, 240, Frame([Circle(164, 120, 40), Circle(164, 120, 99)]))
+            self.assertTrue(mirror.detected)
+            self.assertEqual((mirror.cx, mirror.outer), (164, 99))
+            self.assertIsNone(nav.setup_wait_reason(mirror))
+            self.assertTrue(mirror.rays)
+            fallback = nav.Mirror(320, 240, Frame([Circle(160, 120, 40)]))
+            self.assertFalse(fallback.detected)
+            self.assertIsNone(nav.setup_wait_reason(fallback))
+
     def test_defaults_wait_for_measurements(self):
         self.assertFalse(nav.Mirror(320, 320).rays)
-        self.assertEqual(nav.decide_navigation(False, VISIBLE, [])[3], nav.MODE_WAIT)
+        self.assertEqual(nav.decide_navigation(False, VISIBLE, [])[3], nav.MODE_TRACK_IR)
 
     def test_wait_display_identifies_setup_freshness_and_floor_failures(self):
         with patch.multiple(nav.cfg, IMAGE_SIZE=None, MIRROR_CENTER=None, MIRROR_RING=None,
@@ -209,7 +242,7 @@ class OpenMvNavigationTests(unittest.TestCase):
         self.assertEqual([(bearing, color) for bearing, color, *_ in boundaries],
                          [(0, "BLACK"), (90, "BLACK"), (105, "BLACK"),
                           (180, "WHITE"), (345, "BLACK")])
-        self.assertEqual(nav.decide_navigation(True, visible, boundaries)[3], nav.MODE_WAIT)
+        self.assertEqual(nav.decide_navigation(True, visible, boundaries)[3], nav.MODE_TRACK_IR)
 
     def test_avoid_moves_away_only_into_visible_floor(self):
         for bearing, motion in ((0, (0, -35)), (90, (-35, 0)), (180, (0, 35)), (270, (35, 0))):
@@ -221,13 +254,13 @@ class OpenMvNavigationTests(unittest.TestCase):
         self.assertEqual(abs(alternative[0]), 25)
         self.assertEqual(alternative[1], -25)
         blocked_retreat = nav.decide_navigation(True, VISIBLE - {135, 180, 225}, [edge(0)])
-        self.assertEqual(blocked_retreat, (0, 0, 0, nav.MODE_WAIT))
+        self.assertEqual(blocked_retreat, (0, 0, 255, nav.MODE_TRACK_IR))
 
     def test_corner_avoidance_and_conflicting_boundaries(self):
         corner = nav.decide_navigation(True, VISIBLE, [edge(0), edge(90)])
         self.assertEqual(corner[:2], (-25, -25))
         opposite = nav.decide_navigation(True, VISIBLE, [edge(0), edge(180)])
-        self.assertEqual(opposite, (0, 0, 0, nav.MODE_WAIT))
+        self.assertEqual(opposite, (0, 0, 255, nav.MODE_TRACK_IR))
 
     def test_retreat_mask_excludes_headings_toward_any_close_edge(self):
         boundaries = [edge(0, cm=18), edge(135, cm=25)]
@@ -243,7 +276,7 @@ class OpenMvNavigationTests(unittest.TestCase):
             self.assertEqual(nav.decide_navigation(True, VISIBLE, [boundary])[3], nav.MODE_TRACK_IR)
 
     def test_directional_floor_mask(self):
-        self.assertEqual(nav.decide_navigation(True, set(range(0, 165, 15)), [])[3], nav.MODE_WAIT)
+        self.assertEqual(nav.decide_navigation(True, set(range(0, 165, 15)), [])[3], nav.MODE_TRACK_IR)
         command = nav.decide_navigation(True, VISIBLE - {75, 90, 105}, [])
         self.assertEqual(command[3], nav.MODE_TRACK_IR)
         self.assertTrue(command[2] & 1)
@@ -340,7 +373,7 @@ class OpenMvNavigationTests(unittest.TestCase):
         self.assertEqual([packet[5] for packet in Board.packets],
                          [nav.MODE_AVOID, nav.MODE_AVOID, nav.MODE_AVOID,
                           nav.MODE_TRACK_IR, nav.MODE_AVOID, nav.MODE_AVOID,
-                          nav.MODE_AVOID, nav.MODE_WAIT])
+                          nav.MODE_AVOID, nav.MODE_TRACK_IR])
         self.assertEqual(Board.packets[0][1:3], bytes((0, 221)))
         self.assertEqual(Board.packets[1][1:3], bytes((221, 0)))
         self.assertTrue(all(packet[1:4] == b"\x00\x00\x00"
@@ -369,6 +402,15 @@ class OpenMvNavigationTests(unittest.TestCase):
                              (true_goal, [3, 1, 1]))
 
     def test_blue_threshold_covers_supplied_lab_sample(self):
+        for l in (29, 38):
+            for a in (6, 14):
+                for b in (-42, -30):
+                    self.assertTrue(any(nav.in_lab((l, a, b), threshold)
+                                        for threshold in nav.cfg.BLUE))
+        for a in (9, 10):
+            for b in (-36, -35):
+                self.assertTrue(any(nav.in_lab((35, a, b), threshold)
+                                    for threshold in nav.cfg.BLUE))
         for l in (21, 22):
             for a in (8, 9):
                 for b in (-34, -33):
@@ -385,6 +427,10 @@ class OpenMvNavigationTests(unittest.TestCase):
                     self.assertTrue(any(nav.in_lab((l, a, b), threshold)
                                         for threshold in nav.cfg.BLUE))
         self.assertFalse(any(nav.in_lab((21, 8, 0), threshold) for threshold in nav.cfg.BLUE))
+
+    def test_orange_and_yellow_measured_colors_are_candidates(self):
+        for sample in ((75, 16, 47), (80, 26, 50), (72, 21, 45), (77, 24, 49)):
+            self.assertTrue(any(nav.in_lab(sample, threshold) for threshold in nav.cfg.YELLOW))
 
     def test_wire_format_signed_motion_checksum_and_protocol_marker(self):
         vx, vy, mask, mode = nav.decide_navigation(True, VISIBLE, [edge(90)])

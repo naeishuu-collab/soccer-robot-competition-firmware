@@ -1,5 +1,5 @@
 """LAB and exposure diagnostics. Copy both competition Python modules beside this script."""
-from goal_wall_navigation import (GOAL_COLORS, Mirror, blob_value, cfg, draw_goal, draw_mirror,
+from goal_wall_navigation import (GOAL_COLORS, Mirror, ball_like, blob_value, cfg, draw_goal, draw_mirror,
                                   find_color_blob, init_camera, sensor, time)
 
 # Optional named ROIs in raw image pixels. Sample the inside of each target.
@@ -11,10 +11,12 @@ def main():
     init_camera()
     img = sensor.snapshot()
     width, height = img.width(), img.height()
-    mirror = Mirror(width, height)
+    mirror = Mirror(width, height, img)
     clock = time.clock()
     last_print = time.ticks_ms()
-    print("frame={}x{} ring={} ground={}".format(width, height, mirror.ring_ready, bool(mirror.rays)))
+    print("frame={}x{} ring={} center=({}, {}) radii=({}, {}) auto={} ground={}".format(
+        width, height, mirror.ring_ready, mirror.cx, mirror.cy, mirror.inner, mirror.outer,
+        mirror.detected, bool(mirror.rays)))
     while True:
         clock.tick()
         img = sensor.snapshot()
@@ -22,12 +24,17 @@ def main():
         log = time.ticks_diff(now, last_print) >= PRINT_INTERVAL_MS
         detections = []
         for name, thresholds in (("YELLOW", cfg.YELLOW), ("BLUE", cfg.BLUE)):
-            blob, counts = find_color_blob(img, mirror, thresholds, cfg.GOAL_MIN_PIXELS)
+            blob, counts = find_color_blob(img, mirror, thresholds,
+                                           getattr(cfg, "BLUE_MIN_PIXELS", 8) if name == "BLUE" else cfg.GOAL_MIN_PIXELS,
+                                           (lambda candidate: not ball_like(candidate)) if name == "YELLOW" else None)
             if blob is not None:
                 detections.append((name, blob))
             if log:
                 rect = blob_value(blob, "rect") if blob is not None else None
                 print("{} components/small/masked={} selected={}".format(name, counts, rect))
+        ball, _ = find_color_blob(img, mirror, cfg.YELLOW, cfg.GOAL_MIN_PIXELS, ball_like)
+        if ball is not None:
+            detections.append(("BALL", ball))
         if log:
             last_print = now
             print("fps={:.1f} exposure_us={} gain_db={} rgb_gain={}".format(

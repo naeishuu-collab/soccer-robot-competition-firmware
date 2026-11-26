@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <string.h>
 #include <math.h>
+#include <Wire.h>
 
 struct CameraState;
 
@@ -32,7 +33,7 @@ inline bool cameraFresh(const CameraState &camera, uint32_t nowMs) {
 }
 
 inline bool cameraAllowsMotion(const CameraState &camera, uint32_t nowMs) {
-  return cameraFresh(camera, nowMs) && camera.mode != 0;
+  return cameraFresh(camera, nowMs);
 }
 
 inline uint8_t nearestSector(uint16_t direction) {
@@ -47,6 +48,16 @@ inline uint16_t cameraAvoidDirection(int8_t x, int8_t y) {
   float angle = atan2f(float(x), float(y)) * 57.2957795f;
   if (angle < 0) angle += 360;
   return uint16_t(angle + 0.5f) % 360;
+}
+
+inline int8_t headingCorrection(float reference, float heading, int sign) {
+  float error = reference - heading;
+  if (error > 180) error -= 360;
+  if (error < -180) error += 360;
+  int turn = int(lroundf(error * sign));
+  if (turn > 40) turn = 40;
+  if (turn < -40) turn = -40;
+  return int8_t(turn);
 }
 
 // chase (3) reply: 0xAA, big-endian angle, big-endian count, 0x55.
@@ -126,16 +137,23 @@ inline void chooseChaseMotion(const CameraState &camera, uint32_t nowMs, bool ba
                               uint16_t &direction, uint16_t &power) {
   direction = 0;
   power = 0;
-  if (!ballFound || ballDirection >= 360 || !cameraAllowsMotion(camera, nowMs)) return;
-  if (camera.mode == 1) {
-    if (camera.x == 0 && camera.y == 0) return;
+  if (!cameraAllowsMotion(camera, nowMs)) return;
+  if (camera.mode == 1 && (camera.x || camera.y)) {
     direction = cameraAvoidDirection(camera.x, camera.y);
   } else {
-    direction = ballDirection;
+    direction = ballFound && ballDirection < 360 ? ballDirection : 0;
   }
   // At the configured PWM floor the wheel mixer reliably resolves the eight sector centers.
   direction = uint16_t(nearestSector(direction) * 45);
-  if (sectorClear(camera, direction)) power = camera.mode == 1 ? avoidPower : movePower;
+  if (camera.mode != 0 && camera.sectors && !sectorClear(camera, direction)) {
+    for (uint16_t step = 1; step <= 4; ++step) {
+      const uint16_t right = (direction + step * 45) % 360;
+      const uint16_t left = (direction + 360 - step * 45) % 360;
+      if (sectorClear(camera, right)) { direction = right; break; }
+      if (sectorClear(camera, left)) { direction = left; break; }
+    }
+  }
+  power = camera.mode == 1 ? avoidPower : movePower;
 }
 // END HOST-TESTED CAMERA LOGIC
 
@@ -174,6 +192,28 @@ constexpr int16_t IR_FRONT_DEGREES = 0;
 // The raw ZIP angle puts physical GPIO21 (left) at 90 degrees.
 constexpr int8_t IR_ANGLE_SIGN = -1;
 
+constexpr uint8_t BNO_ADDRESS = 0x28;
+constexpr int8_t HEADING_TURN_SIGN = 1; // Verify direction with wheels raised.
+float headingReference = NAN;
+int8_t headingTurn = 0;
+uint32_t headingLastReadMs = 0;
+
+void updateHeading(uint32_t now) {
+  if (now < 500 || now - headingLastReadMs < 30) return;
+  headingLastReadMs = now;
+  Wire.beginTransmission(BNO_ADDRESS);
+  Wire.write(0x1A);
+  if (Wire.endTransmission(false) != 0 || Wire.requestFrom(BNO_ADDRESS, uint8_t(2)) != 2) {
+    headingTurn = 0;
+    return;
+  }
+  const uint16_t raw = uint16_t(Wire.read()) | (uint16_t(Wire.read()) << 8);
+  if (raw >= 5760) { headingTurn = 0; return; }
+  const float heading = raw / 16.0f;
+  if (!isfinite(headingReference)) headingReference = heading;
+  headingTurn = headingCorrection(headingReference, heading, HEADING_TURN_SIGN);
+}
+
 // ============================================================
 // CRC-7
 // ============================================================
@@ -199,9 +239,8 @@ CameraState camera;
 uint8_t cameraFrame[8] = {};
 uint8_t cameraUsed = 0;
 uint32_t cameraLastByteMs = 0;
-bool cameraStopPending = false;
 
-void receiveCamera(uint16_t driveDirection, uint16_t drivePower) {
+void receiveCamera() {
   const uint32_t now = millis();
   if (cameraUsed && uint32_t(now - cameraLastByteMs) >= 20) cameraUsed = 0;
   while (Serial2.available()) {
@@ -214,12 +253,10 @@ void receiveCamera(uint16_t driveDirection, uint16_t drivePower) {
       cameraUsed = 0;
       if (cameraFresh(camera, now) && cameraFrame[4] == camera.sequence) continue;
       const uint8_t mode = cameraFrame[5];
-      if (mode == 0 || (mode == 1 && camera.mode != 1)) cameraStopPending = true;
       camera.mode = mode;
       camera.x = int8_t(cameraFrame[1]);
       camera.y = int8_t(cameraFrame[2]);
       camera.sectors = cameraFrame[3];
-      if (drivePower && !sectorClear(camera, driveDirection)) cameraStopPending = true;
       camera.sequence = cameraFrame[4];
       camera.receivedMs = now;
       camera.received = true;
@@ -282,6 +319,7 @@ void sendDrive(uint8_t sequence, uint16_t direction, uint16_t power, bool avoid 
   encodeValue(&frame[3], direction);
   encodeValue(&frame[5], power);
   frame[7] = power && avoid ? 1 : 0;
+  frame[8] = power ? uint8_t(headingTurn + 61) : 0;
   frame[FRAME_SIZE - 1] = calculateCRC(frame);
   sendRs485(frame, sizeof(frame));
 }
@@ -306,6 +344,16 @@ void setup() {
   pinMode(11, OUTPUT);
 
   Serial.begin(115200);
+  Wire.setSDA(4);
+  Wire.setSCL(5);
+  Wire.begin();
+  Wire.setClock(50000);
+  Wire.setTimeout(5);
+  Wire.beginTransmission(BNO_ADDRESS);
+  Wire.write(0x3D);
+  Wire.write(0x08); // IMUPLUS
+  Wire.endTransmission();
+  delay(30);
 }
 
 // ============================================================
@@ -321,9 +369,9 @@ void loop() {
   static uint16_t lastDriveDirection = 0;
   static uint16_t lastDrivePower = 0;
 
-  const bool cameraWasStale = !cameraFresh(camera, millis());
-  receiveCamera(lastDriveDirection, lastDrivePower);
+  receiveCamera();
   const uint32_t now = millis();
+  updateHeading(now);
   uint16_t rawAngle = 0;
   uint16_t strength = 0;
   bool received = false;
@@ -345,20 +393,15 @@ void loop() {
     waitingForIr = false;
   }
 
-  if (lastDrivePower && (cameraWasStale || !cameraAllowsMotion(camera, now) ||
-                         !sectorClear(camera, lastDriveDirection))) {
-    cameraStopPending = true;
-  }
-
   // Never transmit during the IR reply window. Send a pending stop before a new drive.
   if (waitingForIr) return;
-  if (replyExpired || (lastDrivePower && (cameraStopPending || !ballLock.active(now)))) {
+  if (replyExpired || (lastDrivePower && !cameraAllowsMotion(camera, now))) {
     sendDrive(sequence++, 0, 0);
     lastDrivePower = 0;
   } else if (received) {
     uint16_t direction = 0;
     uint16_t power = 0;
-    chooseChaseMotion(camera, now, ballLock.active(now), ballLock.direction(),
+    chooseChaseMotion(camera, now, true, ballLock.active(now) ? ballLock.direction() : lastDriveDirection,
                       MOVE_POWER, AVOID_POWER, direction, power);
     sendDrive(sequence++, direction, power, camera.mode == 1);
     lastDriveDirection = direction;
@@ -372,7 +415,6 @@ void loop() {
                     unsigned(camera.sectors), unsigned(direction), unsigned(power));
     }
   }
-  cameraStopPending = false;
 
   if (now - lastPollMs >= IR_POLL_INTERVAL_MS) {
     const uint8_t poll[] = {0xA5, 0x5A, 0x01, 0xFE};

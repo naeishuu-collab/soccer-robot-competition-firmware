@@ -1,5 +1,7 @@
 # サッカーロボット：カメラあり版
 
+> 現行の動作・書き込み方法は [最終版のやさしい説明](docs/FINAL_GUIDE_JA.md) を参照してください。以下は旧版の説明で、停止条件やBNO055については最終版と異なります。
+
 ## 現行版コード
 
 書き込みに使う現行版は `main/`・`ir/`・`motor/` の3基板と `openmv/goal_wall_navigation.py` です。OpenMVには `openmv/camera_calibration.py` も設定して保存します。`line/` は今回の chase 構成では未使用です。

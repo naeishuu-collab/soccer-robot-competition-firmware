@@ -31,12 +31,16 @@ MODE_TRACK_IR = 2
 FLAG_VIRTUAL_LINE = 0x01
 FLAG_DIRECTIONAL = 0x40  # Requires the matching MAIN firmware.
 
-GOAL_COLORS = {"YELLOW": (255, 255, 0), "BLUE": (0, 110, 255)}
+GOAL_COLORS = {"YELLOW": (255, 255, 0), "BLUE": (0, 110, 255), "BALL": (255, 128, 0)}
 MODES = ("WAIT", "AVOID", "TRACK IR")
 
 
 def image_angle(dx, dy):
     return math.degrees(math.atan2(dx, -dy)) % 360
+
+
+def distance(dx, dy):
+    return math.sqrt(dx * dx + dy * dy)
 
 
 def blob_value(blob, name):
@@ -70,16 +74,46 @@ def init_camera():
 
 
 class Mirror:
-    def __init__(self, width, height):
+    def __init__(self, width, height, frame=None):
         self.width = width
         self.height = height
         self.cx, self.cy = cfg.MIRROR_CENTER or ((width - 1) / 2, (height - 1) / 2)
         self.inner, self.outer = cfg.MIRROR_RING or (0, 0)
+        self.detected = False
+        if frame is not None and cfg.IMAGE_SIZE == (width, height) and cfg.MIRROR_CENTER and cfg.MIRROR_RING:
+            self.detect_ring(frame)
         self.points = cfg.GROUND_POINTS
         self.ring_ready = (cfg.IMAGE_SIZE == (width, height) and cfg.MIRROR_CENTER is not None
                            and 0 <= self.inner < self.outer
                            <= min(self.cx, self.cy, width - 1 - self.cx, height - 1 - self.cy))
         self.rays = self.ground_rays() if self.ring_ready and self.ground_ready() else ()
+
+    def detect_ring(self, frame):
+        if not hasattr(frame, "find_circles"):
+            return
+        circles = frame.find_circles(threshold=2500, x_margin=10, y_margin=10, r_margin=10,
+                                     r_min=max(2, int(self.inner * 0.6)),
+                                     r_max=int(self.outer * 1.2), r_step=2)
+        inner = [c for c in circles if abs(blob_value(c, "r") - self.inner) <= self.inner * 0.35
+                 and distance(blob_value(c, "x") - self.cx, blob_value(c, "y") - self.cy) <= 20]
+        outer = [c for c in circles if abs(blob_value(c, "r") - self.outer) <= self.outer * 0.2
+                 and distance(blob_value(c, "x") - self.cx, blob_value(c, "y") - self.cy) <= 20]
+        pairs = [(i, o) for i in inner for o in outer
+                 if blob_value(i, "r") < blob_value(o, "r")
+                 and distance(blob_value(i, "x") - blob_value(o, "x"),
+                                blob_value(i, "y") - blob_value(o, "y")) <= 10
+                 and blob_value(o, "r") <= min(blob_value(o, "x"), blob_value(o, "y"),
+                                               self.width - 1 - blob_value(o, "x"),
+                                               self.height - 1 - blob_value(o, "y"))]
+        if not pairs:
+            return
+        i, o = min(pairs, key=lambda pair: abs(blob_value(pair[0], "r") - self.inner)
+                   + abs(blob_value(pair[1], "r") - self.outer)
+                   + distance(blob_value(pair[1], "x") - self.cx, blob_value(pair[1], "y") - self.cy))
+        x, y, inner_radius, outer_radius = (blob_value(o, "x"), blob_value(o, "y"),
+                                             blob_value(i, "r"), blob_value(o, "r"))
+        self.cx, self.cy, self.inner, self.outer = x, y, inner_radius, outer_radius
+        self.detected = True
 
     def ground_ready(self):
         p = self.points
@@ -147,6 +181,14 @@ def find_color_blob(img, mirror, thresholds, min_pixels, accept=None):
         if pixels > best_pixels:
             best, best_pixels = blob, pixels
     return best, counts
+
+
+def ball_like(blob):
+    width, height = blob_value(blob, "w"), blob_value(blob, "h")
+    if not width or not height:
+        return False
+    fill = blob_value(blob, "pixels") / (width * height)
+    return min(width, height) / max(width, height) >= 0.7 and 0.50 <= fill <= 0.88
 
 
 def scan_ray(samples, color_at, include_wall=False):
@@ -228,9 +270,8 @@ def wait_detail(setup_reason, frame_ms, visible):
 
 
 def decide_navigation(ready, visible, boundaries):
-    stop = (0, 0, 0, MODE_WAIT)
     if not ready:
-        return stop
+        return (0, 0, 255, MODE_TRACK_IR)
 
     away_x = away_y = 0.0
     blocked = {}
@@ -267,10 +308,10 @@ def decide_navigation(ready, visible, boundaries):
             if score > best_score:
                 best = (round(35 * dx), round(35 * dy))
                 best_score = score
-        return stop if best is None else (best[0], best[1], retreat_mask, MODE_AVOID)
+        return (0, 0, 255, MODE_TRACK_IR) if best is None else (best[0], best[1], retreat_mask, MODE_AVOID)
 
     if len(visible) < MIN_FLOOR_RAYS or not mask:
-        return stop
+        return (0, 0, 255, MODE_TRACK_IR)
     return 0, 0, mask, MODE_TRACK_IR
 
 
@@ -310,7 +351,9 @@ def draw_goal(img, blob, name):
 def main_loop(send_uart=True, display=False):
     init_camera()
     frame = sensor.snapshot()
-    mirror = Mirror(frame.width(), frame.height())
+    mirror = Mirror(frame.width(), frame.height(), frame)
+    print("mirror {} center=({}, {}) ring=({}, {})".format(
+        "detected" if mirror.detected else "configured", mirror.cx, mirror.cy, mirror.inner, mirror.outer))
     target = cfg.TARGET_GOAL
     setup_reason = setup_wait_reason(mirror)
     goal_thresholds = (("YELLOW", cfg.YELLOW), ("BLUE", cfg.BLUE))
@@ -337,11 +380,16 @@ def main_loop(send_uart=True, display=False):
             last_command = command
         if display:
             # Detect both colors before drawing so overlays never enter the other search.
-            detections = [(name, find_color_blob(img, mirror, thresholds, cfg.GOAL_MIN_PIXELS)[0])
+            detections = [(name, find_color_blob(img, mirror, thresholds,
+                           getattr(cfg, "BLUE_MIN_PIXELS", 8) if name == "BLUE" else cfg.GOAL_MIN_PIXELS,
+                           (lambda blob: not ball_like(blob)) if name == "YELLOW" else None))
                           for name, thresholds in goal_thresholds]
-            for name, blob in detections:
+            ball, _ = find_color_blob(img, mirror, cfg.YELLOW, cfg.GOAL_MIN_PIXELS, ball_like)
+            for name, (blob, counts) in detections:
                 if blob is not None:
                     draw_goal(img, blob, name)
+            if ball is not None:
+                draw_goal(img, ball, "BALL")
             draw_mirror(img, mirror)
             draw_floor_scan(img, mirror)
             white_distances = []
@@ -351,7 +399,7 @@ def main_loop(send_uart=True, display=False):
             status = "TARGET: {}  MODE: {}".format(target, MODES[mode])
             img.draw_string((3, 3), status, color=(0, 0, 0))
             img.draw_string((2, 2), status, color=(255, 255, 255))
-            if mode == MODE_WAIT:
+            if mode == MODE_WAIT or setup_reason:
                 detail = wait_detail(setup_reason, frame_ms, visible)
                 img.draw_string((3, 15), detail, color=(0, 0, 0))
                 img.draw_string((2, 14), detail, color=(255, 255, 255))
@@ -366,6 +414,14 @@ def main_loop(send_uart=True, display=False):
                 line_status = "WHITE LINE: CHECK CALIBRATION"
             img.draw_string((3, 27), line_status, color=(0, 0, 0))
             img.draw_string((2, 26), line_status, color=(255, 255, 255))
+            ring_status = "RING: " + ("AUTO" if mirror.detected else "CONFIG")
+            img.draw_string((3, 39), ring_status, color=(0, 0, 0))
+            img.draw_string((2, 38), ring_status, color=(255, 255, 255))
+            blue_blob, blue_counts = detections[1][1]
+            blue_status = "BLUE: {} C{} S{} R{}".format(
+                "YES" if blue_blob is not None else "NO", *blue_counts)
+            img.draw_string((3, 51), blue_status, color=(0, 0, 0))
+            img.draw_string((2, 50), blue_status, color=(255, 255, 255))
 
 
 if __name__ == "__main__":

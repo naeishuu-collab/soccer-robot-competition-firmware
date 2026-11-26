@@ -6,6 +6,7 @@
 
 constexpr uint8_t MSG_POLL = 1, MSG_BALL = 2, MSG_DRIVE = 3;
 constexpr int16_t PWM_MAX = 210, MIN_RUNNING_DUTY = 160, RAMP_STEP = 5;
+constexpr int8_t WHEEL_SIGN[4] = {1, 1, 1, 1};
 constexpr uint32_t RAMP_INTERVAL_MS = 10;
 constexpr uint32_t REVERSE_PAUSE_MS = 200, COMMAND_TIMEOUT_MS = 100;
 int16_t targetPWM[4]{}, currentPWM[4]{}, appliedPWM[4]{};
@@ -37,6 +38,14 @@ int main() {
   assert(!commandReceived && timedOut && targetPWM[0] == 0);
   handleDrive(drive);
   assert(commandReceived && targetPWM[0] == 180 && receivedPower == 180 && !timedOut);
+  drive[8] = 81;
+  handleDrive(drive);
+  assert(targetPWM[0] == 200 && targetPWM[3] == 200);
+  drive[8] = 20;
+  handleDrive(drive);
+  assert(invalidFrames == 1 && targetPWM[0] == 200);
+  drive[8] = 0;
+  invalidFrames = 0;
 
   currentPWM[0] = 180; currentPWM[1] = 150; currentPWM[3] = 180;
   drive[4] = 90;

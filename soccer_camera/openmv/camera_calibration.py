@@ -19,12 +19,11 @@ RGB_GAIN_DB = None  # None freezes the white balance measured after warm-up.
 
 # Yellow sample at 45 ms: LAB (78–79, 24–26, 29–30).
 YELLOW = [(30, 62, 5, 24, 26, 64), (79, 86, -3, 7, 57, 70),
-          (69, 88, 18, 32, 22, 39)]
+          (69, 88, 18, 32, 22, 39), (62, 88, 14, 32, 40, 55)]
 # Additional sample: LAB L=21..22, A=8..9, B=-34..-33.
 # Additional blue sample: L=43..45, A=10..11, B=-39..-38.
 # Mid-brightness blue sample: L=28..29, A=9..10, B=-35..-34.
-BLUE = [(40, 48, 7, 14, -43, -34), (26, 34, 6, 13, -39, -31),
-        (18, 25, 5, 12, -38, -30), (39, 42, 3, 7, -45, -41), (19, 25, 13, 20, -46, -40),
+BLUE = [(12, 65, -3, 30, -65, -18),
         (4, 10, -5, 2, -18, -10)]
 BLACK = (5, 32, -20, 5, -5, 15)
 GREEN = (12, 75, -65, -10, -15, 55)
@@ -32,3 +31,4 @@ GREEN = (12, 75, -65, -10, -15, 55)
 GREEN_LOW_SATURATION = (33, 48, -13, -7, 2, 11)
 WHITE = (72, 100, -12, 12, -15, 15)
 GOAL_MIN_PIXELS = 30  # Check both goals at the farthest usable distance.
+BLUE_MIN_PIXELS = 8

@@ -327,7 +327,7 @@ void handleDrive(const uint8_t *frame) {
   }
 
   const bool avoid = frame[7] == 1;
-  if (frame[7] > 1 || frame[8] || frame[9] || frame[10] ||
+  if (frame[7] > 1 || (frame[8] && (frame[8] < 21 || frame[8] > 101)) || frame[9] || frame[10] ||
       (avoid && !power)) {
     ++invalidFrames;
     return;
@@ -339,6 +339,10 @@ void handleDrive(const uint8_t *frame) {
   } else {
     int16_t nextTarget[4];
     calculateWheelPWM(direction, power, nextTarget);
+    const int turn = frame[8] ? int(frame[8]) - 61 : 0;
+    for (uint8_t i = 0; i < 4; ++i) {
+      nextTarget[i] = int16_t(constrain(int(nextTarget[i]) + turn * WHEEL_SIGN[i], -int(PWM_MAX), int(PWM_MAX)));
+    }
     if (avoid) {
       uint32_t waitMs = 0;
       for (uint8_t i = 0; i < 4; ++i) {
