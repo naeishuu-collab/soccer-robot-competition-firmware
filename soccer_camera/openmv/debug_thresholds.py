@@ -25,7 +25,8 @@ def main():
         detections = []
         for name, thresholds in (("YELLOW", cfg.YELLOW), ("BLUE", cfg.BLUE)):
             blob, counts = find_color_blob(img, mirror, thresholds,
-                                           getattr(cfg, "BLUE_MIN_PIXELS", 8) if name == "BLUE" else cfg.GOAL_MIN_PIXELS)
+                                           getattr(cfg, "BLUE_MIN_PIXELS", 8) if name == "BLUE" else
+                                           getattr(cfg, "YELLOW_MIN_PIXELS", 12), None, name == "YELLOW")
             if blob is not None:
                 detections.append((name, blob))
             if log:

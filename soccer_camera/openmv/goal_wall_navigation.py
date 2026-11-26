@@ -155,7 +155,7 @@ class Mirror:
         return rays
 
 
-def find_color_blob(img, mirror, thresholds, min_pixels, accept=None, ball_search=False):
+def find_color_blob(img, mirror, thresholds, min_pixels, accept=None, dense_search=False):
     counts = [0, 0, 0]  # Color components, too small, rejected by mirror geometry.
     best = None
     best_pixels = 0
@@ -166,7 +166,7 @@ def find_color_blob(img, mirror, thresholds, min_pixels, accept=None, ball_searc
         left, top = max(0, x - radius), max(0, y - radius)
         roi = (left, top, min(mirror.width, x + radius + 1) - left,
                min(mirror.height, y + radius + 1) - top)
-    options = {"x_stride": 1, "y_stride": 1, "merge": True, "margin": 2} if ball_search else {}
+    options = {"x_stride": 1, "y_stride": 1, "merge": True, "margin": 2} if dense_search else {}
     for blob in img.find_blobs(thresholds, roi=roi, pixels_threshold=1, area_threshold=1, **options):
         counts[0] += 1
         pixels = blob_value(blob, "pixels")
@@ -382,7 +382,8 @@ def main_loop(send_uart=True, display=False):
         if display:
             # Detect both colors before drawing so overlays never enter the other search.
             detections = [(name, find_color_blob(img, mirror, thresholds,
-                           getattr(cfg, "BLUE_MIN_PIXELS", 8) if name == "BLUE" else cfg.GOAL_MIN_PIXELS))
+                           getattr(cfg, "BLUE_MIN_PIXELS", 8) if name == "BLUE" else
+                           getattr(cfg, "YELLOW_MIN_PIXELS", 12), None, name == "YELLOW"))
                           for name, thresholds in goal_thresholds]
             ball_thresholds = getattr(cfg, "BALL", None)
             ball, ball_counts = (find_color_blob(img, mirror, ball_thresholds, 10, ball_like, True)
@@ -430,6 +431,11 @@ def main_loop(send_uart=True, display=False):
                 if ball_thresholds else "BALL: UPDATE CONFIG")
             img.draw_string((3, 63), ball_status, color=(0, 0, 0))
             img.draw_string((2, 62), ball_status, color=(255, 255, 255))
+            yellow_blob, yellow_counts = detections[0][1]
+            yellow_status = "YELLOW: {} C{} S{} R{}".format(
+                "YES" if yellow_blob is not None else "NO", *yellow_counts)
+            img.draw_string((3, 75), yellow_status, color=(0, 0, 0))
+            img.draw_string((2, 74), yellow_status, color=(255, 255, 255))
 
 
 if __name__ == "__main__":

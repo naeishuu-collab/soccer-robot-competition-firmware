@@ -34,3 +34,4 @@ GREEN_LOW_SATURATION = (33, 48, -13, -7, 2, 11)
 WHITE = (72, 100, -12, 12, -15, 15)
 GOAL_MIN_PIXELS = 30  # Check both goals at the farthest usable distance.
 BLUE_MIN_PIXELS = 8
+YELLOW_MIN_PIXELS = 12
