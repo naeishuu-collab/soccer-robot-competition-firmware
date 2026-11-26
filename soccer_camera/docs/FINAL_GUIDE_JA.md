@@ -24,6 +24,8 @@ OpenMV UART3 TXをMAINのGPIO3へ、GNDを共通に接続します。カメラ�
 
 BNO055をMAINのSDA=GPIO4、SCL=GPIO5、アドレス0x28に接続します。I2Cは50kHz、IMUPLUSモードです。起動後500ms以降の最初の方位を基準とし、差を±40の範囲で回転補正として4輪に足します。方位は360度と0度の境目を考慮します。BNO055が読めない間は補正を0にし、通信が生きていれば停止しません。再起動すると基準を取り直します。搭載方向により補正が逆になるため、車輪を浮かせて確認し、逆ならMAINの `HEADING_TURN_SIGN` を `-1` にします。
 
+MAINをUSBに接続し、シリアルモニタを115200bpsで開くと、約0.5秒ごとに `BNO heading=... relative=... reference=... turn=...` が表示されます。`heading` はセンサーの方位角、`reference` は起動時に記録した基準、`relative` は基準からの回転角、`turn` はMOTORへ送る補正値です。`BNO: waiting for valid data` はBNO055の有効な角度がまだ得られていないことを表します。提示されたテストコードの固定オフセットや急変除去は現行MAINには適用していません。
+
 ## ミラーと色
 
 起動時に中央と外側の円を検出できればその値を、その後は固定して使います。検出できなければ `MIRROR_CENTER` と `MIRROR_RING` の設定値を使います。`RING: AUTO` は自動検出、`RING: CONFIG` は設定値です。電源を入れ直すと再検出します。`RECALIBRATE GROUND POINTS` で停止しません。

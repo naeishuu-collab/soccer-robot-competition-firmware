@@ -51,10 +51,15 @@ inline uint16_t cameraAvoidDirection(int8_t x, int8_t y) {
   return uint16_t(angle + 0.5f) % 360;
 }
 
+inline float headingDifference(float heading, float reference) {
+  float difference = heading - reference;
+  if (difference > 180) difference -= 360;
+  if (difference < -180) difference += 360;
+  return difference;
+}
+
 inline int8_t headingCorrection(float reference, float heading, int sign) {
-  float error = reference - heading;
-  if (error > 180) error -= 360;
-  if (error < -180) error += 360;
+  float error = headingDifference(reference, heading);
   int turn = int(lroundf(error * sign));
   if (turn > 40) turn = 40;
   if (turn < -40) turn = -40;
@@ -196,6 +201,7 @@ constexpr int8_t IR_ANGLE_SIGN = -1;
 constexpr uint8_t BNO_ADDRESS = 0x28;
 constexpr int8_t HEADING_TURN_SIGN = 1; // Verify direction with wheels raised.
 float headingReference = NAN;
+float headingCurrent = NAN;
 int8_t headingTurn = 0;
 uint32_t headingLastReadMs = 0;
 
@@ -206,13 +212,33 @@ void updateHeading(uint32_t now) {
   Wire.write(0x1A);
   if (Wire.endTransmission(false) != 0 || Wire.requestFrom(BNO_ADDRESS, uint8_t(2)) != 2) {
     headingTurn = 0;
+    headingCurrent = NAN;
     return;
   }
   const uint16_t raw = uint16_t(Wire.read()) | (uint16_t(Wire.read()) << 8);
-  if (raw >= 5760) { headingTurn = 0; return; }
+  if (raw >= 5760) { headingTurn = 0; headingCurrent = NAN; return; }
   const float heading = raw / 16.0f;
+  headingCurrent = heading;
   if (!isfinite(headingReference)) headingReference = heading;
   headingTurn = headingCorrection(headingReference, heading, HEADING_TURN_SIGN);
+}
+
+void printHeading(uint32_t now) {
+  static uint32_t lastPrintMs = 0;
+  if (now - lastPrintMs < 500 || !Serial) return;
+  char line[100];
+  int length;
+  if (isfinite(headingCurrent) && isfinite(headingReference)) {
+    length = snprintf(line, sizeof(line), "BNO heading=%.1f relative=%+.1f reference=%.1f turn=%d\n",
+                      headingCurrent, headingDifference(headingCurrent, headingReference),
+                      headingReference, int(headingTurn));
+  } else {
+    length = snprintf(line, sizeof(line), "BNO: waiting for valid data (I2C 0x28)\n");
+  }
+  if (length > 0 && length < int(sizeof(line)) && Serial.availableForWrite() >= length) {
+    Serial.write(reinterpret_cast<const uint8_t *>(line), size_t(length));
+    lastPrintMs = now;
+  }
 }
 
 // ============================================================
@@ -372,6 +398,7 @@ void loop() {
   receiveCamera();
   const uint32_t now = millis();
   updateHeading(now);
+  printHeading(now);
   uint16_t rawAngle = 0;
   uint16_t strength = 0;
   bool received = false;

@@ -30,6 +30,8 @@ int main() {
   assert(cameraAvoidDirection(0, -1) == 180);
   assert(cameraAvoidDirection(-1, 0) == 270);
   assert(headingCorrection(2, 358, 1) == 4);
+  assert(headingDifference(2, 358) == 4);
+  assert(headingDifference(358, 2) == -4);
   assert(headingCorrection(358, 2, 1) == -4);
   assert(headingCorrection(90, 0, 1) == 40);
   assert(headingCorrection(2, 358, -1) == -4);
