@@ -81,6 +81,13 @@ class OpenMvNavigationTests(unittest.TestCase):
             def find_circles(self, **kwargs):
                 return self.circles
 
+            def get_pixel(self, position, *, rgbtuple):
+                if len(self.circles) < 2:
+                    return (0, 0, 0)
+                inner, outer = self.circles[:2]
+                radius = nav.distance(position[0] - outer.x, position[1] - outer.y)
+                return (80, 100, 70) if inner.r <= radius <= outer.r else (0, 0, 0)
+
         with patch.multiple(nav.cfg, IMAGE_SIZE=(320, 240), MIRROR_CENTER=(160, 120),
                             MIRROR_RING=(40, 100), GROUND_POINTS=((50, 18), (74, 50))):
             mirror = nav.Mirror(320, 240, Frame([Circle(164, 120, 40), Circle(164, 120, 99)]))
@@ -96,6 +103,11 @@ class OpenMvNavigationTests(unittest.TestCase):
             self.assertTrue(bad_ground.rays)
             bad_ratio = nav.Mirror(320, 240, Frame([Circle(160, 120, 45), Circle(160, 120, 75)]))
             self.assertFalse(bad_ratio.detected)
+            class FlatFrame(Frame):
+                def get_pixel(self, position, *, rgbtuple):
+                    return (80, 80, 80)
+            no_edge = nav.Mirror(320, 240, FlatFrame([Circle(160, 120, 40), Circle(160, 120, 90)]))
+            self.assertFalse(no_edge.detected)
             fallback = nav.Mirror(320, 240, Frame([Circle(160, 120, 40)]))
             self.assertFalse(fallback.detected)
             self.assertIsNone(nav.setup_wait_reason(fallback))

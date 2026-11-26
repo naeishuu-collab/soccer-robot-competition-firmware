@@ -89,7 +89,7 @@ class Mirror:
         self.rays = self.ground_rays() if self.ring_ready and self.ground_ready() else ()
 
     def detect_ring(self, frame):
-        if not hasattr(frame, "find_circles"):
+        if not hasattr(frame, "find_circles") or not hasattr(frame, "get_pixel"):
             return
         circles = frame.find_circles(threshold=1500, x_margin=10, y_margin=10, r_margin=8,
                                      r_min=max(2, int(self.inner * 0.5)),
@@ -109,9 +109,31 @@ class Mirror:
                                                self.height - 1 - blob_value(o, "y"))]
         if not pairs:
             return
-        i, o = min(pairs, key=lambda pair: abs(blob_value(pair[0], "r") - self.inner)
-                   + abs(blob_value(pair[1], "r") - self.outer)
-                   + distance(blob_value(pair[1], "x") - self.cx, blob_value(pair[1], "y") - self.cy))
+        def edge_score(circle, inner_edge):
+            x, y, radius = (blob_value(circle, key) for key in ("x", "y", "r"))
+            support = 0
+            samples = 0
+            for angle in range(0, 360, 15):
+                dx, dy = math.cos(math.radians(angle)), math.sin(math.radians(angle))
+                a = (round(x + (radius - 3) * dx), round(y + (radius - 3) * dy))
+                b = (round(x + (radius + 3) * dx), round(y + (radius + 3) * dy))
+                if not (0 <= a[0] < self.width and 0 <= a[1] < self.height
+                        and 0 <= b[0] < self.width and 0 <= b[1] < self.height):
+                    continue
+                inside = frame.get_pixel(a, rgbtuple=True)
+                outside = frame.get_pixel(b, rgbtuple=True)
+                delta = sum(outside) - sum(inside)
+                samples += 1
+                if (delta if inner_edge else -delta) > 45:
+                    support += 1
+            return support if samples >= 12 and support >= 6 else 0
+
+        inner_scores = {id(c): edge_score(c, True) for c in inner}
+        outer_scores = {id(c): edge_score(c, False) for c in outer}
+        pairs = [(i, o) for i, o in pairs if inner_scores[id(i)] and outer_scores[id(o)]]
+        if not pairs:
+            return
+        i, o = max(pairs, key=lambda pair: inner_scores[id(pair[0])] + outer_scores[id(pair[1])])
         x, y, inner_radius, outer_radius = (blob_value(o, "x"), blob_value(o, "y"),
                                              blob_value(i, "r"), blob_value(o, "r"))
         self.cx, self.cy, self.inner, self.outer = x, y, inner_radius, outer_radius
