@@ -294,7 +294,7 @@ void receiveCamera() {
     if (cameraUsed != sizeof(cameraFrame)) continue;
     if (validCameraFrame(cameraFrame)) {
       cameraUsed = 0;
-      if (cameraFresh(camera, now) && cameraFrame[4] == camera.sequence) continue;
+      if (camera.received && cameraFrame[4] == camera.sequence) continue;  // replays never refresh the link
       const uint8_t mode = cameraFrame[5];
       camera.mode = mode;
       camera.x = int8_t(cameraFrame[1]);

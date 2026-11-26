@@ -553,9 +553,9 @@ void runModel(uint32_t now) {
     bool avoid = false;
     if (parseDrive(frame, direction, power, turn, avoid)) {
       const bool wasStill = !(currentPWM[0] || currentPWM[1] || currentPWM[2] || currentPWM[3]);
-      if (power || turn) {
+      if (power) {  // power 0 always means stop
         if (wasStill && !startRequestUs) startRequestUs = micros();
-        modelDrive.command(direction, power, turn, now);
+        modelDrive.command(direction, power, turn, now, avoid);
       } else {
         modelDrive.stop(now);
         startRequestUs = 0;

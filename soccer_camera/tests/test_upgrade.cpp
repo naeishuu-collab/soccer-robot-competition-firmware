@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include "ir_logic.h"
 #include "main_logic.h"
+#include "world.h"
 #include <assert.h>
 using namespace brain;
 
@@ -127,37 +128,11 @@ static void irFilterTests() {
   assert(r.strength == 0 && r.confidence == 0);
 }
 
-struct World {
-  CameraData cam;
-  IrData ir;
-  BnoSample bno;
-  Brain robot;
-  uint32_t now = 1000;
-  float yaw = 0;
-  bool bnoOn = false, camOn = true, irOn = true, ball = true;
-  World() {
-    cam.received = cam.ready = cam.targetValid = true;
-    cam.mask = 0xFFFF;
-    ir.received = true;
-    ir.confidence = 90;
-  }
-  void goal(float bearing) { cam.yellow.seen = true; cam.yellow.bearing = bearing; cam.yellow.confidence = 90; }
-  Output run(int steps = 1) {
-    Output out;
-    for (int i = 0; i < steps; ++i) {
-      now += 20;
-      if (camOn) { cam.receivedMs = now; ++cam.sequence; cam.yellow.stampMs = cam.blue.stampMs = now; }
-      if (irOn) { ir.stampMs = now; ir.strength = ball ? 500 : 0; }
-      if (bnoOn) { bno.ok = true; bno.yaw = yaw; bno.stampMs = now; }
-      out = robot.step(cam, ir, bno, now);
-    }
-    return out;
-  }
-};
-
 static void headingModes() {
   World w;
   w.ir.angle = 0;
+  assert(!w.run(10).power);  // default: attack direction unknown, stay put
+  w.robot.cfg.blindTracking = true;
   Output o = w.run(10);
   assert(w.robot.heading.mode == Mode::DEGRADED && o.turn == 0 && o.power > 0);  // restricted IR tracking
   assert(o.power == w.robot.cfg.speedSlow);
@@ -175,7 +150,7 @@ static void headingModes() {
   assert(w.robot.heading.mode == Mode::FUSED && fabsf(w.robot.heading.heading() + 20) < 1);
   // Persistent disagreement with confident vision: fall back to vision.
   w.cam.heading = 90; w.cam.headingConfidence = 90;
-  w.run(40);
+  w.run(60);
   assert(w.robot.heading.mode == Mode::VISION_ONLY && w.robot.heading.disagreement);
   w.cam.headingConfidence = 55;
   w.run(2);
@@ -192,6 +167,7 @@ static void headingModes() {
 
   // Power-on with BNO only, across the seam: first sample is the reference; turn slews.
   World b;
+  b.robot.cfg.bnoPowerOnReference = true;
   b.bnoOn = true; b.yaw = 359;
   b.run(20);
   assert(b.robot.heading.mode == Mode::BNO_ONLY && fabsf(b.robot.heading.heading()) < 0.1f);
@@ -206,7 +182,7 @@ static void headingModes() {
   // A single wild sample is ignored.
   b.yaw = 180; b.run();
   assert(fabsf(b.robot.heading.heading()) < 1);
-  b.yaw = 359; b.run();
+  b.yaw = 359; b.run(15);  // re-acquired against the recent estimate
   assert(fabsf(b.robot.heading.heading()) < 1);
 }
 
@@ -234,8 +210,9 @@ static void safety() {
   w.cam.escaping = false; w.cam.escape = kUnknown;
   w.cam.mask = uint16_t(~((1u << 15) | 1u | (1u << 1) | (1u << 2) | (1u << 14)));
   w.ir.angle = 0;
-  o = w.run(5);
+  o = w.run(15);
   assert(o.power == w.robot.cfg.speedSlow && sectorOpen(w.cam.mask, sectorOf(o.direction)) && o.direction != 0);
+  assert(o.direction % 45 == 0 && o.avoid && !o.turn);
   w.cam.mask = 1u << 8;  // only straight back, ball ahead
   o = w.run();
   assert(!o.power);
@@ -324,7 +301,7 @@ static void tactics() {
   own.ir.angle = 0;
   own.cam.blue.distanceCm = 100;
   o = own.run(10);
-  assert(o.tactic == Tactic::ORBIT && fabsf(o.goal - 180) < 1 && o.direction != 0);
+  assert(o.tactic == Tactic::ORBIT && fabsf(o.goal - 180) < 1 && (o.direction == 90 || o.direction == 270));
   // Ball lost: retreat toward own goal only for a limited time.
   own.ball = false;
   o = own.run(30);

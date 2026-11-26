@@ -16,6 +16,7 @@ constexpr uint32_t kBoostLimitMs = 150;       // Hard ceiling for any configured
 constexpr uint32_t kMovingMemoryMs = 80;
 constexpr uint32_t kTickMs = 10;
 constexpr float kMaxDirectionErrorDeg = 30;   // Larger error: do not move at all.
+constexpr float kMaxAvoidErrorDeg = 10;       // Line escape: stricter, and no rotation mixed in.
 
 // speed is permille of the speed reached at the highest table duty.
 struct SpeedPoint { uint8_t duty; uint16_t speed; };
@@ -81,7 +82,8 @@ struct Mix {
 
 // direction: clockwise from front. power: 0..210 speed request. turn: duty-scaled rotation request.
 // previous: last Mix speeds, used as hysteresis so a wheel near zero does not chatter.
-inline Mix solve(const WheelConfig (&wheels)[4], int direction, int power, int turn, const float previous[4]) {
+inline Mix solve(const WheelConfig (&wheels)[4], int direction, int power, int turn, const float previous[4],
+                 float maxError = kMaxDirectionErrorDeg) {
   Mix out;
   const float s = fminf(fmaxf(power / float(kDutyLimit), 0), 1);
   const float r = fminf(fmaxf(turn / float(kDutyLimit), -1), 1);
@@ -157,9 +159,9 @@ inline Mix solve(const WheelConfig (&wheels)[4], int direction, int power, int t
     }
   }
   out.errorDeg = bestError;
-  out.feasible = bestCost < 1e9f && bestError <= kMaxDirectionErrorDeg;
-  // Heading correction must never block a translation (line escape included).
-  if (!out.feasible && turn && s > 0) return solve(wheels, direction, power, 0, previous);
+  out.feasible = bestCost < 1e9f && bestError <= maxError;
+  // Heading correction must never block a translation.
+  if (!out.feasible && turn && s > 0) return solve(wheels, direction, power, 0, previous, maxError);
   if (out.feasible) for (int i = 0; i < 4; ++i) out.speed[i] = best[i] * wheels[i].polarity;
   return out;
 }
@@ -169,9 +171,11 @@ class Drive {
 public:
   explicit Drive(const WheelConfig (&wheels)[4] = kWheels) : wheels_(wheels) {}
 
-  void command(int direction, int power, int turn, uint32_t now) {
-    const Mix next = solve(wheels_, direction, power, turn, mix_.speed);
+  void command(int direction, int power, int turn, uint32_t now, bool avoid = false) {
+    const Mix next = avoid ? solve(wheels_, direction, power, 0, nullptr, kMaxAvoidErrorDeg)
+                           : solve(wheels_, direction, power, turn, mix_.speed);
     mix_ = next;
+    avoid_ = avoid;
     waiting_ = false;  // recomputed below: returning to the old polarity needs no wait
     bool any = false;
     for (int i = 0; i < 4; ++i) {
@@ -210,10 +214,11 @@ public:
       const int sign = target < 0 ? -1 : 1;
       const DirectionConfig &d = side(w, float(sign));
       if (!current_[i]) {
-        const bool stationary = !lastSign_[i] || uint32_t(now - stoppedMs_[i]) >= kMovingMemoryMs ||
-                                sign != lastSign_[i];
+        // "Still turning" needs a recent stop AND a previous run long enough to have broken loose.
+        const bool stationary = !lastSign_[i] || !spun_[i] || sign != lastSign_[i] ||
+                                uint32_t(now - stoppedMs_[i]) >= kMovingMemoryMs;
         boosting_[i] = stationary && w.boostMs;
-        if (boosting_[i]) boostStartMs_[i] = now;
+        startedMs_[i] = now;
         int duty = boosting_[i] ? (d.startDuty > abs_(target) ? d.startDuty : abs_(target)) : abs_(target);
         if (duty > kDutyLimit) duty = kDutyLimit;
         current_[i] = sign * duty;
@@ -221,12 +226,13 @@ public:
         continue;
       }
       if (boosting_[i]) {
-        const uint32_t limit = w.boostMs < kBoostLimitMs ? w.boostMs : kBoostLimitMs;
-        if (uint32_t(now - boostStartMs_[i]) < limit) continue;
+        if (uint32_t(now - startedMs_[i]) < boostLimit(w)) continue;
         boosting_[i] = false;
-        current_[i] = target;  // drop straight to the running duty
-        continue;
+        // Drop straight to a lower running duty; a higher one is approached by the ramp.
+        if (abs_(target) <= abs_(current_[i])) { current_[i] = target; continue; }
       }
+      // Escaping a line: a wheel faster than its target would bend the path, so drop it at once.
+      if (avoid_ && abs_(current_[i]) > abs_(target)) { current_[i] = target; continue; }
       if (!tick) continue;
       const int now_ = abs_(current_[i]), want = abs_(target);
       int duty = want > now_ ? (now_ + w.accelStep < want ? now_ + w.accelStep : want)
@@ -242,15 +248,21 @@ public:
 
 private:
   static int abs_(int v) { return v < 0 ? -v : v; }
-  void haltWheel(int i, uint32_t now) { current_[i] = 0; boosting_[i] = false; stoppedMs_[i] = now; }
+  static uint32_t boostLimit(const WheelConfig &w) { return w.boostMs < kBoostLimitMs ? w.boostMs : kBoostLimitMs; }
+  void haltWheel(int i, uint32_t now) {
+    spun_[i] = uint32_t(now - startedMs_[i]) >= boostLimit(wheels_[i]);
+    current_[i] = 0;
+    boosting_[i] = false;
+    stoppedMs_[i] = now;
+  }
   void halt(uint32_t now) { for (int i = 0; i < 4; ++i) if (current_[i]) haltWheel(i, now); }
 
   const WheelConfig (&wheels_)[4];
   Mix mix_;
   int target_[4] = {}, current_[4] = {};
   int lastSign_[4] = {};
-  uint32_t stoppedMs_[4] = {}, boostStartMs_[4] = {}, waitUntil_ = 0, tickMs_ = 0;
-  bool boosting_[4] = {}, waiting_ = false;
+  uint32_t stoppedMs_[4] = {}, startedMs_[4] = {}, waitUntil_ = 0, tickMs_ = 0;
+  bool boosting_[4] = {}, spun_[4] = {}, waiting_ = false, avoid_ = false;
 };
 
 // USB bench diagnostics. Nothing moves until "diag" is typed, and every motion expires by itself.
@@ -262,10 +274,17 @@ public:
 
   // Returns a message for the serial monitor.
   const char *line(const char *text, uint32_t now) {
-    if (!strcmp(text, "diag")) { active_ = true; end(now); return "diag on: p|k|m|s|exit"; }
+    if (!strcmp(text, "diag")) {
+      if (!active_) enteredMs_ = now;
+      active_ = true;
+      end(now);
+      return "diag on: p|k|m|s|exit";
+    }
     if (!active_) return "type diag first";
     if (!strcmp(text, "exit")) { end(now); active_ = false; return "diag off"; }
     if (!strcmp(text, "s")) { end(now); return "stop"; }
+    if ((text[0] == 'p' || text[0] == 'k' || text[0] == 'm') && uint32_t(now - enteredMs_) < kReversePauseMs)
+      return "reverse pause, retry";
     int a = 0, b = 0, c = 0, ms = kDefaultMs;
     char way = 0;
     if (sscanf(text, "p %d %c %d %d", &a, &way, &b, &ms) >= 3) return pulse(a, way, b, b, ms, now);
@@ -329,7 +348,7 @@ private:
   Drive drive_;
   bool active_ = false, running_ = false, pulsed_ = false;
   int wheel_ = -1, sign_ = 1, first_ = 0, then_ = 0, lastSign_[4] = {};
-  uint32_t startMs_ = 0, durationMs_ = 0, endMs_[4] = {}, pulseEndMs_ = 0;
+  uint32_t startMs_ = 0, durationMs_ = 0, endMs_[4] = {}, pulseEndMs_ = 0, enteredMs_ = 0;
   char reply_[48] = {};
 };
 

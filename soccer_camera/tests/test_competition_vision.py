@@ -3,6 +3,7 @@
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "openmv"))
 import competition_vision as v
@@ -133,6 +134,56 @@ class RecognitionTests(unittest.TestCase):
         self.assertFalse(packet[5] & v.FLAG_READY)
         self.assertEqual(packet[6] | packet[7], 0)
         self.assertEqual(v.crc16(packet[:-2]), packet[-2] | packet[-1] << 8)
+
+    def blobs(self, ball=None, yellow=None, blue=None):
+        class Blob:
+            def __init__(self, x, y, w, h):
+                self.x, self.y, self.w, self.h, self.pixels = x, y, w, h, w * h * 3 // 4
+                self.cx, self.cy = x + w // 2, y + h // 2
+
+        found = {"BALL": ball, "YELLOW": yellow, "BLUE": blue}
+
+        class Frame:
+            def find_blobs(self, thresholds, **kwargs):
+                for name, box in found.items():
+                    if thresholds is getattr(nav.cfg, name) and box:
+                        return [Blob(*box)]
+                return []
+
+        return Frame()
+
+    def run_pipe(self, frame, steps=24, clock=None, frame_ms=30):
+        with patch.multiple(nav.cfg, IMAGE_SIZE=(320, 240), MIRROR_CENTER=(160, 120), MIRROR_RING=(20, 100)):
+            pipe = v.Pipeline(nav.cfg, nav.Mirror(320, 240), 25, 100)
+            for i in range(steps):
+                packet = pipe.step(frame, i * 50, True, frame_ms, ALL, [], clock)
+        return pipe, packet
+
+    def test_orange_ball_is_not_reported_as_yellow_goal(self):
+        box = (200, 110, 10, 10)
+        _, packet = self.run_pipe(self.blobs(ball=box, yellow=box))
+        self.assertEqual(packet[19] | packet[20] << 8, v.UNKNOWN_ANGLE)
+
+    def test_heading_needs_two_recently_seen_goals(self):
+        both = self.blobs(yellow=(150, 40, 20, 10), blue=(150, 190, 20, 10))
+        pipe, packet = self.run_pipe(both)
+        self.assertNotEqual(packet[31] | packet[32] << 8, v.UNKNOWN_ANGLE)
+        with patch.multiple(nav.cfg, IMAGE_SIZE=(320, 240), MIRROR_CENTER=(160, 120), MIRROR_RING=(20, 100)):
+            later = pipe.step(self.blobs(), 24 * 50 + 500, True, 30, ALL, [])
+        self.assertEqual(later[31] | later[32] << 8, v.UNKNOWN_ANGLE)
+
+    def test_detection_time_counts_against_line_freshness(self):
+        ticks = iter(range(0, 100000, 90))
+        _, packet = self.run_pipe(self.blobs(), steps=2, clock=lambda: next(ticks), frame_ms=60)
+        self.assertFalse(packet[5] & v.FLAG_READY)
+        self.assertEqual(packet[6] | packet[7], 0)
+
+    def test_escape_is_always_a_direction_the_wheels_can_follow_exactly(self):
+        for first in range(0, 360, 15):
+            for second in range(0, 360, 45):
+                near = lines(*(wall(first, 15, 30) + wall(second, 22, 15)))
+                escape = v.LineGuard(25, 35).update(True, ALL, near)[1]
+                self.assertTrue(escape is None or escape % 45 == 0, (first, second, escape))
 
     def test_golden_packet_shared_with_main(self):
         packet = v.make_packet(7, 0x15, 0xFF0F, None, (350, 31), 1, (10, None, 80, 0, 2),

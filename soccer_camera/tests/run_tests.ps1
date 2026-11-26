@@ -25,7 +25,7 @@ $motorConfig = foreach ($name in @('MOTOR_IN1', 'MOTOR_IN2', 'WHEEL_DEGREES', 'W
 ($motorConfig + $mixer) | Set-Content -Encoding UTF8 (Join-Path $build 'chase_mixer.h')
 "Host tests started at $([DateTime]::UtcNow.ToString('yyyy-MM-dd HH:mm:ss')) UTC" | Set-Content -Encoding Unicode $results
 
-$sources = @('test_core.cpp', 'test_integration.cpp', 'test_chase_camera.cpp', 'test_chase_motor.cpp', 'test_chase_mixer.cpp', 'test_motor_model.cpp', 'test_upgrade.cpp')
+$sources = @('test_core.cpp', 'test_integration.cpp', 'test_chase_camera.cpp', 'test_chase_motor.cpp', 'test_chase_mixer.cpp', 'test_motor_model.cpp', 'test_upgrade.cpp', 'test_review.cpp', 'test_loop.cpp', 'test_loop_legacy.cpp')
 $gpp = Get-Command g++ -ErrorAction SilentlyContinue
 $cl = Get-Command cl -ErrorAction SilentlyContinue
 
@@ -34,7 +34,7 @@ if ($gpp) {
         $name = [IO.Path]::GetFileNameWithoutExtension($source)
         $exe = Join-Path $build "$name.exe"
         "=== BUILD $source ===" | Tee-Object -FilePath $results -Append
-        $output = & $gpp.Source -finput-charset=UTF-8 -std=c++17 -Wall -Wextra -I $common -I $build -I (Join-Path $root 'motor') -I (Join-Path $root 'main') -I (Join-Path $root 'ir') (Join-Path $PSScriptRoot $source) -o $exe 2>&1
+        $output = & $gpp.Source -finput-charset=UTF-8 -std=c++17 -Wall -Wextra -I $common -I $build -I (Join-Path $root 'motor') -I (Join-Path $root 'main') -I (Join-Path $root 'ir') -I $PSScriptRoot -I (Join-Path $PSScriptRoot 'mock') (Join-Path $PSScriptRoot $source) -o $exe 2>&1
         $exitCode = $LASTEXITCODE
         $output | Tee-Object -FilePath $results -Append
         if ($exitCode -ne 0) { throw "Compile failed: $source" }
@@ -85,7 +85,7 @@ try {
     foreach ($source in $sources) {
         $name = [IO.Path]::GetFileNameWithoutExtension($source)
         "=== BUILD $source ===" | Tee-Object -FilePath $results -Append
-        $output = & $clPath /nologo /EHsc /utf-8 /std:c++17 /W4 "/I$common" "/I$build" "/I$(Join-Path $root 'motor')" "/I$(Join-Path $root 'main')" "/I$(Join-Path $root 'ir')" (Join-Path $PSScriptRoot $source) "/Fe:$name.exe" 2>&1
+        $output = & $clPath /nologo /EHsc /utf-8 /std:c++17 /W4 "/I$common" "/I$build" "/I$(Join-Path $root 'motor')" "/I$(Join-Path $root 'main')" "/I$(Join-Path $root 'ir')" "/I$PSScriptRoot" "/I$(Join-Path $PSScriptRoot 'mock')" (Join-Path $PSScriptRoot $source) "/Fe:$name.exe" 2>&1
         $exitCode = $LASTEXITCODE
         $output | Tee-Object -FilePath $results -Append
         if ($exitCode -ne 0) { throw "Compile failed: $source" }

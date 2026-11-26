@@ -21,6 +21,10 @@ struct Config {
   uint8_t ballMinConfidence = 25, goalMinConfidence = 40, headingMinConfidence = 50;
   float attackEnterDeg = 15, attackExitDeg = 30, alignDeg = 45;
   uint8_t nearCm = 25, farCm = 50;
+  // Both default to the cautious choice; enable only after the matching bench check.
+  bool blindTracking = false;        // drive at the ball while the attack direction is unknown
+  bool bnoPowerOnReference = false;  // robot is always powered up facing the attack goal
+  uint8_t ownGoalGuardDeg = 45;
 };
 
 inline float wrap(float a) { a = fmodf(a + 180, 360); return (a < 0 ? a + 360 : a) - 180; }
@@ -69,8 +73,8 @@ public:
     CameraData next;
     if (!decode(next, now)) { ++errors; resync(); return false; }
     used_ = 0;
-    // A repeated sequence number is a stale frame, not fresh data.
-    if (out.received && next.sequence == out.sequence && uint32_t(now - out.receivedMs) <= 200) return false;
+    // A repeated sequence number is a stale frame, not fresh data, however long ago it first arrived.
+    if (out.received && next.sequence == out.sequence) return false;
     out = next;
     return true;
   }
@@ -207,14 +211,18 @@ public:
 
   void update(const BnoSample &bno, const CameraData &cam, bool cameraFresh, bool goalVisible,
               const Config &cfg, uint32_t now) {
-    // Vision: one vote per camera frame.
+    // Vision: one vote per camera frame. A jump restarts the continuity count.
     const bool vNow = cameraFresh && cam.heading != kUnknown && cam.headingConfidence >= cfg.headingMinConfidence;
     if (!cameraFresh) { vision_ = Gate(); }
     else if (cam.sequence != visionSequence_ || !visionStarted_) {
       visionStarted_ = true;
       visionSequence_ = cam.sequence;
+      if (vNow) {
+        if (haveVision_ && fabsf(wrap(cam.heading - visionHeading_)) > 30) vision_ = Gate();
+        visionHeading_ = cam.heading;
+        haveVision_ = true;
+      }
       vision_.feed(vNow, 5, 5);
-      if (vNow) visionHeading_ = cam.heading;
     }
     const bool visionOk = vision_.open && cameraFresh;
     // BNO: one vote per new sample, with a rate-of-change check.
@@ -226,13 +234,21 @@ public:
       bnoStamp_ = bno.stampMs;
       if (usableRaw) { raw_ = bno.yaw; haveRaw_ = true; }
       if (ok) yaw_ = bno.yaw;  // a rejected sample never reaches the estimate
+      else if (usableRaw) bno_ = Gate();  // a step (sensor reset?) must be re-acquired, not followed
       const bool was = bno_.open;
       bno_.feed(ok, 10, 3);
       if (bno_.open && !was) {
         // (Re)acquired: choose the zero so the estimate does not jump.
-        if (visionOk) offset_ = wrap(yaw_ - visionHeading_);
-        else if (haveHeading_ && uint32_t(now - headingMs_) < 2000) offset_ = wrap(yaw_ - heading_);
-        else offset_ = yaw_;  // power-on: the robot was placed facing the attack goal
+        if (visionOk) {
+          offset_ = wrap(yaw_ - visionHeading_);
+          referenced_ = true;
+        } else if (haveHeading_ && uint32_t(now - headingMs_) < 2000) {
+          offset_ = wrap(yaw_ - heading_);
+        } else {
+          // After a long gap the gyro zero says nothing about the field.
+          offset_ = yaw_;
+          referenced_ = cfg.bnoPowerOnReference && !haveHeading_;
+        }
         disagree_ = Gate();
       }
     }
@@ -240,13 +256,18 @@ public:
 
     absolute = true;
     if (bno_.open) {
+      if (!referenced_ && visionOk) {
+        offset_ = wrap(yaw_ - visionHeading_);
+        referenced_ = true;
+      }
       float estimate = wrap(yaw_ - offset_);
       if (visionOk) {
         const float diff = wrap(estimate - visionHeading_);
         disagree_.feed(fabsf(diff) > 30, 25, 25);
         disagreement = disagree_.open;
         if (!disagreement) {
-          offset_ = wrap(offset_ + 0.01f * diff);  // complementary filter: gyro fast, vision slow
+          // Complementary filter: gyro fast, vision slow; outliers never pull the gyro.
+          if (fabsf(diff) <= 30) offset_ = wrap(offset_ + 0.01f * diff);
           mode = Mode::FUSED;
         } else if (cam.headingConfidence >= 70) {
           mode = Mode::VISION_ONLY;
@@ -255,13 +276,19 @@ public:
           mode = Mode::BNO_ONLY;
         }
       } else {
-        disagreement = false;
+        disagreement = disagree_.open;  // stays until re-acquisition or renewed agreement
         mode = Mode::BNO_ONLY;
       }
-      store(estimate, now);
+      if (referenced_) {
+        store(estimate, now);
+      } else {
+        heading_ = estimate;  // only good for rotating the ball track
+        absolute = false;
+      }
     } else if (visionOk) {
       disagreement = false;
       mode = Mode::VISION_ONLY;
+      referenced_ = true;
       store(wrap(visionHeading_), now);
     } else {
       disagreement = false;
@@ -276,20 +303,20 @@ private:
   float heading_ = 0, yaw_ = 0, raw_ = 0, offset_ = 0, visionHeading_ = 0;
   uint32_t bnoStamp_ = 0, headingMs_ = 0;
   uint8_t visionSequence_ = 0;
-  bool haveRaw_ = false, haveHeading_ = false, visionStarted_ = false;
+  bool haveRaw_ = false, haveHeading_ = false, haveVision_ = false, visionStarted_ = false, referenced_ = false;
 };
 
 // PD turn command with deadband hysteresis, a feasible minimum and a slew limit.
 class Turn {
 public:
-  int update(bool enabled, float error, const Config &cfg) {
+  int update(bool enabled, float error, const Config &cfg, float gain = 1) {
     int wanted = 0;
     if (enabled) {
       if (fabsf(error) > cfg.headingEnter) engaged_ = true;
       else if (fabsf(error) < cfg.headingExit) engaged_ = false;
       if (engaged_) {
         const float rate = have_ ? wrap(error - previous_) / 0.02f : 0;
-        float u = cfg.headingKp * error + cfg.headingKd * clampf(rate, 200);
+        float u = gain * (cfg.headingKp * error + cfg.headingKd * clampf(rate, 200));
         if (u * error < 0) u = 0;  // damping never reverses the correction
         u = clampf(u, float(cfg.turnMax));
         if (u != 0 && fabsf(u) < cfg.turnMin) u = copysignf(float(cfg.turnMin), u);
@@ -449,18 +476,16 @@ inline const char *name(Tactic t) {
 inline bool sectorOpen(uint16_t mask, int sector) { return mask & (1u << (sector & 15)); }
 inline int sectorOf(float direction) { return int(norm(direction) / 22.5f + 0.5f) & 15; }
 
-// Returns a direction allowed by the line mask nearest to `wanted`, or -1. The MOTOR may be off by
-// up to ~23 degrees at in-between angles, so near lines only exact multiples of 45 or wide openings count.
+// Returns a direction allowed by the line mask nearest to `wanted`, or -1. In-between angles can come
+// out up to ~23 degrees wrong, so near any line only multiples of 45 (exact on all four wheels) are used.
 inline int safeDirection(uint16_t mask, float wanted) {
   if (mask == 0xFFFF) return int(norm(wanted) + 0.5f) % 360;
-  auto wide = [&](int k) { return sectorOpen(mask, k - 1) && sectorOpen(mask, k) && sectorOpen(mask, k + 1); };
-  if (wide(sectorOf(wanted))) return int(norm(wanted) + 0.5f) % 360;
   int best = -1;
   float bestError = 91;
-  for (int k = 0; k < 16; ++k) {
-    if (!sectorOpen(mask, k) || (k % 2 && !wide(k))) continue;
+  for (int k = 0; k < 16; k += 2) {
+    if (!sectorOpen(mask, k)) continue;
     const float error = fabsf(wrap(k * 22.5f - wanted));
-    if (error < bestError) { bestError = error; best = int(k * 22.5f + 0.5f); }
+    if (error < bestError) { bestError = error; best = k / 2 * 45; }
   }
   return best;
 }
@@ -487,7 +512,7 @@ public:
     const Seen &own = cam.targetBlue ? cam.yellow : cam.blue;
     auto usable = [&](const Seen &s) {
       return camFresh && cam.targetValid && s.seen && s.confidence >= cfg.goalMinConfidence &&
-             uint32_t(now - s.stampMs) <= 800;
+             uint32_t(now - s.stampMs) <= 500;
     };
     heading.update(bno, cam, camFresh, usable(target) || usable(own), cfg, now);
 
@@ -500,12 +525,13 @@ public:
     ball.update(i, c, camFresh ? cam.ball.distanceCm : -1, gyro, heading.heading(), cfg, now);
 
     // Attack direction: the goal itself, else opposite our own goal, else the heading, else brief memory.
+    const bool trusted = heading.absolute && !heading.disagreement;
     float goal = NAN;
     if (usable(target)) goal = target.bearing;
     else if (usable(own)) goal = norm(own.bearing + 180);
-    else if (heading.absolute) goal = norm(-heading.heading());
+    else if (trusted) goal = norm(-heading.heading());
     if (isfinite(goal)) { goalMemory_ = goal; goalMs_ = now; haveGoal_ = true; }
-    else if (haveGoal_ && uint32_t(now - goalMs_) <= 1000) goal = goalMemory_;
+    else if (haveGoal_ && !heading.disagreement && uint32_t(now - goalMs_) <= 300) goal = goalMemory_;
 
     Output out;
     out.goal = goal;
@@ -516,7 +542,8 @@ public:
     if (!cam.mask) return finish(out, Tactic::SAFE_STOP, "no safe direction", false, 0);
     // 2. line escape, with no heading correction
     if (cam.escaping) {
-      if (!sectorOpen(cam.mask, sectorOf(cam.escape))) return finish(out, Tactic::SAFE_STOP, "escape closed", false, 0);
+      if (cam.escape % 45 || !sectorOpen(cam.mask, sectorOf(cam.escape)))
+        return finish(out, Tactic::SAFE_STOP, "escape not safe", false, 0);
       out.direction = cam.escape;
       out.power = cfg.speedAvoid;
       out.avoid = true;
@@ -539,7 +566,11 @@ public:
       tactic = Tactic::RECOVER;
       wanted = norm(ball.bearing + 180);
     } else if (!isfinite(goal)) {
-      wanted = ball.lead();  // restricted tracking: neither goal nor heading known
+      // Pushing blind can score in our own goal: only close in on a ball known to be far away.
+      const bool far = ball.distanceCm > cfg.farCm;
+      if (!cfg.blindTracking && !far)
+        return finish(out, Tactic::SAFE_STOP, "attack direction unknown", false, 0);
+      wanted = ball.lead();
       speed = cfg.speedSlow;
     } else {
       const float delta = wrap(ball.bearing - goal);
@@ -580,23 +611,33 @@ public:
 
     const int direction = safeDirection(cam.mask, wanted);
     if (direction < 0) return finish(out, Tactic::SAFE_STOP, "path blocked by line", false, 0);
+    if (tactic == Tactic::ORBIT && fabsf(wrap(direction - ball.bearing)) < 45)
+      return finish(out, Tactic::SAFE_STOP, "orbit blocked", false, 0);
+    // A weaker, older sighting of our own goal is still enough to refuse pushing toward it.
+    const bool ownSeen = cam.targetValid && own.seen && own.confidence >= 25 && uint32_t(now - own.stampMs) <= 800;
+    if (ownSeen && tactic != Tactic::SEARCH && fabsf(wrap(direction - own.bearing)) < cfg.ownGoalGuardDeg &&
+        fabsf(wrap(ball.bearing - own.bearing)) < 60)
+      return finish(out, Tactic::SAFE_STOP, "own goal ahead", false, 0);
     const float headingError = heading.absolute ? -heading.heading() : (usable(target) ? wrap(target.bearing) : 0);
     if (cam.mask != 0xFFFF || cam.slow || ball.confidence < 40 ||
         (heading.absolute && fabsf(headingError) > 45)) speed = cfg.speedSlow < speed ? cfg.speedSlow : speed;
     out.direction = uint16_t(direction);
     out.power = speed;
+    out.avoid = cam.mask != 0xFFFF;  // near a line the MOTOR applies its strict feasibility rule
     // Absolute heading: hold it. Goal-relative only: face the goal while lining up, at half gain.
     const bool relative = !heading.absolute && usable(target) &&
                           (tactic == Tactic::ALIGN || tactic == Tactic::ATTACK);
-    const bool correct = (heading.absolute && heading.mode != Mode::DEGRADED) || relative;
-    return finish(out, tactic, "", correct, relative ? headingError / 2 : headingError);
+    const bool correct = !out.avoid && !heading.disagreement && (heading.absolute || relative);
+    // Camera-only headings are approximate: correct them at half gain, like a goal-relative bearing.
+    const bool half = relative || heading.mode == Mode::VISION_ONLY;
+    return finish(out, tactic, "", correct, headingError, half ? 0.5f : 1.0f);
   }
 
 private:
-  Output &finish(Output &out, Tactic tactic, const char *reason, bool correct, float error) {
+  Output &finish(Output &out, Tactic tactic, const char *reason, bool correct, float error, float gain = 1) {
     out.tactic = tactic;
     out.reason = reason;
-    out.turn = turn_.update(correct && out.power, error, cfg);
+    out.turn = turn_.update(correct && out.power, error, cfg, gain);
     if (!out.power) out.direction = 0;
     previous_ = tactic;
     return out;

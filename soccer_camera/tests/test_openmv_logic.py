@@ -321,6 +321,9 @@ class OpenMvNavigationTests(unittest.TestCase):
         self.assertEqual([(bearing, color) for bearing, color, *_ in boundaries],
                          [(0, "BLACK"), (90, "BLACK"), (105, "BLACK"),
                           (180, "WHITE"), (345, "BLACK")])
+        # With the floor fully seen, nearby black walls alone do not trigger avoidance.
+        black = [edge_ for edge_ in boundaries if edge_[1] == "BLACK"]
+        self.assertEqual(nav.decide_navigation(True, VISIBLE, black)[3], nav.MODE_TRACK_IR)
         # Only one of 24 rays shows floor: unknown, so stop.
         self.assertEqual(nav.decide_navigation(True, visible, boundaries)[3], nav.MODE_WAIT)
 

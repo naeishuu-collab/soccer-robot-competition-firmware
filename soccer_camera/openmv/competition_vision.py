@@ -12,6 +12,7 @@ ESCAPE_LIMIT_DEG = 75
 RELEASE_MARGIN_CM = 5
 RELEASE_FRAMES = 2
 GOAL_HOLD_MS = 800  # must outlast the slowest goal detection period
+HEADING_MAX_AGE = 30  # x10 ms: older goal bearings may predate a rotation
 BALL_HOLD_MS = 450
 UNKNOWN_ANGLE = 0xFFFF
 UNKNOWN_BYTE = 255
@@ -81,7 +82,8 @@ class LineGuard:
         escape = None
         if close:
             scores = {h: min(abs(wrap(h - b)) for b in close) for h in open_sectors}
-            good = {h: s for h, s in scores.items() if s >= ESCAPE_LIMIT_DEG}
+            # Only multiples of 45 degrees come out exactly on all four wheels.
+            good = {h: s for h, s in scores.items() if s >= ESCAPE_LIMIT_DEG and h % 45 == 0}
             # Prefer ways out that do not head toward a second, slightly farther line.
             good = {h: s for h, s in good.items()
                     if all(abs(wrap(h - b)) >= APPROACH_LIMIT_DEG for b in blocked)} or good
@@ -293,11 +295,11 @@ class Pipeline:
 
     def step(self, img, now, ready, frame_ms, visible, boundaries, clock=None):
         cfg = self.cfg
-        mask, escape, nearest, count = self.guard.update(ready, visible, boundaries)
+        clock = clock or (lambda: 0)
+        began = clock()
         # Detection time delays the packet too, so it counts against the line budget.
         slow = frame_ms + self.timing["ball"] + self.timing["goals"] > self.max_frame_ms * 0.7
         ball_period, goal_period = (4, 6) if slow else (2, 3)
-        clock = clock or (lambda: 0)
         self.frame += 1
         if self.frame % ball_period == 0:
             start = clock()
@@ -307,9 +309,16 @@ class Pipeline:
         if self.frame % goal_period == 1:
             start = clock()
             for name, track in self.goals.items():
-                track.update(now, self.candidates(img, getattr(cfg, name),
-                                                  getattr(cfg, name + "_MIN_PIXELS", 12), False))
+                found = self.candidates(img, getattr(cfg, name), getattr(cfg, name + "_MIN_PIXELS", 12), False)
+                if name == "YELLOW" and self.ball.bearing is not None:
+                    # The orange ball also passes the yellow thresholds: drop ball-sized blobs at its bearing.
+                    found = [c for c in found if not (abs(wrap(c[0] - self.ball.bearing)) <= 10
+                                                      and c[3] <= self.ball.width + 5)]
+                track.update(now, found)
             self.timing["goals"] = clock() - start
+        age_ms = frame_ms + clock() - began
+        ready = ready and age_ms <= self.max_frame_ms
+        mask, escape, nearest, count = self.guard.update(ready, visible, boundaries)
         start = clock()
         ball = self.ball.fields(now)
         yellow = list(self.goals["YELLOW"].fields(now))
@@ -322,13 +331,14 @@ class Pipeline:
         flags = FLAG_READY if ready else 0
         if escape is not None:
             flags |= FLAG_ESCAPE
-        if frame_ms > self.max_frame_ms:
+        if age_ms > self.max_frame_ms:
             flags |= FLAG_SLOW
         self.heading = (None, 0)
         if target in ("YELLOW", "BLUE"):
             flags |= FLAG_TARGET_VALID | (FLAG_TARGET_BLUE if target == "BLUE" else 0)
             opponent, own = (blue, yellow) if target == "BLUE" else (yellow, blue)
-            self.heading = estimate_heading((own[0], own[2]), (opponent[0], opponent[2]))
+            if max(own[4], opponent[4]) <= HEADING_MAX_AGE:
+                self.heading = estimate_heading((own[0], own[2]), (opponent[0], opponent[2]))
         self.timing["pose"] = clock() - start
         packet = make_packet(self.sequence, flags, mask, escape, nearest, count, ball, yellow, blue,
                              self.heading, frame_ms)
