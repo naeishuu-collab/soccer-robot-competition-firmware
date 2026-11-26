@@ -192,6 +192,16 @@ def ball_like(blob):
     return min(width, height) / max(width, height) >= 0.45 and 0.20 <= fill <= 1.0
 
 
+def overlaps_ball(blob, ball):
+    if ball is None:
+        return False
+    x, y, w, h = (blob_value(blob, key) for key in ("x", "y", "w", "h"))
+    bx, by, bw, bh = (blob_value(ball, key) for key in ("x", "y", "w", "h"))
+    overlap_w = max(0, min(x + w, bx + bw) - max(x, bx))
+    overlap_h = max(0, min(y + h, by + bh) - max(y, by))
+    return w > 0 and h > 0 and overlap_w * overlap_h * 4 >= w * h
+
+
 def scan_ray(samples, color_at, include_wall=False):
     green_run = 0
     ground_seen = False
@@ -381,13 +391,14 @@ def main_loop(send_uart=True, display=False):
             last_command = command
         if display:
             # Detect both colors before drawing so overlays never enter the other search.
-            detections = [(name, find_color_blob(img, mirror, thresholds,
-                           getattr(cfg, "BLUE_MIN_PIXELS", 8) if name == "BLUE" else
-                           getattr(cfg, "YELLOW_MIN_PIXELS", 12), None, name == "YELLOW"))
-                          for name, thresholds in goal_thresholds]
             ball_thresholds = getattr(cfg, "BALL", None)
             ball, ball_counts = (find_color_blob(img, mirror, ball_thresholds, 10, ball_like, True)
                                  if ball_thresholds else (None, [0, 0, 0]))
+            detections = [(name, find_color_blob(img, mirror, thresholds,
+                           getattr(cfg, "BLUE_MIN_PIXELS", 8) if name == "BLUE" else
+                           getattr(cfg, "YELLOW_MIN_PIXELS", 12),
+                           (lambda blob: not overlaps_ball(blob, ball)) if name == "YELLOW" else None,
+                           name == "YELLOW")) for name, thresholds in goal_thresholds]
             for name, (blob, counts) in detections:
                 if blob is not None:
                     draw_goal(img, blob, name)

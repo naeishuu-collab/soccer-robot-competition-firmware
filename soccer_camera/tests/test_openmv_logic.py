@@ -18,6 +18,26 @@ VISIBLE = set(range(0, 360, 15))
 
 
 class OpenMvNavigationTests(unittest.TestCase):
+    def test_yellow_search_skips_ball_but_keeps_other_goal(self):
+        class Blob:
+            def __init__(self, x, y, w, h, pixels):
+                self.x, self.y, self.w, self.h, self.pixels = x, y, w, h, pixels
+                self.cx, self.cy = x + w // 2, y + h // 2
+
+        ball = Blob(200, 120, 20, 20, 250)
+        ball_yellow = Blob(204, 122, 10, 8, 80)
+        goal = Blob(100, 50, 20, 8, 40)
+        class Frame:
+            def find_blobs(self, *args, **kwargs):
+                return [ball_yellow, goal]
+        with patch.multiple(nav.cfg, IMAGE_SIZE=(320, 240), MIRROR_CENTER=(160, 120),
+                            MIRROR_RING=(20, 100)):
+            selected, _ = nav.find_color_blob(Frame(), nav.Mirror(320, 240), nav.cfg.YELLOW, 12,
+                                              lambda blob: not nav.overlaps_ball(blob, ball), True)
+        self.assertIs(selected, goal)
+        self.assertFalse(nav.overlaps_ball(goal, None))
+        self.assertTrue(nav.overlaps_ball(ball_yellow, ball))
+
     def test_ball_shape_distinguishes_round_blob_from_goal_shapes(self):
         class Blob:
             def __init__(self, w, h, pixels):

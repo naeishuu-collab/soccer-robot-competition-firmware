@@ -1,5 +1,5 @@
 """LAB and exposure diagnostics. Copy both competition Python modules beside this script."""
-from goal_wall_navigation import (GOAL_COLORS, Mirror, ball_like, blob_value, cfg, draw_goal, draw_mirror,
+from goal_wall_navigation import (GOAL_COLORS, Mirror, ball_like, blob_value, cfg, draw_goal, draw_mirror, overlaps_ball,
                                   find_color_blob, init_camera, sensor, time)
 
 # Optional named ROIs in raw image pixels. Sample the inside of each target.
@@ -23,18 +23,20 @@ def main():
         now = time.ticks_ms()
         log = time.ticks_diff(now, last_print) >= PRINT_INTERVAL_MS
         detections = []
+        ball_thresholds = getattr(cfg, "BALL", None)
+        ball, ball_counts = (find_color_blob(img, mirror, ball_thresholds, 10, ball_like, True)
+                             if ball_thresholds else (None, [0, 0, 0]))
         for name, thresholds in (("YELLOW", cfg.YELLOW), ("BLUE", cfg.BLUE)):
             blob, counts = find_color_blob(img, mirror, thresholds,
                                            getattr(cfg, "BLUE_MIN_PIXELS", 8) if name == "BLUE" else
-                                           getattr(cfg, "YELLOW_MIN_PIXELS", 12), None, name == "YELLOW")
+                                           getattr(cfg, "YELLOW_MIN_PIXELS", 12),
+                                           (lambda candidate: not overlaps_ball(candidate, ball)) if name == "YELLOW" else None,
+                                           name == "YELLOW")
             if blob is not None:
                 detections.append((name, blob))
             if log:
                 rect = blob_value(blob, "rect") if blob is not None else None
                 print("{} components/small/masked={} selected={}".format(name, counts, rect))
-        ball_thresholds = getattr(cfg, "BALL", None)
-        ball, ball_counts = (find_color_blob(img, mirror, ball_thresholds, 10, ball_like, True)
-                             if ball_thresholds else (None, [0, 0, 0]))
         if log:
             print("BALL components/small/masked={} selected={}".format(
                 ball_counts, blob_value(ball, "rect") if ball is not None else None))
