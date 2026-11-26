@@ -32,7 +32,7 @@ def main():
                 rect = blob_value(blob, "rect") if blob is not None else None
                 print("{} components/small/masked={} selected={}".format(name, counts, rect))
         ball_thresholds = getattr(cfg, "BALL", None)
-        ball, ball_counts = (find_color_blob(img, mirror, ball_thresholds, 20, ball_like)
+        ball, ball_counts = (find_color_blob(img, mirror, ball_thresholds, 10, ball_like, True)
                              if ball_thresholds else (None, [0, 0, 0]))
         if log:
             print("BALL components/small/masked={} selected={}".format(

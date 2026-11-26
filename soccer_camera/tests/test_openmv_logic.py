@@ -27,8 +27,27 @@ class OpenMvNavigationTests(unittest.TestCase):
         self.assertFalse(nav.ball_like(Blob(40, 15, 450)))
         self.assertTrue(nav.ball_like(Blob(20, 20, 400)))
         self.assertTrue(nav.ball_like(Blob(20, 12, 110)))
-        self.assertFalse(nav.ball_like(Blob(20, 20, 100)))
+        self.assertTrue(nav.ball_like(Blob(20, 20, 100)))
+        self.assertFalse(nav.ball_like(Blob(20, 20, 50)))
         self.assertFalse(nav.ball_like(Blob(0, 20, 0)))
+
+    def test_ball_search_uses_dense_sampling_and_merges_fragments(self):
+        class Blob:
+            cx, cy, w, h, pixels = 200, 150, 12, 10, 35
+
+        class Frame:
+            def find_blobs(self, thresholds, **options):
+                self.options = options
+                return [Blob()]
+
+        frame = Frame()
+        with patch.multiple(nav.cfg, IMAGE_SIZE=(320, 240), MIRROR_CENTER=(160, 120),
+                            MIRROR_RING=(20, 100)):
+            ball, _ = nav.find_color_blob(frame, nav.Mirror(320, 240), nav.cfg.BALL, 10,
+                                          nav.ball_like, True)
+        self.assertIsNotNone(ball)
+        self.assertEqual((frame.options["x_stride"], frame.options["y_stride"],
+                          frame.options["merge"], frame.options["margin"]), (1, 1, True, 2))
 
     def test_startup_detects_matching_circles_and_rechecks_ground_calibration(self):
         class Circle:

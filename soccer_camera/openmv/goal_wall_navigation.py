@@ -155,7 +155,7 @@ class Mirror:
         return rays
 
 
-def find_color_blob(img, mirror, thresholds, min_pixels, accept=None):
+def find_color_blob(img, mirror, thresholds, min_pixels, accept=None, ball_search=False):
     counts = [0, 0, 0]  # Color components, too small, rejected by mirror geometry.
     best = None
     best_pixels = 0
@@ -166,7 +166,8 @@ def find_color_blob(img, mirror, thresholds, min_pixels, accept=None):
         left, top = max(0, x - radius), max(0, y - radius)
         roi = (left, top, min(mirror.width, x + radius + 1) - left,
                min(mirror.height, y + radius + 1) - top)
-    for blob in img.find_blobs(thresholds, roi=roi, pixels_threshold=1, area_threshold=1):
+    options = {"x_stride": 1, "y_stride": 1, "merge": True, "margin": 2} if ball_search else {}
+    for blob in img.find_blobs(thresholds, roi=roi, pixels_threshold=1, area_threshold=1, **options):
         counts[0] += 1
         pixels = blob_value(blob, "pixels")
         if pixels < min_pixels:
@@ -188,7 +189,7 @@ def ball_like(blob):
     if not width or not height:
         return False
     fill = blob_value(blob, "pixels") / (width * height)
-    return min(width, height) / max(width, height) >= 0.55 and 0.35 <= fill <= 1.0
+    return min(width, height) / max(width, height) >= 0.45 and 0.20 <= fill <= 1.0
 
 
 def scan_ray(samples, color_at, include_wall=False):
@@ -384,7 +385,7 @@ def main_loop(send_uart=True, display=False):
                            getattr(cfg, "BLUE_MIN_PIXELS", 8) if name == "BLUE" else cfg.GOAL_MIN_PIXELS))
                           for name, thresholds in goal_thresholds]
             ball_thresholds = getattr(cfg, "BALL", None)
-            ball, ball_counts = (find_color_blob(img, mirror, ball_thresholds, 20, ball_like)
+            ball, ball_counts = (find_color_blob(img, mirror, ball_thresholds, 10, ball_like, True)
                                  if ball_thresholds else (None, [0, 0, 0]))
             for name, (blob, counts) in detections:
                 if blob is not None:
@@ -423,8 +424,10 @@ def main_loop(send_uart=True, display=False):
                 "YES" if blue_blob is not None else "NO", *blue_counts)
             img.draw_string((3, 51), blue_status, color=(0, 0, 0))
             img.draw_string((2, 50), blue_status, color=(255, 255, 255))
-            ball_status = "BALL: {} C{} S{} R{}".format(
-                "YES" if ball is not None else "NO", *ball_counts)
+            ball_status = ("BALL: {} C{} S{} R{} H{}".format(
+                "YES" if ball is not None else "NO", *ball_counts,
+                ball_counts[0] - ball_counts[1] - ball_counts[2] if ball is None else 0)
+                if ball_thresholds else "BALL: UPDATE CONFIG")
             img.draw_string((3, 63), ball_status, color=(0, 0, 0))
             img.draw_string((2, 62), ball_status, color=(255, 255, 255))
 
