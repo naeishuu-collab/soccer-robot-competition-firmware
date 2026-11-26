@@ -91,17 +91,17 @@ class Mirror:
     def detect_ring(self, frame):
         if not hasattr(frame, "find_circles"):
             return
-        circles = frame.find_circles(threshold=2500, x_margin=10, y_margin=10, r_margin=10,
-                                     r_min=max(2, int(self.inner * 0.6)),
+        circles = frame.find_circles(threshold=1500, x_margin=10, y_margin=10, r_margin=8,
+                                     r_min=max(2, int(self.inner * 0.5)),
                                      r_max=int(self.outer * 1.2), r_step=2)
-        inner = [c for c in circles if abs(blob_value(c, "r") - self.inner) <= self.inner * 0.35
-                 and distance(blob_value(c, "x") - self.cx, blob_value(c, "y") - self.cy) <= 20]
-        outer = [c for c in circles if abs(blob_value(c, "r") - self.outer) <= self.outer * 0.2
-                 and distance(blob_value(c, "x") - self.cx, blob_value(c, "y") - self.cy) <= 20]
+        inner = [c for c in circles if self.inner * 0.5 <= blob_value(c, "r") <= self.inner * 1.4
+                 and distance(blob_value(c, "x") - self.cx, blob_value(c, "y") - self.cy) <= 30]
+        outer = [c for c in circles if self.outer * 0.55 <= blob_value(c, "r") <= self.outer * 1.2
+                 and distance(blob_value(c, "x") - self.cx, blob_value(c, "y") - self.cy) <= 30]
         pairs = [(i, o) for i in inner for o in outer
                  if blob_value(i, "r") < blob_value(o, "r")
                  and distance(blob_value(i, "x") - blob_value(o, "x"),
-                                blob_value(i, "y") - blob_value(o, "y")) <= 10
+                                blob_value(i, "y") - blob_value(o, "y")) <= 12
                  and blob_value(o, "r") <= min(blob_value(o, "x"), blob_value(o, "y"),
                                                self.width - 1 - blob_value(o, "x"),
                                                self.height - 1 - blob_value(o, "y"))]
