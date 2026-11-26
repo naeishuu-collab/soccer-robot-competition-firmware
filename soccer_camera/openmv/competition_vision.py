@@ -317,6 +317,8 @@ class Pipeline:
         return result
 
     def step(self, img, now, ready, frame_ms, visible, boundaries, clock=None):
+        # 1) 時間予算から検出頻度を調整 2) ボール/ゴール追跡を更新 3) ライン安全判定
+        # 4) パケット化。期限超過や不十分な床観測はready=Falseとして安全側に倒す。
         cfg = self.cfg
         clock = clock or (lambda: 0)
         began = clock()
@@ -351,6 +353,7 @@ class Pipeline:
         floor_ok = ready
         ready = floor_ok and age_ms <= self.max_frame_ms
         visible = self.unhide_ball(now, visible, boundaries)
+        # ライン情報を確定してから、追跡値と姿勢値を同じ連番の送信データにまとめる。
         mask, escape, nearest, count = self.guard.update(ready, visible, boundaries)
         start = clock()
         ball = self.ball.fields(now)

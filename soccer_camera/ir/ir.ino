@@ -24,6 +24,7 @@ enum RequestState { WAIT_POLL, READ_POLL_2, READ_POLL_CMD, READ_POLL_END };
 RequestState requestState = WAIT_POLL;
 
 void sendIR(uint16_t direction, uint16_t totalDetect) {
+  // 方向と検出強度を固定長応答にして、RS-485送信中だけドライバを送信側へ切り替える。
   digitalWrite(RS485_DE_PIN, HIGH);
   delayMicroseconds(20);
   Serial1.write(0xAA);
@@ -36,6 +37,7 @@ void sendIR(uint16_t direction, uint16_t totalDetect) {
 }
 
 void sampleAndReply() {
+  // 旧プロトコルの1回分: 5ms測定 → センサー別回数を方向ベクトルへ合成 → MAINへ応答。
   for (uint8_t i = 0; i < SENSOR_COUNT; i++) detectCount[i] = 0;
   uint32_t startTime = micros();
   while ((uint32_t)(micros() - startTime) < SAMPLE_TIME_US) {
@@ -44,6 +46,7 @@ void sampleAndReply() {
     }
   }
 
+  // 12方向の検出数を単位ベクトルに掛けて足すと、受光が強い方向へ合成ベクトルが向く。
   int32_t vectorX = 0, vectorY = 0;
   uint32_t totalDetect = 0;
   for (uint8_t i = 0; i < SENSOR_COUNT; i++) {
@@ -71,6 +74,7 @@ void sampleAndReply() {
 
 // Command 0x02: normalized, filtered reply with confidence and fault mask.
 void sampleFiltered(bool reply) {
+  // 拡張要求時は測定回数もir_logic.hへ渡し、正規化/フィルター/故障判定後の値を符号化する。
   for (uint8_t i = 0; i < SENSOR_COUNT; i++) detectCount[i] = 0;
   uint32_t samples = 0;
   const uint32_t startTime = micros();
@@ -109,6 +113,7 @@ void sampleFiltered(bool reply) {
 }
 
 void processRequestByte(uint8_t data) {
+  // MAINのA5 5A command terminatorを状態機械で1 byteずつ読み、完全一致した要求だけ実行する。
   static uint8_t command = 1;
   switch (requestState) {
     case WAIT_POLL: if (data == 0xA5) requestState = READ_POLL_2; break;
@@ -128,6 +133,7 @@ void processRequestByte(uint8_t data) {
 }
 
 void setup() {
+  // センサー入力、RS-485方向制御、UARTを初期化。起動時は必ず受信状態にする。
   Serial.begin(115200);
   for (uint8_t pin : sensorPins) pinMode(pin, INPUT);
   pinMode(RS485_DE_PIN, OUTPUT);
@@ -138,6 +144,7 @@ void setup() {
 }
 
 void loop() {
+  // 通信要求を優先して処理し、USB診断はバスが静かなときだけローカル測定する。
   static uint32_t lastBusMs = 0;
   while (Serial1.available()) {
     processRequestByte((uint8_t)Serial1.read());

@@ -59,6 +59,7 @@ def in_lab(lab, threshold):
 
 
 def init_camera():
+    # 一度自動調整で照明を安定させてから、校正ファイルの露出/ゲインに固定する。
     for led_id in (1, 2, 3, 4):
         pyb.LED(led_id).off()
     sensor.reset()
@@ -80,6 +81,7 @@ def init_camera():
 class Mirror:
     """全周ミラーの中心/リングを管理し、放射状の床サンプルを画像座標へ対応付ける。"""
     def __init__(self, width, height, frame=None):
+        # 校正値を読み、画像サイズとミラー寸法が有効なら走査点を事前計算する。
         self.width = width
         self.height = height
         self.cx, self.cy = cfg.MIRROR_CENTER or ((width - 1) / 2, (height - 1) / 2)
@@ -95,6 +97,7 @@ class Mirror:
         self.rays = self.ground_rays() if self.ring_ready and self.ground_ready() else ()
 
     def detect_ring(self, frame):
+        # 円候補→内外リングの組→輪郭コントラストの順に絞り、中心と半径を補正する。
         if not hasattr(frame, "find_circles") or not hasattr(frame, "get_pixel"):
             return
         circles = frame.find_circles(threshold=1500, x_margin=10, y_margin=10, r_margin=8,
@@ -165,6 +168,7 @@ class Mirror:
         return ((raw - cfg.FRONT_DEG) * (1 if cfg.CLOCKWISE else -1)) % 360
 
     def ground_rays(self):
+        # 各方位で校正距離に対応する画素を前計算し、毎フレームの床チェックを軽くする。
         # Precompute pixel coordinates and distances once, through the calibrated range.
         rays = []
         for i in range(RAY_COUNT):
@@ -189,6 +193,7 @@ class Mirror:
 
 def find_color_blob(img, mirror, thresholds, min_pixels, accept=None, dense_search=False):
     """ミラーの有効領域から色領域を選ぶ。ボールとゴールの検出で共用する入口。"""
+    # 候補検出 → 最小画素数 → ミラー円内 → 呼び出し側の追加条件、を通った最大領域を返す。
     counts = [0, 0, 0]  # Color components, too small, rejected by mirror geometry.
     best = None
     best_pixels = 0
@@ -236,6 +241,7 @@ def overlaps_ball(blob, ball):
 
 
 def scan_ray(samples, color_at, include_wall=False):
+    # 近距離から順に色を見て床の確認と、緑床の先にある白線/壁の最初の境界を返す。
     green_run = 0
     ground_seen = False
     previous = None
@@ -259,6 +265,7 @@ def scan_ray(samples, color_at, include_wall=False):
 
 def scan_field(img, mirror, white_candidates=None, include_wall=False):
     """各方位の床色を調べ、走行可能セクターと境界候補を作る。"""
+    # 各方位のサンプル色を分類し、床が見える方位集合と隣接確認済みの境界一覧に集約する。
     low_saturation = getattr(cfg, "GREEN_LOW_SATURATION", None)
 
     def color_at(x, y):
@@ -316,6 +323,7 @@ def wait_detail(setup_reason, frame_ms, visible):
 
 def decide_navigation(ready, visible, boundaries):
     """床観測と白線境界から、MAINへ渡す停止/直進/回避モードを選ぶ。"""
+    # 校正/フレームが不十分なら停止。近い白線があれば離れる向き、なければ床が見える向きを許可。
     stop = (0, 0, 0, MODE_WAIT)
     if not ready:
         return stop
@@ -398,6 +406,7 @@ def draw_goal(img, blob, name):
 
 def main_loop(send_uart=True, display=False):
     """撮影→検出→安全方向決定→必要ならMAINへ送信、をフレームごとに繰り返す。"""
+    # 初期化後、各フレームで「撮影→床/境界走査→ゴール/ボール検出→判断→UART/表示」を実行。
     init_camera()
     frame = sensor.snapshot()
     mirror = Mirror(frame.width(), frame.height(), frame)
@@ -417,6 +426,7 @@ def main_loop(send_uart=True, display=False):
     sequence = 0
     while True:
         started = time.ticks_ms()
+        # 先に床/白線を評価して安全指令を作る。ゴール表示など重い処理より走行許可を優先する。
         img = sensor.snapshot()
         captured = time.ticks_ms() if vision else started
         white_candidates = set() if display else None
@@ -435,6 +445,7 @@ def main_loop(send_uart=True, display=False):
                 uart.write(packet)
         elif uart is not None and (command != last_command
                                  or time.ticks_diff(now, last_tx) >= STREAM_INTERVAL_MS):
+            # 旧8-byte系は状態変化時または定期送信。新しい拡張系はPipelineが毎フレーム送る。
             vx, vy, sectors, _ = command
             uart.write(make_nav_packet(vx, vy, sectors, mode, sequence))
             sequence = (sequence + 1) & 0xff

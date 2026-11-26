@@ -289,6 +289,7 @@ uint8_t cameraUsed = 0;
 uint32_t cameraLastByteMs = 0;
 
 void receiveCamera() {
+  // 0x20から8 byteを組み立て、チェック値とモードが正しいフレームだけcamera状態へ反映する。
   const uint32_t now = millis();
   if (cameraUsed && uint32_t(now - cameraLastByteMs) >= 20) cameraUsed = 0;
   while (cameraSerial.available()) {
@@ -360,6 +361,7 @@ uint16_t convertDirection(uint16_t irAngle) {
 // ============================================================
 
 void sendDrive(uint8_t sequence, uint16_t direction, uint16_t power, bool avoid = false) {
+  // 方位/出力をMOTOR共通形式へ詰めてCRCを付け、RS-485で送信する唯一の通常出力口。
   uint8_t frame[FRAME_SIZE] = {};
   if (holdStop) direction = power = 0;
   frame[0] = FRAME_START;
@@ -378,6 +380,7 @@ void sendDrive(uint8_t sequence, uint16_t direction, uint16_t power, bool avoid 
 // ============================================================
 
 void setup() {
+  // RS-485/UART/安全出力を初期化する。通常系か拡張系かはloop()で選び、ここでは両者の準備を行う。
   digitalWrite(PIN_RS485_EN, LOW);
   pinMode(PIN_RS485_EN, OUTPUT);
   digitalWrite(PIN_RS485_EN, LOW);
@@ -464,6 +467,7 @@ void updateBno(uint32_t now, brain::BnoSample &sample) {
 }
 
 void upgradeLoop() {
+  // 拡張系の順序: カメラとIRの受信 → BNO読取 → brain.step() → MOTOR送信 → 次のIRポーリング。
   static brain::Brain robot;
   static brain::CameraParser parser;
   static brain::CameraData cameraData;
@@ -543,6 +547,7 @@ void upgradeLoop() {
 // ============================================================
 
 void loop() {
+  // 通常系の順序: USB停止入力 → カメラ受信 → IR応答処理 → 追跡方位と安全方向を決定 → MOTORへ送信。
   static uint8_t sequence = 0;
   static uint32_t lastPollMs = 0;
   static uint32_t lastLogMs = 0;
@@ -565,6 +570,7 @@ void loop() {
     return;
   }
 
+  // 最新カメラ状態を先に更新し、以降の移動判断で古い床/白線情報を使わないようにする。
   receiveCamera();
   const uint32_t now = millis();
   if (BNO_ENABLED) {
@@ -575,6 +581,7 @@ void loop() {
   uint16_t strength = 0;
   bool received = false;
   const bool replyExpired = waitingForIr && now - lastPollMs >= IR_REPLY_TIMEOUT_MS;
+  // IRは非同期応答なので、ポーリング中だけ受信器へ流し、1フレーム完成時に方位ロックを更新する。
   while (Serial1.available()) {
     const uint8_t byte = Serial1.read();
     if (waitingForIr && !replyExpired && irReceiver.push(byte, rawAngle, strength)) {

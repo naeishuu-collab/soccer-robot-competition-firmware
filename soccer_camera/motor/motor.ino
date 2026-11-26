@@ -131,6 +131,7 @@ uint8_t frameCrc(const uint8_t *frame) {
 class FrameReceiver {
 public:
   bool receive(uint8_t *output) {
+    // UARTを読みながら開始byteで同期し直し、途中欠落/不正byte/CRC不一致を捨てる。
     while (Serial1.available() > 0) {
       const uint32_t now = micros();
 
@@ -205,6 +206,7 @@ uint16_t unpackValue(const uint8_t *data) {
 void calculateWheelPWM(uint16_t direction,
                        uint16_t power,
                        int16_t output[4]) {
+  // MAINの極座標指令を各輪の向きへ射影。閾値未満の輪は止め、残りをPWMへ配分する。
   for (uint8_t i = 0; i < 4; ++i) {
     output[i] = 0;
   }
@@ -259,6 +261,7 @@ void calculateWheelPWM(uint16_t direction,
 // ============================================================
 
 void applyMotor(uint8_t motor, int16_t duty) {
+  // dutyの符号で回転極性を選び、2本のHブリッジ入力を同時に有効にしない。
   duty = clampPWM(duty);
 
   if (!OUTPUTS_ENABLED) {
@@ -314,6 +317,7 @@ void stopAllMotors(uint32_t now) {
 }
 
 bool parseDrive(const uint8_t *frame, uint16_t &direction, uint16_t &power, int &turn, bool &avoid) {
+  // フレーム種別・範囲・予約byteを検査。正常なDRIVEだけを後段の運動計算へ渡す。
   if (frame[1] == MSG_POLL ||
       frame[1] == MSG_BALL) {
     return false;
@@ -353,6 +357,7 @@ void acceptCommand(uint8_t sequence, uint16_t direction, uint16_t power, uint32_
 }
 
 void handleDrive(const uint8_t *frame) {
+  // 受信指令 → 検証 → 4輪目標計算 → 逆転待ち調整 → 最終指令時刻更新、の入口。
   uint16_t direction = 0, power = 0;
   int turn = 0;
   bool avoid = false;
@@ -394,6 +399,7 @@ void handleDrive(const uint8_t *frame) {
 // ============================================================
 
 void checkTimeout() {
+  // 最後の正常指令から期限を超えたら目標をゼロにし、通信断でも車輪を止める。
   if (!commandReceived || timedOut) {
     return;
   }
@@ -414,6 +420,7 @@ void checkTimeout() {
 // ============================================================
 
 void updateMotors() {
+  // 周期ごとに目標へ近づける。停止/逆転待ちを先に解決してからPWMを出力する。
   const uint32_t now = millis();
 
   if (now - lastRampMs < RAMP_INTERVAL_MS) {
@@ -594,6 +601,7 @@ void runModel(uint32_t now) {
 // ============================================================
 
 void setup() {
+  // GPIO/UARTを安全な停止値で初期化し、フレーム受信器とモーター出力を開始する。
   Serial.begin(115200);
 
   pinMode(RS485_EN_PIN, OUTPUT);
@@ -623,6 +631,7 @@ void setup() {
 // ============================================================
 
 void loop() {
+  // 受信指令の反映・タイムアウト判定・ランプ更新・診断表示を繰り返す制御ループ。
   const uint32_t now = millis();
   readDiagSerial(now);
   if (diagCooling && now - diagExitMs >= REVERSE_PAUSE_MS) diagCooling = false;
