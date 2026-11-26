@@ -108,6 +108,13 @@ class OpenMvNavigationTests(unittest.TestCase):
                     return (80, 80, 80)
             no_edge = nav.Mirror(320, 240, FlatFrame([Circle(160, 120, 40), Circle(160, 120, 90)]))
             self.assertFalse(no_edge.detected)
+            class PartialFrame(Frame):
+                def get_pixel(self, position, *, rgbtuple):
+                    if position[0] < 160:
+                        return (80, 80, 80)
+                    return super().get_pixel(position, rgbtuple=rgbtuple)
+            partial = nav.Mirror(320, 240, PartialFrame([Circle(160, 120, 40), Circle(160, 120, 90)]))
+            self.assertFalse(partial.detected)
             fallback = nav.Mirror(320, 240, Frame([Circle(160, 120, 40)]))
             self.assertFalse(fallback.detected)
             self.assertIsNone(nav.setup_wait_reason(fallback))

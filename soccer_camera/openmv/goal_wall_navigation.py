@@ -113,6 +113,7 @@ class Mirror:
             x, y, radius = (blob_value(circle, key) for key in ("x", "y", "r"))
             support = 0
             samples = 0
+            quadrants = [0, 0, 0, 0]
             for angle in range(0, 360, 15):
                 dx, dy = math.cos(math.radians(angle)), math.sin(math.radians(angle))
                 a = (round(x + (radius - 3) * dx), round(y + (radius - 3) * dy))
@@ -126,7 +127,8 @@ class Mirror:
                 samples += 1
                 if (delta if inner_edge else -delta) > 45:
                     support += 1
-            return support if samples >= 12 and support >= 6 else 0
+                    quadrants[angle // 90] += 1
+            return support if samples >= 18 and support >= 12 and min(quadrants) >= 2 else 0
 
         inner_scores = {id(c): edge_score(c, True) for c in inner}
         outer_scores = {id(c): edge_score(c, False) for c in outer}
