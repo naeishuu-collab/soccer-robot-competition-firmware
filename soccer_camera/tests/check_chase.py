@@ -20,8 +20,9 @@ class ChaseConfiguration(unittest.TestCase):
         source = (ROOT / "main/main.ino").read_text(encoding="utf-8")
         for name, value in (("PIN_RS485_TX", 0), ("PIN_RS485_RX", 1), ("PIN_RS485_EN", 8)):
             self.assertRegex(source, rf"\b{name}\s*=\s*{value}\s*;")
-        self.assertRegex(source, r"Serial2\.setTX\(2\)")
-        self.assertRegex(source, r"Serial2\.setRX\(3\)")
+        self.assertRegex(source, r"SerialPIO\s+cameraSerial\(2,\s*3,\s*128\)")
+        self.assertRegex(source, r"cameraSerial\.begin\(9600\)")
+        self.assertNotRegex(source, r"Serial2\.set(?:TX|RX)\([23]\)")
         self.assertRegex(source, r"IR_FRONT_DEGREES\s*=\s*0\s*;")
         self.assertRegex(source, r"IR_ANGLE_SIGN\s*=\s*-1\s*;")
         self.assertNotRegex(source, re.compile(r"\bAUTO\b|\bARM\b", re.I))

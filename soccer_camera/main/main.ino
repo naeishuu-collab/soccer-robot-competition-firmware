@@ -2,6 +2,7 @@
 #include <string.h>
 #include <math.h>
 #include <Wire.h>
+#include <SerialPIO.h>
 
 struct CameraState;
 
@@ -234,6 +235,7 @@ uint8_t calculateCRC(const uint8_t *frame) {
 }
 
 IrReplyReceiver irReceiver;
+SerialPIO cameraSerial(2, 3, 128);
 
 CameraState camera;
 uint8_t cameraFrame[8] = {};
@@ -243,8 +245,8 @@ uint32_t cameraLastByteMs = 0;
 void receiveCamera() {
   const uint32_t now = millis();
   if (cameraUsed && uint32_t(now - cameraLastByteMs) >= 20) cameraUsed = 0;
-  while (Serial2.available()) {
-    const uint8_t byte = Serial2.read();
+  while (cameraSerial.available()) {
+    const uint8_t byte = cameraSerial.read();
     if (!cameraUsed && byte != 0x20) continue;
     cameraLastByteMs = now;
     cameraFrame[cameraUsed++] = byte;
@@ -337,9 +339,7 @@ void setup() {
   Serial1.setRX(PIN_RS485_RX);
   Serial1.begin(RS485_BAUD);
 
-  Serial2.setTX(2);
-  Serial2.setRX(3);
-  Serial2.begin(9600);
+  cameraSerial.begin(9600);
   digitalWrite(11, LOW);
   pinMode(11, OUTPUT);
 
