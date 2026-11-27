@@ -77,17 +77,20 @@ class TelemetryTests(unittest.TestCase):
 
 
 class OverlayTests(unittest.TestCase):
-    def pipeline(self):
+    def pipeline(self, image=None):
         with patch.multiple(nav.cfg, IMAGE_SIZE=(320, 240), MIRROR_CENTER=(160, 120), MIRROR_RING=(20, 100)):
             p = v.Pipeline(nav.cfg, mirror(), 25, 100)
-        p.step(Image(), 0, True, 30, ALL, [])
+            p.keep_reports = True
+            for i in range(4):
+                p.step(image or Image(), i * 100, True, 30, ALL, [])
         return p
 
     def draw(self, image, telemetry=True, now=10, **options):
         overlay = viz.Overlay(nav.cfg, mirror(), **options)
         if telemetry:
             overlay.link.feed(GOLDEN, 0)
-        p = self.pipeline()
+        p = self.pipeline(image)
+        del image.calls[:]
         overlay.draw(image, now, p, [(0, "WHITE", 20, 160, 60)], diff, lambda x, y: None)
         overlay.draw(image, now + 1, p, [], diff, lambda x, y: None)
         return overlay
@@ -149,13 +152,15 @@ class OverlayTests(unittest.TestCase):
             nearest_y = min(max(real.cy, y), y + h)
             self.assertGreater(nav.distance(nearest_x - real.cx, nearest_y - real.cy), real.outer, (x, y, w, h))
 
-    def test_overlay_searches_only_every_few_frames(self):
-        image = Image()
-        overlay = viz.Overlay(nav.cfg, mirror())
-        p = self.pipeline()
-        for i in range(42):
-            overlay.draw(image, i * 50, p, [], diff, None)
-        self.assertEqual(sum(1 for name, _, _ in image.calls if name == "find"), 2 + 42 // viz.REFRESH_FRAMES)
+    def test_overlay_reuses_the_recognition_and_searches_only_in_debug(self):
+        for debug, expected in ((False, 0), (True, 2 + 42 // viz.DEBUG_REFRESH_FRAMES)):
+            image = Image()
+            overlay = viz.Overlay(nav.cfg, mirror(), debug_goals=debug)
+            p = self.pipeline()
+            with patch("builtins.print"):
+                for i in range(42):
+                    overlay.draw(image, i * 50, p, [], diff, None)
+            self.assertEqual(sum(1 for name, _, _ in image.calls if name == "find"), expected)
 
     def test_hidden_overlay_draws_nothing(self):
         image = Image()

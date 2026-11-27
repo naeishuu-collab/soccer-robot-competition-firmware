@@ -30,7 +30,7 @@ MAINは送信FIFOに空きがある分だけ書くので、送信で制御ルー
 
 ## OpenMV IDEでの使い方
 
-1. OpenMVに `goal_wall_navigation.py`（`main.py`）、`camera_calibration.py`、`competition_vision.py`、`visualize.py` をコピーする。
+1. OpenMVに `goal_wall_navigation.py`（`main.py`）、`camera_calibration.py`、`competition_vision.py`、`fast_scan.py`、`visualize.py` をコピーする。
 2. `camera_calibration.py` で `PROTOCOL = 2`、`VISUALIZE = True` にする。
 3. `main.py` を実行してフレームバッファを見る。**競技前に `VISUALIZE = False`、`GOAL_DEBUG = False` に戻す。**
 
@@ -104,17 +104,53 @@ UARTの戻り線が使えない場合に使います。
 
 ## 性能
 
-競技設定（`VISUALIZE = False`、`GOAL_DEBUG = False`）ではカメラは `visualize.py` を読み込まず、追加の検索や描画をしません。MAINは100msごとに19バイトを非ブロッキングで送るだけです。
+### 実機の測定（2026-11-27、利用者のログ。コミット5d2ee28まで）
 
-認識結果を変えずに行った高速化（PCで400フレーム分の出力が変更前と完全一致）：
+FPS 2.9〜16.4、`capture_ms` 4〜5、`line_ms` 43〜324（最大669）、`NOFLOOR`・`SLOW` が頻発、黄ゴール未検出、青ゴールは不安定。表示設定は記録されていません。
 
-| 処理 | 内容 | PC上の比（CPython、参考値） |
-|---|---|---|
-| 床・白線の走査 | 同じ色の分類を表引き（最大2048色）、関数呼び出しを削減、`@micropython.native` | 約1.2倍 |
-| 白線の方向判定 | 16方向の確認範囲を起動時に1回だけ計算 | 約3倍 |
-| 通信CRC | 256要素の表引き | 約9倍 |
-| 画面表示 | 候補検索を毎フレームから4フレーム（診断は3フレーム）に1回、診断の出力は約1秒ごと | 未計測 |
+### 原因（コードの監査。実機では未確認）
 
-**カメラ実機のFPSは未計測です。** PCの比はそのまま実機の比にはなりません。`@micropython.native` は実機で起動することを確認してください（起動時にエラーが出る場合はその行を削除します）。
+| 現象 | 原因 |
+|---|---|
+| `line_ms` が大きく、ばらつく | 床の走査が1フレームに568点をPythonで読み、画素ごとに色のタプルを確保。時間のばらつきはGC（不要メモリの回収）が重なったためと**推定** |
+| `SLOW` | 撮像＋走査＋認識が100msを超えると出る。上の走査時間が原因 |
+| `NOFLOOR` | 速さではなく認識の結果。緑床か白線が見える方位が12未満。または校正の設定不備。机の上など緑の床がない場所でも出る |
+| 黄ゴール未検出・青が不安定 | 実画像がないため未特定。`GOAL_DEBUG` の除外理由が必要 |
 
-FPSの上限は露光時間で決まります。`EXPOSURE_US = 45000`（45ms）では**約22fpsを超えられません**。さらに上げるには露光を短くして `GAIN_DB` を上げ、色のしきい値を測り直す必要があるため、変更していません。表示ON、特に `GOAL_DEBUG` は大きく遅くなります。フレーム間隔が200msを超えるとMAINはカメラ通信断として停止します。OpenMV IDEのフレームバッファ表示も止めると速くなる場合があります。2秒ごとの `fps= capture_ms= line_ms=` で、時間がどこで使われているかを確認できます。
+### 高速化の内容
+
+| 内容 | 判定への影響 |
+|---|---|
+| `fast_scan.py`：起動時に全65536色の分類表を作り、viper関数が画像バッファを直接読む。画素ごとの確保なし | なし。起動時に実フレーム3枚で従来版と全点一致した場合だけ使う。違えば自動で従来版。PCでは乱数の床3000枚で一致 |
+| 画面表示は認識が調べた候補をそのまま表示（`GOAL_DEBUG` 以外は追加検索なし） | なし。表示する候補は認識と同じ範囲になる |
+| 拡張通信で使わない旧判定（`decide_navigation`）を省略 | なし |
+| ゴール検索は色ごとに80ms以上の間隔 | 白線のループが速くなっても検索回数は増えない |
+| 白線の退避解除は2フレームに加え100ms以上 | FPSが上がっても早く解除しない（安全側の追加） |
+
+安全停止の条件とタイムアウト（100ms、MAINの200ms）は変えていません。通信形式も同じです。
+
+### 推定と限界
+
+- **実機のFPSは未計測です。** viperの走査は数ms以下になると**推定**しますが、確認していません。viperと `img.bytearray()` が本体で使えない場合は `fast scan OFF: 理由` と表示して従来の速度になります。
+- **25FPSと40FPSは、今の露光設定では保証できません。** `EXPOSURE_US = 45000`（45ms）は1フレームの撮像が45ms以上かかり、**約22FPSが上限**です。25FPSには露光35ms以下、40FPSには22ms程度以下にして `GAIN_DB` を上げ、緑・白・黄・青のしきい値を測り直す必要があります。認識に影響するので変更していません。
+- 起動時に分類表を作るため、数秒（推定）余分にかかります。その間MAINはカメラ通信がないので停止します。
+- `VISUALIZE = False`、`GOAL_DEBUG = False` が競技の標準です。`GOAL_DEBUG` は画面全体を追加で検索するので大きく遅くなります。
+
+### 計測の読み方（2秒ごと、拡張通信のみ）
+
+```
+fps=.. capture_ms=.. line_ms=..
+ms avg/max/p95 capture=a/m/p scan=.. vision=.. uart=.. show=.. total=..
+{'YELLOW': .., 'BLUE': .., 'pose': ..} V3 OK|SLOW|NOFLOOR mask=....
+floor setup-ok visible=.. lines=.. near-samples green=.. white=.. black=.. other=..
+```
+
+`ms` は平均／最大／95%値（直近最大128フレーム）。`scan` 床と白線、`vision` ゴール認識・判定・パケット作成、`show` 表示、`total` 1周の時間。`NOFLOOR` のときは `floor` 行を見ます。`setup-ok` 以外は表示された校正項目を直します。`other` や `black` が多ければ緑のしきい値か露出、ミラー中心・半径、`GROUND_POINTS` を確認します。
+
+## OpenMVへの書き込み手順
+
+1. OpenMV IDEを停止状態にし、本体のドライブ（OPENMV）にある `*.py` をPCにバックアップする。
+2. 次のファイルをドライブにコピーする：`competition_vision.py`、`fast_scan.py`（新規）、`visualize.py`、`goal_wall_navigation.py`。
+3. `camera_calibration.py` は本体の調整値を残す。`VISUALIZE` と `GOAL_DEBUG` を `False` にする（確認中は `VISUALIZE = True` 可）。
+4. IDEで `goal_wall_navigation.py` を開いて実行し、`fast scan ON` が出ることと計測行を確認する。
+5. 競技で電源投入と同時に動かすには、`goal_wall_navigation.py` の内容を `main.py` として保存する。**MAINとMOTORの電源が入っていると走り出すので、車輪を浮かせて確認する。**

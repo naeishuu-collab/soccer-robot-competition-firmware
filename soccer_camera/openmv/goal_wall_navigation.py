@@ -346,6 +346,38 @@ def scan_field(img, mirror, white_candidates=None, include_wall=False, thin=None
     return visible, boundaries
 
 
+def prepare_fast_scan(mirror, frames=3):
+    """高速走査を作り、実フレームで従来版と一致した場合だけ返す。使えなければNone（従来版のまま）。"""
+    try:
+        import fast_scan
+        started = time.ticks_ms()
+        img = sensor.snapshot()
+        table = fast_scan.build_table(img, classify_rgb)  # overwrites this frame: it is not used again
+        scanner = fast_scan.FastScanner(mirror.rays, mirror.width, mirror.height, table, LINE_CLEARANCE_CM,
+                                        line_is_thin)
+        for _ in range(frames):
+            if not scanner.matches(sensor.snapshot(), classify_rgb,
+                                   lambda frame, thin: scan_field(frame, mirror, thin=thin)):
+                print("fast scan OFF: result differs from the reference scan")
+                return None
+        print("fast scan ON (prepared in {} ms)".format(time.ticks_diff(time.ticks_ms(), started)))
+        return scanner
+    except Exception as error:  # any problem keeps the proven path
+        print("fast scan OFF: {!r}".format(error))
+        return None
+
+
+def floor_report(img, mirror, classify, visible, boundaries, setup_reason):
+    """NOFLOORの原因調べ: 各方位の最初の2点（床が見えるかを決める点）の色を数える。"""
+    counts = {"GREEN": 0, "WHITE": 0, "BLACK": 0, None: 0}
+    for _, samples in mirror.rays:
+        for x, y, _ in samples[:2]:
+            counts[classify(img, x, y)] += 1
+    return "floor {} visible={} lines={} near-samples green={} white={} black={} other={}".format(
+        setup_reason or "setup-ok", len(visible), len(boundaries), counts["GREEN"], counts["WHITE"],
+        counts["BLACK"], counts[None])
+
+
 def setup_wait_reason(mirror):
     if cfg.IMAGE_SIZE != (mirror.width, mirror.height):
         return "SET IMAGE_SIZE {}x{}".format(mirror.width, mirror.height)
@@ -463,6 +495,12 @@ def main_loop(send_uart=True, display=False):
         import competition_vision
         vision = competition_vision.Pipeline(cfg, mirror, LINE_CLEARANCE_CM, MAX_FRAME_AGE_MS)
     colors = ColorCache()
+    scanner = None
+    stats = None
+    if vision is not None:
+        stats = competition_vision.Stats(("capture", "scan", "vision", "uart", "show", "total"))
+        if mirror.rays and getattr(cfg, "FAST_SCAN", True):
+            scanner = prepare_fast_scan(mirror)
     overlay = None
     debug_goals = getattr(cfg, "GOAL_DEBUG", False)
     if vision is not None and (display or debug_goals):
@@ -475,32 +513,49 @@ def main_loop(send_uart=True, display=False):
     sequence = 0
     frames = shown_frames = 0
     shown = {"BLUE": (False, 0), "YELLOW": (False, 0)}
+    loop_us = None
     while True:
+        if stats is not None:
+            tick = time.ticks_us()
+            if loop_us is not None:
+                stats.add("total", time.ticks_diff(tick, loop_us))
+            loop_us = tick
         started = time.ticks_ms()
         # 先に床/白線を評価して安全指令を作る。ゴール表示など重い処理より走行許可を優先する。
         img = sensor.snapshot()
         captured = time.ticks_ms() if vision else started
+        if stats is not None:
+            shot = time.ticks_us()
+            stats.add("capture", time.ticks_diff(shot, loop_us))
         white_candidates = set() if display and vision is None else None
         thin = set()
         if not mirror.rays:
             visible, boundaries = (), []
+        elif scanner is not None:
+            visible, boundaries = scanner.scan(img, thin)
         elif vision is not None:
             visible, boundaries = scan_field(img, mirror, white_candidates, thin=thin, cache=colors)
         else:
             visible, boundaries = scan_field(img, mirror, white_candidates)
         now = time.ticks_ms()
         frame_ms = time.ticks_diff(now, started)
-        command = decide_navigation(setup_reason is None and frame_ms <= MAX_FRAME_AGE_MS,
-                                    visible, boundaries)
-        mode = command[3]
+        if vision is None:
+            command = decide_navigation(setup_reason is None and frame_ms <= MAX_FRAME_AGE_MS,
+                                        visible, boundaries)
+            mode = command[3]
         if vision is not None:
+            scanned = time.ticks_us()
+            stats.add("scan", time.ticks_diff(scanned, shot))
             # Frame age is judged inside the pipeline, which also counts the detection time.
             ready = (setup_reason is None
                      and competition_vision.observed_rays(visible, boundaries) >= MIN_FLOOR_RAYS)
             packet = vision.step(img, now, ready, frame_ms, visible, boundaries, time.ticks_ms, thin,
                                  lambda x, y: colors(img, x, y))
+            stepped = time.ticks_us()
+            stats.add("vision", time.ticks_diff(stepped, scanned))
             if uart is not None:
                 uart.write(packet)
+                stats.add("uart", time.ticks_diff(time.ticks_us(), stepped))
         elif uart is not None and (command != last_command
                                  or time.ticks_diff(now, last_tx) >= STREAM_INTERVAL_MS):
             # 旧8-byte系は状態変化時または定期送信。新しい拡張系はPipelineが毎フレーム送る。
@@ -518,8 +573,12 @@ def main_loop(send_uart=True, display=False):
                 time.ticks_diff(captured, started), time.ticks_diff(now, captured)))
             shown_frames, last_report = frames, now
             if vision is not None:
+                print("ms avg/max/p95", stats.report())
                 print(vision.timing, vision.status())
+                if mirror.rays:
+                    print(floor_report(img, mirror, colors, visible, boundaries, setup_reason))
         if overlay is not None:
+            show_start = time.ticks_us()
             # After the packet has been sent: display work never delays this frame's line data.
             if uart is not None:
                 waiting = uart.any()
@@ -527,6 +586,7 @@ def main_loop(send_uart=True, display=False):
                     overlay.link.feed(uart.read(min(waiting, 128)), time.ticks_ms())
             overlay.draw(img, time.ticks_ms(), vision, boundaries, time.ticks_diff,
                          lambda x, y: colors(img, x, y))
+            stats.add("show", time.ticks_diff(time.ticks_us(), show_start))
         elif display and vision is None:
             # Preview only (never sent to MAIN): one goal colour per frame, judged like protocol 3 does.
             name = ("BLUE", "YELLOW")[frames % 2]

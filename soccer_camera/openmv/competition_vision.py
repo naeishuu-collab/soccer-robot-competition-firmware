@@ -4,6 +4,7 @@
 この経路を使う場合はPROTOCOL=2にし、MAINもROBOT_UPGRADE=1で同時にビルドする。
 """
 import math
+from array import array
 
 try:
     import micropython
@@ -18,6 +19,8 @@ APPROACH_LIMIT_DEG = 60  # Never head closer than this to a ray with a nearby li
 ESCAPE_LIMIT_DEG = 75
 RELEASE_MARGIN_CM = 5
 RELEASE_FRAMES = 2
+RELEASE_MS = 100  # with a faster camera the release must still take at least this long
+GOAL_MIN_INTERVAL_MS = 80  # per colour: a faster line loop does not search the goals more often
 GOAL_HOLD_MS = 800  # must outlast the slowest goal detection period
 HEADING_MAX_AGE = 30  # x10 ms: older goal bearings may predate a rotation
 GOAL_MIN_SEPARATION_DEG = 90
@@ -61,9 +64,10 @@ class LineGuard:
         self.escaping = False
         self.escape = None
         self.release = 0
+        self.close_ms = None
         self.streak = {}
 
-    def update(self, ready, visible, boundaries, thin=None):
+    def update(self, ready, visible, boundaries, thin=None, now=None):
         """Returns (mask, escape_bearing or None, nearest (bearing, cm) or None, line count)."""
         if not ready:
             # Unknown floor is never "all clear". The escape state survives until the floor is seen again.
@@ -82,9 +86,11 @@ class LineGuard:
         blocked = [b for b, cm in lines.items() if cm <= self.block]
         if close:
             self.escaping, self.release = True, 0
+            self.close_ms = now
         elif self.escaping:
             self.release += 1
-            if self.release >= RELEASE_FRAMES:
+            held = now is None or self.close_ms is None or now - self.close_ms >= RELEASE_MS
+            if self.release >= RELEASE_FRAMES and held:
                 self.escaping, self.escape = False, None
 
         clear = set(visible).difference(near)
@@ -350,6 +356,37 @@ def make_packet(sequence, flags, mask, escape, nearest, line_count, yellow, blue
     return packet
 
 
+class Stats:
+    """処理ごとの時間(µs)を固定長の配列に貯め、表示するときだけ平均・最大・P95を計算する。"""
+
+    def __init__(self, names, size=128):
+        self.size = size
+        self.names = names
+        self.values = {name: array("i", [0] * size) for name in names}
+        self.count = {name: 0 for name in names}
+
+    def add(self, name, microseconds):
+        i = self.count[name]
+        self.values[name][i % self.size] = microseconds
+        self.count[name] = i + 1
+
+    def summary(self, name):
+        n = min(self.count[name], self.size)
+        if not n:
+            return None
+        ordered = sorted(self.values[name][i] for i in range(n))
+        return sum(ordered) / n / 1000, ordered[-1] / 1000, ordered[(n * 95 + 99) // 100 - 1] / 1000
+
+    def report(self):
+        parts = []
+        for name in self.names:
+            result = self.summary(name)
+            if result is not None:
+                parts.append("{}={:.1f}/{:.1f}/{:.1f}".format(name, *result))
+            self.count[name] = 0
+        return " ".join(parts)
+
+
 class Pipeline:
     """拡張ビジョンの1フレーム処理をまとめる。ラインは毎フレーム、ゴールは1色ずつ交互に間引いて調べる。"""
 
@@ -364,6 +401,9 @@ class Pipeline:
         self.frame = 0
         self.timing = {"YELLOW": 0, "BLUE": 0, "pose": 0}
         self.ran = {"YELLOW": 0, "BLUE": 0}
+        self.ran_ms = {"YELLOW": None, "BLUE": None}
+        self.keep_reports = False  # the overlay shows what this search saw instead of searching again
+        self.reports = {"YELLOW": [], "BLUE": []}
         self.heading = (None, 0)
         self.last = None
 
@@ -379,8 +419,19 @@ class Pipeline:
         # x_stride 2: a goal is always wider than two pixels.
         found = img.find_blobs(thresholds, roi=roi, x_stride=2, pixels_threshold=min_pixels,
                                area_threshold=min_pixels, merge=True, margin=2)
-        result = [goal_candidate(b, mirror, min_pixels, self.cfg, color_of) for b in found]
-        return [c for c in result if c is not None]
+        result = []
+        reports = [] if self.keep_reports else None
+        for blob in found:
+            report = None if reports is None else {}
+            candidate = goal_candidate(blob, mirror, min_pixels, self.cfg, color_of, report)
+            if candidate is not None:
+                result.append(candidate)
+            if reports is not None:
+                reports.append(report)
+        if reports is not None:
+            reports.sort(key=lambda r: (r.get("reason") != "OK", -r["pixels"]))
+            self.reports[name] = reports
+        return result
 
     def fill_gap(self, visible, boundaries):
         """幅1本(15度)だけの床の欠けは、両隣2本ずつに床が見え近い線がなければ開く(小さい物体の陰)。
@@ -411,10 +462,13 @@ class Pipeline:
         for name, phase in (("YELLOW", 1), ("BLUE", 1 + period // 2)):
             if self.frame % period != phase:
                 continue
+            if self.ran_ms[name] is not None and now - self.ran_ms[name] < GOAL_MIN_INTERVAL_MS:
+                continue
             # Line data comes first: skip a detection that would make this packet stale, but not forever.
             fits = frame_ms + clock() - began + self.timing[name] <= self.max_frame_ms * 0.9
             if fits or self.frame - self.ran[name] >= 20:
                 self.ran[name] = self.frame
+                self.ran_ms[name] = now
                 start = clock()
                 self.goals[name].update(now, self.candidates(img, name, color_of))
                 self.timing[name] = clock() - start
@@ -423,7 +477,7 @@ class Pipeline:
         ready = floor_ok and age_ms <= self.max_frame_ms
         visible = self.fill_gap(visible, boundaries)
         # ライン情報を確定してから、追跡値と姿勢値を同じ連番の送信データにまとめる。
-        mask, escape, nearest, count = self.guard.update(ready, visible, boundaries, thin)
+        mask, escape, nearest, count = self.guard.update(ready, visible, boundaries, thin, now)
         start = clock()
         yellow = list(self.goals["YELLOW"].fields(now))
         blue = list(self.goals["BLUE"].fields(now))

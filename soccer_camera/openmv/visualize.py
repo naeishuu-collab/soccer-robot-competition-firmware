@@ -10,8 +10,7 @@ import competition_vision as vision_module
 TELEMETRY_SIZE = 19
 STALE_LINK_MS = 400  # MAIN data older than this is not shown
 STALE_BALL_MS = 200  # IR detection older than this (at the camera) is not shown
-REFRESH_FRAMES = 4  # goal candidates are searched again every Nth frame (one colour at a time)
-DEBUG_REFRESH_FRAMES = 3
+DEBUG_REFRESH_FRAMES = 3  # GOAL_DEBUG searches the whole image again every Nth frame, one colour
 DEBUG_PRINT_MS = 1000
 BLACK, GREY, BAD = (0, 0, 0), (120, 120, 120), (255, 40, 40)
 CHARACTER_PX = 8
@@ -148,17 +147,20 @@ class Overlay:
             return "SEEN"
         return "NG " + reports[0].get("reason", "?")
 
-    def search(self, img, now, ticks_diff, color_of):
-        """表示用の候補検索。毎フレームは行わない（競技判定はvision側で別に行う）。"""
-        every = DEBUG_REFRESH_FRAMES if self.debug_goals else REFRESH_FRAMES
+    def search(self, img, now, ticks_diff, color_of, vision):
+        """表示する候補を用意する。診断モードだけ画面全体を追加で調べる（数フレームに1回）。"""
+        if not self.debug_goals:
+            # Same candidates the competition recognition just judged: no second search.
+            vision.keep_reports = True
+            self.reports = vision.reports
+            return
+        every = DEBUG_REFRESH_FRAMES
         if self.frame > 2 and self.frame % every:
             return
         self.searches += 1
         name = ("YELLOW", "BLUE")[(self.searches - 1) % 2]
-        self.reports[name] = inspect_goals(img, name, self.cfg, self.mirror, color_of,
-                                           1 if self.debug_goals else 2)
-        if not self.debug_goals or (self.print_ms is not None and self.searches > 2
-                                    and ticks_diff(now, self.print_ms) < DEBUG_PRINT_MS):
+        self.reports[name] = inspect_goals(img, name, self.cfg, self.mirror, color_of, 1)
+        if self.print_ms is not None and self.searches > 2 and ticks_diff(now, self.print_ms) < DEBUG_PRINT_MS:
             return
         if self.searches % 2:
             print("ring center=({}, {}) inner={} outer={} front={}".format(
@@ -178,7 +180,7 @@ class Overlay:
         elif ticks_diff(now, self.fps_ms) >= 1000:
             self.fps = self.fps_frames * 1000 / ticks_diff(now, self.fps_ms)
             self.fps_ms, self.fps_frames = now, 0
-        self.search(img, now, ticks_diff, color_of)  # before any drawing touches the image
+        self.search(img, now, ticks_diff, color_of, vision)  # before any drawing touches the image
         if not self.show:
             return
         data, ball = self.link.current(now, ticks_diff)
