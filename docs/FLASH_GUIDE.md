@@ -4,10 +4,10 @@
 
 | Board | Source to compile/copy | Build settings in current repository |
 |---|---|---|
-| MAIN RP2354B | `soccer_camera/main/` (Arduino sketch `main.ino`) | Generic RP2350, variant `RP2350B`, 2 MB; source selectors in `main.ino` |
+| MAIN RP2354B | `soccer_camera/main/` (Arduino sketch `main.ino`) | Generic RP2350, variant `RP2350B`, 2 MB; ZIP path default (`ROBOT_ZIP_TRACK=1`), camera protocol 2 |
 | IR RP2354A | `soccer_camera/ir/` (`ir.ino`, `ir_logic.h`) | Generic RP2350, variant `RP2350A`, 2 MB |
 | MOTOR RP2354A | `soccer_camera/motor/` (`motor.ino`, `motor_logic.h`) | Generic RP2350, variant `RP2350A`, 2 MB |
-| OpenMV H7 Plus | `soccer_camera/openmv/goal_wall_navigation.py`, `competition_vision.py`, `camera_calibration.py` | `PROTOCOL=2` is paired to MAIN's extended parser; `GIT_COMMIT` must be manually recorded |
+| OpenMV H7 Plus | `soccer_camera/openmv/goal_wall_navigation.py`, `competition_vision.py`, `camera_calibration.py` | `PROTOCOL=2` is paired to MAIN's camera parser; `CHASE_ONLY=True` skips yellow/blue goal scans; `GIT_COMMIT` is manual |
 
 The `line/`, `soccer_ir_main_line/`, `chase_*`, `legacy_before_chase/`, and backup folders are not current
 competition flash targets. LINE is not used in the required configuration.

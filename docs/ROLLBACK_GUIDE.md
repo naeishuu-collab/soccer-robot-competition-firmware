@@ -2,11 +2,12 @@
 
 ## Source rollback
 
-The saved baseline is `44cd80b3fd2a5137721e3f97bdd7603d21474557`. In a separate checkout/worktree:
+The requested baseline is `63cffa17e4f71df638646ffabf6585a3e2a44489` on `codex/diagnostics-phase1`.
+The baseline is also the starting commit for this work. To inspect or restore it in a separate worktree:
 
 ```powershell
-git fetch origin main
-git worktree add ..\soccer-rollback 44cd80b3fd2a5137721e3f97bdd7603d21474557
+git fetch origin codex/diagnostics-phase1
+git worktree add ..\soccer-rollback 63cffa17e4f71df638646ffabf6585a3e2a44489
 ```
 
 This retains the diagnostics branch and any local changes. To remove the temporary worktree after review,

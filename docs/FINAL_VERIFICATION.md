@@ -21,12 +21,12 @@ tested. Hardware-only items stay `PENDING_HARDWARE`.
 
 | Item | State | Evidence / limit |
 |---|---|---|
-| Source baseline | VERIFIED | `44cd80b3fd2a5137721e3f97bdd7603d21474557` |
-| Arduino compile | VERIFIED | MAIN RP2354B, IR RP2354A, LINE compile-only RP2354B, MOTOR RP2354A; no upload |
-| Host C++ | VERIFIED | 21 executables; tactical regression suite built with search/orbit/attack explicitly enabled; default disabled profile checked separately; ZIP PD has 10,000 exact reference comparisons; core 65 cases / 5,165 checks; integration 14 scenarios / 107 checks |
+| Source baseline | VERIFIED | Requested starting commit `63cffa17e4f71df638646ffabf6585a3e2a44489` |
+| Arduino compile | VERIFIED | After candidate changes: MAIN RP2354B, IR RP2354A, LINE compile-only RP2354B, MOTOR RP2354A; all returned 0; no upload |
+| Host C++ | VERIFIED | Full existing `run_tests.ps1` suite passed, including 10,000 ZIP PD comparisons and integrated no-IR line escape; no test removed |
 | Optional filtered-PD firmware build | VERIFIED | MAIN compiles with `ENABLE_EXPERIMENTAL_PD_FILTER=1`; candidate still requires hardware response comparison |
-| Python unit tests | VERIFIED | 110 tests, including line/goal pipeline, UART writer fault injection and CSV schema |
-| OpenMV Python syntax | VERIFIED | `compileall` on OpenMV and test sources; host Python is not OpenMV runtime |
+| Python unit tests | VERIFIED | 111 camera tests plus 13 camera-less IR mapping tests; includes chase-only no-goal-search assertion |
+| OpenMV Python syntax | VERIFIED | All `.py` files in `soccer_camera/openmv` passed `py_compile`; host Python is not OpenMV runtime |
 | Protocol round trips and fault cases | VERIFIED in host model | Existing tests cover parser, CRC, timeouts and invalid inputs; no physical bus timing evidence |
 | Synthetic vision | VERIFIED in host model | Existing tests use generated/fake blobs; not recorded camera frames |
 | Build identity injection | VERIFIED | compile script adds current short SHA; OpenMV SHA is manual |
@@ -35,7 +35,21 @@ tested. Hardware-only items stay `PENDING_HARDWARE`.
 | Runtime USB test-mode router | PARTIAL | Enum/gate is host tested; no MAIN serial mode-switch command; per-board test actions remain separate |
 | Feature profiles | PARTIAL | Default profile and full-tactics host profile are tested. Search/orbit/attack and filtered PD compile gates exist; no complete flag matrix or USB toggles |
 | MAIN/MOTOR state correlation | PARTIAL | Two USB consoles only; no MOTOR reply protocol |
-| Competition acceptance | NO-GO | Active expanded path has not been verified on hardware |
+| Competition acceptance | NO-GO | ZIP route selection and straight escape pass software tests; physical behavior is unverified |
+
+## Requested diagnostics-phase result
+
+The default MAIN path now selects ZIP PD. Fresh, ready camera data is required; a supported 0°/180°
+straight escape can run without IR. OpenMV `CHASE_ONLY=True` bypasses goal blob search and heading
+estimation. `zipPathClear()` remains unchanged and conservative: straight/reverse motion checks its
+sector; split wheel groups require all 16 sectors. The repository supplies no measured footprint,
+stopping distance, or verified wheel-to-sector model, so reduced-stop candidate comparisons and
+danger-increase claims are not available. The referenced `chase (4).zip` file is absent; the 10,000
+comparison is against the checked-in independent transcription only.
+
+No source files were moved or deleted. The four RP2350 compile targets include `line/` for regression,
+although LINE is not part of the selected competition stack. The exact rollback starting point is the
+baseline SHA above. The firmware was not flashed and no hardware was operated.
 
 See `PHASE1_STATUS_2026-11-27_JA.md` for the preceding baseline and current limitations. Re-run all test
 commands after subsequent source changes; this record only applies to the listed tested commit.

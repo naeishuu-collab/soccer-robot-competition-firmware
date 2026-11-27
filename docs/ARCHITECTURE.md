@@ -22,12 +22,16 @@ MAIN transmit values with MOTOR receive/target/applied command values. Applied P
 
 ## Active versus reference code
 
-At the audited baseline, MAIN/MOTOR compile with `ROBOT_UPGRADE=1`, `ROBOT_ZIP_TRACK=0`,
-`ROBOT_ZIP_COMPAT=0`; OpenMV uses `PROTOCOL=2`. That selects the expanded MAIN path on boot. Its current
-software tests do not certify hardware. `ZipChasePD` is the saved output reference; the new filtered
-candidate is disabled by default. Search, orbit and attack in `brain::Brain` are compile-gated and default
-off; direct approach/alignment remains available. `soccer_ir_main_line`, `chase_*`, and `legacy_before_chase` are separate
-historical/test sources, not the documented current flash target.
+At the requested baseline, MAIN/MOTOR compile with `ROBOT_UPGRADE=1`, `ROBOT_ZIP_TRACK=0`,
+`ROBOT_ZIP_COMPAT=0`; OpenMV uses `PROTOCOL=2`. This change makes `ROBOT_ZIP_TRACK=1` the default,
+so the top-level MAIN loop selects `chaseLoop()` before the expanded `upgradeLoop()`. The filtered PD
+candidate remains disabled. `ZipChasePD` is checked against an independent 10,000-input transcription;
+the original ZIP file is not checked in, so source equivalence is not established. Software tests do not
+certify hardware. `soccer_ir_main_line`, `chase_*`, and `legacy_before_chase` remain historical/test sources.
+
+The active chase path now allows a fresh camera-confirmed 0°/180° line escape without an IR reply.
+Other escape bearings still stop. See [STOP_CONDITIONS.md](STOP_CONDITIONS.md) for exact state gates and
+the conservative `zipPathClear()` rule.
 
 ## Single-controller limits
 
