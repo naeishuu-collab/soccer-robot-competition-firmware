@@ -19,9 +19,13 @@
 #define ROBOT_TELEMETRY 1
 #endif
 
-// The installed chase (4) IR and MOTOR use their original RS485 protocol.
+// Legacy ZIP motor protocol; default uses raw ZIP IR plus the omni DRIVE protocol.
 #ifndef ROBOT_ZIP_COMPAT
-#define ROBOT_ZIP_COMPAT 1
+#define ROBOT_ZIP_COMPAT 0
+#endif
+
+#ifndef ROBOT_RAW_IR
+#define ROBOT_RAW_IR 1
 #endif
 
 struct CameraState;
@@ -225,7 +229,10 @@ constexpr int16_t IR_FRONT_DEGREES = 0;
 constexpr int8_t IR_ANGLE_SIGN = -1;
 
 constexpr uint8_t BNO_ADDRESS = 0x28;
-constexpr bool BNO_ENABLED = false; // Set true after the BNO055 is available again.
+#ifndef ROBOT_BNO_ENABLED
+#define ROBOT_BNO_ENABLED 0
+#endif
+constexpr bool BNO_ENABLED = ROBOT_BNO_ENABLED;
 constexpr int8_t HEADING_TURN_SIGN = 1; // Verify direction with wheels raised.
 float headingReference = NAN;
 float headingCurrent = NAN;
@@ -411,20 +418,9 @@ void setup() {
     Wire.setSCL(5);
     Wire.begin();
     Wire.setClock(50000);
-    Wire.setTimeout(5);
-    Wire.beginTransmission(BNO_ADDRESS);
-    Wire.write(0x3D);
-    Wire.write(0x08); // IMUPLUS
-    Wire.endTransmission();
-    delay(30);
+    Wire.setTimeout(5, true);
   }
-  if (ROBOT_UPGRADE && BNO_ENABLED) {
-  Wire.setSDA(4);
-  Wire.setSCL(5);
-  Wire.begin();
-  Wire.setClock(50000);
-  Wire.setTimeout(5, true);
-  }
+
 }
 
 // ============================================================
@@ -510,6 +506,7 @@ void upgradeLoop() {
   static brain::CameraParser parser;
   static brain::CameraData cameraData;
   static brain::IrReceiver irFrame;
+  static IrReplyReceiver rawIrFrame;
   static brain::IrData irData;
   static brain::BnoSample bno;
   static brain::Output out;
@@ -517,6 +514,8 @@ void upgradeLoop() {
   static uint32_t lastPollMs = 0, lastDriveMs = 0, lastLogMs = 0, lastUs = 0, loopMaxUs = 0;
   static uint32_t pollUs = 0, irRoundTripUs = 0, cameraGapMaxMs = 0, brainMaxUs = 0;
   static bool waitingForIr = false, urgent = false;
+  static bool configured = false;
+  if (!configured) { robot.cfg.blindTracking = true; configured = true; }
 
   const uint32_t us = micros();
   if (lastUs && us - lastUs > loopMaxUs) loopMaxUs = us - lastUs;
@@ -534,7 +533,12 @@ void upgradeLoop() {
   while (Serial1.available()) {
     const uint8_t byte = Serial1.read();
     brain::IrData reply = irData;
-    if (waitingForIr && irFrame.push(byte, reply)) {
+    uint16_t rawAngle = 0, rawStrength = 0;
+    const bool received = waitingForIr && (ROBOT_RAW_IR
+      ? rawIrFrame.push(byte, rawAngle, rawStrength) : irFrame.push(byte, reply));
+    if (received) {
+      if (ROBOT_RAW_IR) { reply.angle = rawAngle; reply.strength = rawStrength;
+                          reply.confidence = rawStrength ? 100 : 0; reply.faults = 0; }
       reply.received = true;
       reply.angle = convertDirection(reply.angle);
       reply.stampMs = now;
@@ -557,6 +561,7 @@ void upgradeLoop() {
     out = robot.step(cameraData, irData, bno, millis());
     if (micros() - start > brainMaxUs) brainMaxUs = micros() - start;
     headingTurn = int8_t(out.turn);
+    if (holdStop) { out.direction = out.power = 0; out.turn = 0; out.tactic = brain::Tactic::SAFE_STOP; out.reason = "manual stop"; }
     sendDrive(sequence++, out.direction, out.power, out.avoid);
     lastDriveMs = now;
     urgent = false;
@@ -571,7 +576,7 @@ void upgradeLoop() {
     // Only a current IR detection is shown; predictions and old bearings are not sent as the ball.
     if (t.irLink && irData.strength && faults <= robot.cfg.irMaxFaults) {
       t.ball = irData.angle;
-      t.ballConfidence = irData.confidence;
+      t.ballConfidence = ROBOT_RAW_IR ? 0 : irData.confidence; // raw ZIP reply has no confidence field
       t.ballAgeMs = now - irData.stampMs;
     }
     t.direction = out.direction;
@@ -587,27 +592,32 @@ void upgradeLoop() {
                      brain::name(robot.heading.mode));
   }
   if (now - lastPollMs >= IR_POLL_INTERVAL_MS) {
-    const uint8_t poll[] = {0xA5, 0x5A, 0x02, 0xFD};
+    const uint8_t poll[] = {0xA5, 0x5A, uint8_t(ROBOT_RAW_IR ? 0x01 : 0x02), uint8_t(ROBOT_RAW_IR ? 0xFE : 0xFD)};
     irFrame.reset();
+    rawIrFrame.reset();
     sendRs485(poll, sizeof(poll));
     lastPollMs = millis();
     pollUs = micros();
     waitingForIr = true;
   }
-  if (now - lastLogMs >= 500 && Serial && Serial.availableForWrite() >= 240) {
+  static const char *loggedReason = "startup";
+  if (Serial && (strcmp(out.reason, loggedReason) != 0 || now - lastLogMs >= 1000) && Serial.availableForWrite() >= 64) {
+    Serial.printf("OMNI c2be6ff+fix %s hold=%u\n", *out.reason ? out.reason : "clear", unsigned(holdStop));
+    loggedReason = out.reason;
     lastLogMs = now;
-    Serial.printf("%s%s %s mode=%s%s dir=%u spd=%u turn=%d ball=%s %d c%u goal=%d\n",
-                  holdStop ? "HOLD " : "", brain::name(out.tactic), out.reason, brain::name(robot.heading.mode),
-                  robot.heading.disagreement ? "(mismatch)" : "", out.direction, out.power, out.turn,
-                  brain::name(robot.ball.state), int(robot.ball.bearing), robot.ball.confidence,
-                  isfinite(out.goal) ? int(out.goal) : -1);
-    Serial.printf("cam=%u ready=%d mask=%04x err=%lu gap=%lums ir c%u f%03x rtt=%luus bno=%d loop=%luus brain=%luus\n",
-                  unsigned(now - cameraData.receivedMs), int(cameraData.ready), cameraData.mask,
-                  static_cast<unsigned long>(parser.errors), static_cast<unsigned long>(cameraGapMaxMs),
-                  irData.confidence, irData.faults, static_cast<unsigned long>(irRoundTripUs), int(bno.ok),
-                  static_cast<unsigned long>(loopMaxUs), static_cast<unsigned long>(brainMaxUs));
-    loopMaxUs = brainMaxUs = cameraGapMaxMs = 0;
   }
+  static uint32_t detailMs = 0;
+  static uint8_t detailPage = 0;
+  if (Serial && now - detailMs >= 250 && Serial.availableForWrite() >= 64) {
+    switch (detailPage++ % 4) {
+      case 0: Serial.printf("cam=%lu ready=%u slow=%u esc=%u mask=%04x\n", (unsigned long)(cameraData.received ? now-cameraData.receivedMs : 0xffffffffUL), unsigned(cameraData.ready), unsigned(cameraData.slow), unsigned(cameraData.escaping), unsigned(cameraData.mask)); break;
+      case 1: Serial.printf("line=%u count=%u camErr=%lu gap=%lu\n", unsigned(cameraData.line), unsigned(cameraData.lineCount), (unsigned long)parser.errors, (unsigned long)cameraGapMaxMs); break;
+      case 2: Serial.printf("ir=%u/%u age=%lu bno=%u\n", unsigned(irData.angle), unsigned(irData.strength), (unsigned long)(irData.received ? now-irData.stampMs : 0xffffffffUL), unsigned(bno.ok)); break;
+      default: Serial.printf("drive=%u/%u turn=%d loop=%luus\n", unsigned(out.direction), unsigned(holdStop ? 0 : out.power), holdStop ? 0 : out.turn, (unsigned long)loopMaxUs); break;
+    }
+    detailMs = now;
+  }
+
 }
 
 void zipLoop() {
