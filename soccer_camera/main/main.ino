@@ -914,6 +914,8 @@ void chaseLoop() {
     txMs = now;
   }
   if (usbDiagnosticRequested && Serial && Serial.availableForWrite() >= 200) {
+    Serial.printf("[MAIN] fw=%s git=%s config=%s uptime_ms=%lu mode=CHASE_ONLY hold=%u\n",
+                  ROBOT_FW_VERSION, ROBOT_GIT_COMMIT, ROBOT_CONFIG_ID, (unsigned long)now, unsigned(holdStop));
     Serial.printf("[PD] valid=%u controller=%s angle=%u strength=%u P=%.1f D=%.1f turn=%d age_ms=%lu\n",
                   unsigned(freshIr && strength), ENABLE_EXPERIMENTAL_PD_FILTER ? "FILTERED_CANDIDATE" : "ZIP_REFERENCE",
                   unsigned(angle), unsigned(strength), pd.proportional(),
