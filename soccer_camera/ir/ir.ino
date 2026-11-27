@@ -23,8 +23,10 @@ bool verbose = false;  // USB 'v' toggles per-sensor output
 bool diagnosticRequested = false;
 uint32_t irRequests = 0, irReplies = 0, irRequestErrors = 0;
 uint32_t irLastSampleUs = 0, irMaxSampleUs = 0;
+uint32_t irLastAngleUs = 0, irSamplePeriodUs = 0, irLastSampleStartUs = 0;
 irx::Result lastIrResult;
 uint16_t lastSensorRaw[SENSOR_COUNT] = {};
+uint16_t lastSensorMask = 0;
 
 enum RequestState { WAIT_POLL, READ_POLL_2, READ_POLL_CMD, READ_POLL_END };
 RequestState requestState = WAIT_POLL;
@@ -46,6 +48,8 @@ void sampleAndReply() {
   // 旧プロトコルの1回分: 5ms測定 → センサー別回数を方向ベクトルへ合成 → MAINへ応答。
   for (uint8_t i = 0; i < SENSOR_COUNT; i++) detectCount[i] = 0;
   uint32_t startTime = micros();
+  if (irLastSampleStartUs) irSamplePeriodUs = startTime - irLastSampleStartUs;
+  irLastSampleStartUs = startTime;
   while ((uint32_t)(micros() - startTime) < SAMPLE_TIME_US) {
     for (uint8_t i = 0; i < SENSOR_COUNT; i++) {
       if (digitalRead(sensorPins[i]) == LOW) detectCount[i]++;
@@ -56,13 +60,17 @@ void sampleAndReply() {
   for (uint8_t i = 0; i < SENSOR_COUNT; ++i) lastSensorRaw[i] = detectCount[i];
 
   // 12方向の検出数を単位ベクトルに掛けて足すと、受光が強い方向へ合成ベクトルが向く。
+  const uint32_t angleStartUs = micros();
   int32_t vectorX = 0, vectorY = 0;
   uint32_t totalDetect = 0;
+  lastSensorMask = 0;
   for (uint8_t i = 0; i < SENSOR_COUNT; i++) {
+    if (detectCount[i]) lastSensorMask |= uint16_t(1u << i);
     totalDetect += detectCount[i];
     vectorX += (int32_t)detectCount[i] * cosTable[i];
     vectorY += (int32_t)detectCount[i] * sinTable[i];
   }
+  irLastAngleUs = micros() - angleStartUs;
   if (totalDetect > 65535) totalDetect = 65535;
 
   uint16_t direction = 0;
@@ -91,6 +99,8 @@ void sampleFiltered(bool reply) {
   for (uint8_t i = 0; i < SENSOR_COUNT; i++) detectCount[i] = 0;
   uint32_t samples = 0;
   const uint32_t startTime = micros();
+  if (irLastSampleStartUs) irSamplePeriodUs = startTime - irLastSampleStartUs;
+  irLastSampleStartUs = startTime;
   while ((uint32_t)(micros() - startTime) < SAMPLE_TIME_US) {
     for (uint8_t i = 0; i < SENSOR_COUNT; i++) {
       if (digitalRead(sensorPins[i]) == LOW) detectCount[i]++;
@@ -100,8 +110,11 @@ void sampleFiltered(bool reply) {
   irLastSampleUs = micros() - startTime;
   if (irLastSampleUs > irMaxSampleUs) irMaxSampleUs = irLastSampleUs;
   const irx::Result result = irFilter.update(detectCount, samples);
+  irLastAngleUs = micros() - startTime - irLastSampleUs;
   lastIrResult = result;
+  lastSensorMask = 0;
   for (uint8_t i = 0; i < SENSOR_COUNT; ++i) lastSensorRaw[i] = irFilter.raw(i);
+  for (uint8_t i = 0; i < SENSOR_COUNT; ++i) if (lastSensorRaw[i]) lastSensorMask |= uint16_t(1u << i);
   if (reply) {
     uint8_t frame[irx::kReplySize];
     irx::encode(result, frame);
@@ -125,10 +138,10 @@ void sampleFiltered(bool reply) {
       y += int32_t(irFilter.raw(i)) * sinTable[i];
     }
     const int raw = x || y ? (int(lroundf(atan2f(float(y), float(x)) * 57.29578f)) + 360) % 360 : -1;
-    Serial.printf("\n[IR] fw=%s git=%s uptime_ms=%lu raw_angle=%d angle=%u strength=%u confidence=%u valid=%u faults=%03x sample_us=%lu max_us=%lu req=%lu tx=%lu bad_request=%lu\n",
+    Serial.printf("\n[IR] fw=%s git=%s uptime_ms=%lu raw_angle=%d angle=%u strength=%u confidence=%u valid=%u faults=%03x active=%03x sample_us=%lu angle_us=%lu period_us=%lu max_sample_us=%lu req=%lu tx=%lu bad_request=%lu\n",
                   ROBOT_FW_VERSION, ROBOT_GIT_COMMIT, (unsigned long)millis(), raw, result.angle,
-                  result.strength, result.confidence, unsigned(result.confidence != 0), result.faults,
-                  (unsigned long)irLastSampleUs, (unsigned long)irMaxSampleUs,
+                  result.strength, result.confidence, unsigned(result.confidence != 0), result.faults, lastSensorMask,
+                  (unsigned long)irLastSampleUs, (unsigned long)irLastAngleUs, (unsigned long)irSamplePeriodUs, (unsigned long)irMaxSampleUs,
                   (unsigned long)irRequests, (unsigned long)irReplies, (unsigned long)irRequestErrors);
   }
 }
@@ -178,10 +191,11 @@ void loop() {
     if (command == 'i') diagnosticRequested = true;
   }
   if (diagnosticRequested && Serial && Serial.availableForWrite() >= 180) {
-    Serial.printf("[IR] fw=%s git=%s uptime_ms=%lu angle=%u strength=%u confidence=%u valid=%u faults=%03x sample_us=%lu max_us=%lu req=%lu tx=%lu bad_request=%lu raw=",
+    Serial.printf("[IR] fw=%s git=%s uptime_ms=%lu angle=%u strength=%u confidence=%u valid=%u faults=%03x active=%03x sample_us=%lu angle_us=%lu period_us=%lu max_sample_us=%lu req=%lu tx=%lu bad_request=%lu raw=",
                   ROBOT_FW_VERSION, ROBOT_GIT_COMMIT, (unsigned long)millis(), lastIrResult.angle,
                   lastIrResult.strength, lastIrResult.confidence, unsigned(lastIrResult.confidence != 0),
-                  lastIrResult.faults, (unsigned long)irLastSampleUs, (unsigned long)irMaxSampleUs,
+                  lastIrResult.faults, lastSensorMask, (unsigned long)irLastSampleUs, (unsigned long)irLastAngleUs,
+                  (unsigned long)irSamplePeriodUs, (unsigned long)irMaxSampleUs,
                   (unsigned long)irRequests, (unsigned long)irReplies, (unsigned long)irRequestErrors);
     for (uint8_t i = 0; i < SENSOR_COUNT; ++i) Serial.printf("%s%u", i ? "," : "", lastSensorRaw[i]);
     Serial.println("");

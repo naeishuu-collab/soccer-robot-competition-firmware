@@ -542,6 +542,8 @@ void upgradeLoop() {
   static bool waitingForIr = false, urgent = false;
   static bool configured = false;
   static uint8_t previousTactic = 0xff;
+  static uint8_t transitionFrom = 0xff;
+  static const char *transitionReason = "startup";
   static const char *previousStop = nullptr;
   static robotdiag::EventRing<16> events;
   static bool previousIrValid = false, previousCameraValid = false;
@@ -608,6 +610,8 @@ void upgradeLoop() {
     const uint8_t tactic = uint8_t(out.tactic);
     if (tactic != previousTactic) {
       events.push(now, robotdiag::EventKind::STATE, tactic);
+      transitionFrom = previousTactic;
+      transitionReason = out.reason;
       previousTactic = tactic;
     }
     if (out.reason != previousStop) {
@@ -677,14 +681,30 @@ void upgradeLoop() {
   if (usbDiagnosticRequested && Serial && Serial.availableForWrite() >= 220) {
     const uint32_t irAge = irData.received ? now - irData.stampMs : 0xffffffffUL;
     const uint32_t camAge = cameraData.received ? now - cameraData.receivedMs : 0xffffffffUL;
+    uint16_t conditions = 0;
+    if (holdStop) conditions |= 1u << 0;
+    if (!irValid) conditions |= 1u << 1;
+    if (irData.faults) conditions |= 1u << 2;
+    if (!irData.strength) conditions |= 1u << 3;
+    if (!cameraValid) conditions |= 1u << 4;
+    if (!cameraData.ready) conditions |= 1u << 5;
+    if (cameraData.slow) conditions |= 1u << 6;
+    if (cameraData.escaping || cameraData.lineCount) conditions |= 1u << 7;
+    if (!cameraData.mask) conditions |= 1u << 8;
     Serial.printf("[MAIN] fw=%s git=%s uptime_ms=%lu mode=%s state=%s reason=%s hold=%u\n",
                   ROBOT_FW_VERSION, ROBOT_GIT_COMMIT, (unsigned long)now, brain::name(robot.heading.mode),
                   brain::name(out.tactic), *out.reason ? out.reason : "NONE", unsigned(holdStop));
+    Serial.printf("[STATE] previous=%u current=%u transition_reason=%s [PD] active=0 (upgrade path)\n",
+                  unsigned(transitionFrom), unsigned(out.tactic), transitionReason);
     Serial.printf("[IR] valid=%u angle=%u strength=%u age_ms=%lu [CAMERA] valid=%u ready=%u slow=%u age_ms=%lu line=%u mask=%04x\n",
                   unsigned(irValid), unsigned(irData.angle),
                   unsigned(irData.strength), (unsigned long)irAge,
                   unsigned(cameraData.received), unsigned(cameraData.ready), unsigned(cameraData.slow),
                   (unsigned long)camAge, unsigned(cameraData.lineCount), unsigned(cameraData.mask));
+    Serial.printf("[LINE] direction=%u distance_cm=%u BNO=%u/%u [FEATURES] upgrade=%u raw_ir=%u zip_pd=%u zip_compat=%u telemetry=%u\n",
+                  unsigned(cameraData.line), unsigned(cameraData.lineCm), unsigned(BNO_ENABLED), unsigned(bno.ok),
+                  unsigned(ROBOT_UPGRADE), unsigned(ROBOT_RAW_IR), unsigned(ROBOT_ZIP_TRACK),
+                  unsigned(ROBOT_ZIP_COMPAT), unsigned(ROBOT_TELEMETRY));
     Serial.printf("[MOTOR_TX] direction=%u power=%u turn=%d avoid=%u [HISTORY] count=%u overwritten=%lu\n",
                   unsigned(out.direction), unsigned(holdStop ? 0 : out.power), int(holdStop ? 0 : out.turn),
                   unsigned(out.avoid), unsigned(events.size()), (unsigned long)events.overwritten());
@@ -692,6 +712,9 @@ void upgradeLoop() {
                   (unsigned long)irPolls, (unsigned long)irReplies, (unsigned long)irTimeouts,
                   (unsigned long)irRoundTripUs, (unsigned long)parser.errors, (unsigned long)cameraGapMaxMs,
                   (unsigned long)loopMaxUs, (unsigned long)brainMaxUs);
+    Serial.printf("[GOAL] yellow_valid=%u yellow_deg=%.1f yellow_conf=%u blue_valid=%u blue_deg=%.1f blue_conf=%u [NOT_READY_MASK] %03x\n",
+                  unsigned(cameraData.yellow.seen), cameraData.yellow.bearing, cameraData.yellow.confidence,
+                  unsigned(cameraData.blue.seen), cameraData.blue.bearing, cameraData.blue.confidence, conditions);
     const size_t first = events.size() > 6 ? events.size() - 6 : 0;
     for (size_t i = first; i < events.size(); ++i) {
       const robotdiag::Event &event = events.oldest(i);
@@ -829,6 +852,8 @@ void chaseLoop() {
   static bool waiting = false, haveIr = false, newReply = false;
   static uint16_t angle = 0, strength = 0;
   static int16_t pwm[4] = {};
+  static int16_t pdCalculated[4] = {}, safetyPWM[4] = {}, sentPWM[4] = {};
+  static uint32_t pdStampMs = 0;
   static uint8_t sequence = 0;
   telemetry.pump(cameraSerial);
   while (cameraSerial.available()) parser.push(uint8_t(cameraSerial.read()), millis(), cam);
@@ -845,18 +870,30 @@ void chaseLoop() {
   const bool freshCam = cam.received && uint32_t(now - cam.receivedMs) <= 200 && cam.ready && !cam.slow;
   const bool freshIr = haveIr && uint32_t(now - irMs) <= IR_REPLY_TIMEOUT_MS;
   const bool allowed = !holdStop && freshCam && freshIr && strength && !cam.escaping;
+  const char *stopReason = "NONE";
+  if (holdStop) stopReason = "MANUAL_STOP";
+  else if (!freshCam) stopReason = "CAMERA_TIMEOUT";
+  else if (!cam.ready) stopReason = "CAMERA_NOT_READY";
+  else if (cam.slow) stopReason = "CAMERA_SLOW";
+  else if (cam.escaping) stopReason = "LINE_DETECTED";
+  else if (!freshIr) stopReason = "IR_TIMEOUT";
+  else if (!strength) stopReason = "BALL_LOST";
   if (!allowed) {
     pd.reset();
     for (int i = 0; i < 4; ++i) pwm[i] = 0;
     newReply = false;
   } else if (newReply) {
     pd.update(angle, strength, now, pwm);
+    for (int i = 0; i < 4; ++i) pdCalculated[i] = pwm[i];
+    pdStampMs = now;
     newReply = false;
   }
   if (allowed && !zipPathClear(cam.mask, pwm)) {
+    stopReason = "NO_SAFE_DIRECTION";
     pd.reset();
     for (int i = 0; i < 4; ++i) pwm[i] = 0;
   }
+  for (int i = 0; i < 4; ++i) safetyPWM[i] = pwm[i];
   if (uint32_t(now - txMs) >= 20) {
     int16_t output[4] = {pwm[0], pwm[1], pwm[2], pwm[3]};
     if (!holdStop && freshCam && freshIr && cam.escaping &&
@@ -868,7 +905,21 @@ void chaseLoop() {
     for (int i = 0; i < 4; ++i)
       output[i] = int16_t(constrain(int(output[i]), -ROBOT_TEST_MAX_PWM, ROBOT_TEST_MAX_PWM));
     sendPwm(sequence++, output);
+    for (int i = 0; i < 4; ++i) sentPWM[i] = output[i];
     txMs = now;
+  }
+  if (usbDiagnosticRequested && Serial && Serial.availableForWrite() >= 200) {
+    Serial.printf("[PD] valid=%u angle=%u strength=%u P=%.1f D=%.1f turn=%d age_ms=%lu\n",
+                  unsigned(freshIr && strength), unsigned(angle), unsigned(strength), pd.proportional(),
+                  pd.derivative(), pd.turn(), (unsigned long)(pdStampMs ? now - pdStampMs : 0xffffffffUL));
+    Serial.printf("[PWM_CALC] %d,%d,%d,%d [PWM_SAFE] %d,%d,%d,%d [PWM_TX] %d,%d,%d,%d\n",
+                  pdCalculated[0], pdCalculated[1], pdCalculated[2], pdCalculated[3],
+                  safetyPWM[0], safetyPWM[1], safetyPWM[2], safetyPWM[3],
+                  sentPWM[0], sentPWM[1], sentPWM[2], sentPWM[3]);
+    Serial.printf("[STOP_REASON] %s camera_age_ms=%lu ir_age_ms=%lu mask=%04x line=%u\n", stopReason,
+                  (unsigned long)(cam.received ? now - cam.receivedMs : 0xffffffffUL),
+                  (unsigned long)(haveIr ? now - irMs : 0xffffffffUL), unsigned(cam.mask), unsigned(cam.lineCount));
+    usbDiagnosticRequested = false;
   }
   if (uint32_t(now - pollMs) >= IR_POLL_INTERVAL_MS) {
     const uint8_t poll[] = {0xA5, 0x5A, 0x01, 0xFE};

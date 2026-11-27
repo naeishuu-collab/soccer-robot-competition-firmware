@@ -6,17 +6,17 @@
 
 | 基板 | 操作 | 実際の動作 |
 |---|---|---|
-| MAIN | `i`（1文字） | build識別子、MAIN行動/停止理由、IR/カメラ鮮度、方向・出力・旋回、MAIN内RS-485統計とイベント履歴を表示 |
+| MAIN | `i`（1文字） | build識別子、行動/停止理由/未成立条件mask、IR/カメラ鮮度、ゴール/白線、方向・出力・旋回、RS-485統計とイベント履歴を表示。ZIP追尾経路ではPD項とPWM段階比較も表示 |
 | MAIN | `d`または`s` | 停止を保持 |
 | MAIN | `g` | 停止保持を解除 |
 | MAIN | `v` | viewer用VIZ行を切り替え |
-| IR | `i` | 最後に受けた12入力の計数値、角度・強度、サンプル時間、要求/応答/不正要求数を表示 |
+| IR | `i` | 最後に受けた12入力の計数値とactive mask、角度・強度、サンプル時間/周期/角度処理時間、要求/応答/不正要求数を表示 |
 | IR | `v` | filtered要求時の連続診断表示を切り替え。raw要求の通常構成では使わない |
 | MOTOR | `i` + Enter | RX/CRC/BAD/timeout/age/target/current/appliedを表示。appliedはHブリッジへのPWM指令で、車輪回転センサーの測定値ではない |
 | MOTOR | `diag` + Enter | 既存の車輪浮上用モーター診断に入る。詳細は`docs/UPGRADE_2026-11-26_JA.md`のモーター測定節 |
 | OpenMV | `camera_calibration.py`の`DEBUG_STATS = True` | OpenMV USBコンソールへ2秒周期でFPS、capture/line、段階別時間、白線/ゴール状態、校正識別子を表示 |
 
-MAIN/IRの`i`は行末不要です。MOTORの`i`は行末が必要です。USB未接続時に診断出力は保存されず、フラッシュへも書き込みません。表示に出る`git=unembedded`はビルドにSHAを注入していない状態です。
+MAIN/IRの`i`は行末不要です。MOTORの`i`は行末が必要です。USB未接続時に診断出力は保存されず、フラッシュへも書き込みません。`tests/compile_arduino.ps1`経由のArduinoビルドはHEAD SHAを埋め込みます。手動ビルドやOpenMVの表示が`git=unembedded`なら、SHA未設定です。OpenMVは`camera_calibration.py`で識別子を更新します。
 
 通常時の例（センサー配置や時刻で値は変わります）:
 
@@ -50,7 +50,7 @@ MAIN/IRの`i`は行末不要です。MOTORの`i`は行末が必要です。USB�
 1. IRの`i`で12入力値と`angle`を確認し、ボールを機体の前後左右へ置いて方位を記録します。
 2. MAINの`i`でIR角度・鮮度・強度と送信方向を確認します。IRのセンサー順や角度補正を確認するまで変更しないでください。
 3. `soccer_camera/tests/test_zip_chase_pd.cpp`はZIP基準PDの10,000時系列入力比較です。これはセンサー極性や実機応答を検証しません。
-4. 現行通常経路はZIP直接PWMの`chaseLoop()`ではなく拡張`upgradeLoop()`です。拡張制御とZIP PDは同じ方式として扱わないでください。
+4. 現行通常経路はZIP直接PWMの`chaseLoop()`ではなく拡張`upgradeLoop()`です。MAINの`i`表示で`PD active=0`なら拡張経路です。拡張制御とZIP PDは同じ方式として扱わないでください。
 
 ### 白線付近で止まる／白線を越える
 

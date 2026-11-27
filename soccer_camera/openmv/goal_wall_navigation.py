@@ -603,7 +603,12 @@ def main_loop(send_uart=True, display=False):
     """撮影→検出→安全方向決定→必要ならMAINへ送信、をフレームごとに繰り返す。"""
     # 初期化後、各フレームで「撮影→床/境界走査→ゴール検出→判断→UART/表示」を実行。
     init_camera()
-    frame = sensor.snapshot()
+    capture_errors = 0
+    try:
+        frame = sensor.snapshot()
+    except OSError as error:
+        print("[CAMERA_ERROR] first capture failed: {!r}".format(error))
+        return
     mirror = Mirror(frame.width(), frame.height(), frame)
     print("mirror {} center=({}, {}) ring=({}, {})".format(
         "detected" if mirror.detected else "configured", mirror.cx, mirror.cy, mirror.inner, mirror.outer))
@@ -647,6 +652,7 @@ def main_loop(send_uart=True, display=False):
     last_report = last_tx
     sequence = 0
     frames = shown_frames = 0
+    last_capture_error_report = last_tx
     shown = {"BLUE": (False, 0), "YELLOW": (False, 0)}
     loop_us = None
     while True:
@@ -657,7 +663,16 @@ def main_loop(send_uart=True, display=False):
             loop_us = tick
         started = time.ticks_ms()
         # 先に床/白線を評価して安全指令を作る。ゴール表示など重い処理より走行許可を優先する。
-        img = sensor.snapshot()
+        try:
+            img = sensor.snapshot()
+        except OSError as error:
+            capture_errors += 1
+            if (getattr(cfg, "DEBUG_STATS", False) and
+                    time.ticks_diff(started, last_capture_error_report) >= 1000):
+                print("[CAMERA_ERROR] count={} last={!r}".format(capture_errors, error))
+                last_capture_error_report = started
+            time.sleep_ms(10)
+            continue
         captured = time.ticks_ms() if vision else started
         if stats is not None:
             shot = time.ticks_us()
@@ -723,14 +738,15 @@ def main_loop(send_uart=True, display=False):
             shown_frames, last_report = frames, now
             if vision is not None:
                 # Repeated, because the startup lines scroll away: what is actually running on the camera.
-                print("[CAMERA] fw={} git={} ready={} setup={} protocol={} target={} exposure_us={} gain_db={}".format(
+                print("[CAMERA] fw={} git={} ready={} setup={} protocol={} target={} exposure_us={} gain_db={} capture_errors={}".format(
                     getattr(cfg, "FIRMWARE_VERSION", "unknown"), getattr(cfg, "GIT_COMMIT", "unembedded"),
                     int(setup_reason is None and mirror.ring_ready), setup_reason, getattr(cfg, "PROTOCOL", 1),
                     getattr(cfg, "TARGET_GOAL", "unset"), getattr(cfg, "EXPOSURE_US", "auto"),
-                    getattr(cfg, "GAIN_DB", "auto")))
-                print("cfg scan={} VISUALIZE={} GOAL_DEBUG={} DEBUG_STATS={} FORCE_FLOOR_OK={}".format(
+                    getattr(cfg, "GAIN_DB", "auto"), capture_errors))
+                print("cfg scan={} VISUALIZE={} GOAL_DEBUG={} DEBUG_STATS={} FORCE_FLOOR_OK={} features={}".format(
                     "fast" if scanner is not None else "reference", int(display), int(bool(debug_goals)),
-                    int(bool(getattr(cfg, "DEBUG_STATS", False))), int(floor_forced())))
+                    int(bool(getattr(cfg, "DEBUG_STATS", False))), int(floor_forced()),
+                    "LINE+GOAL" if vision is not None else "LINE"))
                 print("ms avg/max/p95", stats.report())
                 print(vision.timing, vision.status())
                 if mirror.rays:

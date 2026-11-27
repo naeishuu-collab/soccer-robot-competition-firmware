@@ -3,10 +3,10 @@
 ## 実装済み
 
 - `soccer_camera/libraries/RobotDiagnostics/src/Diagnostics.h`: 共通バージョン/ビルド識別子、停止理由enum、固定長イベントリングを追加。履歴はRAMのみで、容量超過時は古い記録を上書きする。
-- MAIN: `i`で拡張経路の停止理由・状態・IR/カメラage・安全mask・送信方向/出力/旋回・IR polling/応答/timeout・RTT・カメラparser errors・制御処理時間と直近イベントを表示。状態/停止理由、センサー有効性、大きな出力変化を16件記録。
-- IR: `i`で最後のサンプル12個、ボール方位/強度/valid、サンプル時間、要求・応答・不正要求数を表示。既存raw検出とfiltered処理は変更していない。
+- MAIN: `i`で拡張経路の停止理由・未成立条件mask・現在/直前状態・IR/カメラage・ゴール/白線・安全mask・送信方向/出力/旋回・IR polling/応答/timeout・RTT・カメラparser errors・制御処理時間と直近イベントを表示。状態/停止理由、センサー有効性、大きな出力変化を16件記録。ZIP PD経路の診断ビルドではP/D、計算PWM、安全後PWM、送信PWMを表示する。標準拡張経路ではPD非使用と明記。
+- IR: `i`で最後のサンプル12個とactive mask、ボール方位/強度/valid、サンプル時間・周期・角度処理時間、要求・応答・不正要求数を表示。既存raw検出とfiltered処理は変更していない。
 - MOTOR: `i`+Enterで既存通信統計と目標/現在/適用PWM、timeout/reverse wait/ramp状態を表示。停止遷移を16件記録。適用PWMはHブリッジ向け指令値であり、車輪回転検出値ではない。
-- OpenMV: 既存`DEBUG_STATS=True`経路にfirmware識別子、カメラ/ミラー準備状態、校正モード、ターゲット色、露出/gain、機能状態を追加表示。既存FPSと段階別avg/max/p95、白線mask/escape、黄/青ゴール診断を再利用。
+- OpenMV: 既存`DEBUG_STATS=True`経路にfirmware識別子、カメラ/ミラー準備状態、校正モード、ターゲット色、露出/gain、撮像失敗数、機能状態を追加表示。OSErrorによる撮像失敗は回数を保持して安全側で次フレームを待つ。既存FPSと段階別avg/max/p95、白線mask/escape、黄/青ゴール診断を再利用。
 - `docs/DEBUG_GUIDE.md`: 実在する操作だけを記載した初動手順を追加。
 
 ## 検証
@@ -21,9 +21,9 @@
 
 ## 残作業と制限
 
-Phase 1は**PARTIAL**。診断行の全項目を各基板へそろえた状態ではない。OpenMVの撮像例外回復・UART送信失敗数、IRの詳細通信エラー分類、MAINの全停止条件ビットマスク、PDのP/D分離表示、MAINでのMOTOR適用状態受信は未実装。MOTOR→MAINの返信はバス競合と互換性を検証していないため追加していない。CSV/JSON Linesは未実装。
+Phase 1は**PARTIAL**。診断行の全項目を各基板へそろえた状態ではない。OpenMVのUART送信失敗数、IRの詳細通信エラー分類、MAINでのMOTOR適用状態受信は未実装。PDのP/D表示はZIP追尾経路に限り、標準拡張経路はPDを使用しない。MOTOR→MAINの返信はバス競合と互換性を検証していないため追加していない。CSV/JSON Linesは未実装。
 
-共通`ROBOT_GIT_COMMIT`はArduino compiler defineで注入しない場合`unembedded`と表示する。OpenMVは`camera_calibration.py`内の識別子を手動更新する必要がある。診断自体が実機の安全性や旋回性能を保証するわけではない。
+Arduinoコンパイルスクリプトは実行時のHEAD SHAを一時ヘッダー経由で各スケッチへ埋め込む。スクリプトを使わない手動ビルドでは`unembedded`と表示する。OpenMVは`camera_calibration.py`内の識別子を手動更新する必要がある。診断自体が実機の安全性や旋回性能を保証するわけではない。
 
 ## 判定
 

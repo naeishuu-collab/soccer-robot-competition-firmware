@@ -133,6 +133,9 @@ uint8_t frameCrc(const uint8_t *frame) {
 
 class FrameReceiver {
 public:
+  uint32_t bytesReceived() const { return bytesReceived_; }
+  uint32_t validFrames() const { return validFrames_; }
+  uint32_t framingErrors() const { return framingErrors_; }
   bool receive(uint8_t *output) {
     // UARTを読みながら開始byteで同期し直し、途中欠落/不正byte/CRC不一致を捨てる。
     while (Serial1.available() > 0) {
@@ -141,9 +144,11 @@ public:
       if (used > 0 &&
           now - lastByteUs > RX_TIMEOUT_US) {
         used = 0;
+        ++framingErrors_;
       }
 
       const uint8_t value = Serial1.read();
+      ++bytesReceived_;
       lastByteUs = now;
 
       if (value == FRAME_START) {
@@ -153,6 +158,7 @@ public:
       }
 
       if (value >= 0x80 || used == 0) {
+        if (value != FRAME_START) ++framingErrors_;
         used = 0;
         continue;
       }
@@ -164,6 +170,7 @@ public:
 
         if (frameCrc(buffer) ==
             buffer[FRAME_SIZE - 1]) {
+          ++validFrames_;
           memcpy(output, buffer, FRAME_SIZE);
           return true;
         }
@@ -179,6 +186,7 @@ private:
   uint8_t buffer[FRAME_SIZE] = {};
   uint8_t used = 0;
   uint32_t lastByteUs = 0;
+  uint32_t bytesReceived_ = 0, validFrames_ = 0, framingErrors_ = 0;
 };
 
 FrameReceiver receiver;
@@ -495,12 +503,15 @@ void printDebug() {
   const int len = snprintf(
       line,
       sizeof(line),
-      "MD RX=%lu SEQ=%u CRC=%lu BAD=%lu "
+      "MD RX=%lu FRAME_OK=%lu RXB=%lu FRAME_ERR=%lu SEQ=%u CRC=%lu BAD=%lu "
       "TIMEOUT=%lu AGE=%lums STATUS=%s "
       "DIR=%u POWER=%u "
       "TARGET=%d,%d,%d,%d "
       "PWM=%d,%d,%d,%d APPLIED=%d,%d,%d,%d\n",
       static_cast<unsigned long>(receivedFrames),
+      static_cast<unsigned long>(receiver.validFrames()),
+      static_cast<unsigned long>(receiver.bytesReceived()),
+      static_cast<unsigned long>(receiver.framingErrors()),
       unsigned(lastSequence),
       static_cast<unsigned long>(crcErrors),
       static_cast<unsigned long>(invalidFrames),
