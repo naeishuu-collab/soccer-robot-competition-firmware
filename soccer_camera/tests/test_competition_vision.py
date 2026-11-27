@@ -123,6 +123,16 @@ class PacketWriterTests(unittest.TestCase):
         self.assertEqual(tx.last_error, "UART_NO_PROGRESS")
         self.assertEqual(tx.failed, 2)
 
+    def test_camera_csv_schema_is_fixed_and_reports_processing_stages(self):
+        header = nav.CAMERA_CSV_FIELDS
+        values = ["CAMERA"] + [0] * (len(header) - 1)
+        row = nav.format_camera_csv(values)
+        self.assertEqual(len(row.split(",")), len(header))
+        for field in ("fw", "git", "config", "scan_avg_ms", "goal_p95_ms", "uart_max_ms", "tx_partial"):
+            self.assertIn(field, header)
+        with self.assertRaises(ValueError):
+            nav.format_camera_csv(values[:-1])
+
 
 class RecognitionTests(unittest.TestCase):
     def test_distance_table_never_extrapolates(self):

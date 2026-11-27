@@ -578,6 +578,26 @@ def read_telemetry(uart, link, now):
         link.feed(uart.read(min(waiting, 32)) or b"", now)
 
 
+CAMERA_CSV_FIELDS = tuple(("record,uptime_ms,fps,capture_ms,line_ms,ready,floor_ok,mask,escape_deg,"
+                          "yellow_deg,yellow_conf,blue_deg,blue_conf,capture_errors,fw,git,config,"
+                          "tx_attempts,tx_complete,tx_partial,tx_failed,tx_unknown,tx_expired,tx_bytes,"
+                          "tx_pending,tx_offset,tx_last,capture_avg_ms,capture_max_ms,capture_p95_ms,"
+                          "scan_avg_ms,scan_max_ms,scan_p95_ms,goal_avg_ms,goal_max_ms,goal_p95_ms,"
+                          "guard_avg_ms,guard_max_ms,guard_p95_ms,uart_avg_ms,uart_max_ms,uart_p95_ms,"
+                          "total_avg_ms,total_max_ms,total_p95_ms").split(","))
+
+
+def format_camera_csv(fields):
+    if len(fields) != len(CAMERA_CSV_FIELDS):
+        raise ValueError("camera CSV field count mismatch")
+    return ",".join(str(value) for value in fields)
+
+
+def diagnostic_csv_values(stats, name):
+    result = stats.summary(name)
+    return tuple(round(value, 1) for value in result) if result is not None else (-1, -1, -1)
+
+
 class LatestPacketTx:
     """Bounded nonblocking writer: one in-flight frame, never a telemetry queue."""
     def __init__(self, uart, ticks_diff, max_age_ms=100):
@@ -801,13 +821,19 @@ def main_loop(send_uart=True, display=False):
                 else:
                     tx_values = (uart_tx_attempts, uart_tx_complete, uart_tx_partial, uart_tx_failed,
                                  uart_tx_unknown, 0, uart_tx_bytes, 0, 0, uart_tx_last)
+                stage_values = tuple(value for name in ("capture", "scan", "goal", "guard", "uart", "total")
+                                     for value in diagnostic_csv_values(stats, name))
                 if not csv_header_sent:
-                    print("record,uptime_ms,fps,capture_ms,line_ms,ready,floor_ok,mask,escape_deg,yellow_deg,yellow_conf,blue_deg,blue_conf,capture_errors,tx_attempts,tx_complete,tx_partial,tx_failed,tx_unknown,tx_expired,tx_bytes,tx_pending,tx_offset,tx_last")
+                    print(",".join(CAMERA_CSV_FIELDS))
                     csv_header_sent = True
-                print("CAMERA,{},{:.1f},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}".format(
-                    now, fps, capture_ms, line_ms, int(ready), int(floor_ok), mask,
-                    -1 if escape is None else int(escape), -1 if yellow[0] is None else int(yellow[0]),
-                    yellow[2], -1 if blue[0] is None else int(blue[0]), blue[2], capture_errors, *tx_values))
+                values = ["CAMERA", now, round(fps, 1), capture_ms, line_ms, int(ready), int(floor_ok), mask,
+                          -1 if escape is None else int(escape), -1 if yellow[0] is None else int(yellow[0]),
+                          yellow[2], -1 if blue[0] is None else int(blue[0]), blue[2], capture_errors,
+                          getattr(cfg, "FIRMWARE_VERSION", "unknown"), getattr(cfg, "GIT_COMMIT", "unembedded"),
+                          getattr(cfg, "CONFIG_ID", "unknown")]
+                values.extend(tx_values)
+                values.extend(stage_values)
+                print(format_camera_csv(values))
             else:
                 print("fps={:.1f} capture_ms={} line_ms={}".format(fps, capture_ms, line_ms))
             if vision is not None and getattr(cfg, "DEBUG_FORMAT", "TEXT") != "CSV":

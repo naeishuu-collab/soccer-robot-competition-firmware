@@ -17,7 +17,7 @@
 |---|---|
 | Arduino CLI compile（MAIN RP2354B / IR RP2354A / LINE / MOTOR RP2354A） | VERIFIED: 4対象すべてコンパイル成功。アップロードなし。LINEは既存スクリプトがコンパイルするだけで、競技構成への接続・書き込みはしていない |
 | ホストC++ suite | VERIFIED:全21実行ファイル成功。ZIP PDは10,000比較一致、core 65ケース/5,165 checks、integration 14シナリオ/107 checks、loop/compatibility群失敗0 |
-| Python unit tests | VERIFIED: 109 tests成功（UART部分送信・期限切れ・失敗注入を追加） |
+| Python unit tests | VERIFIED: 110 tests成功（UART部分送信・期限切れ・失敗注入・CSV schemaを含む） |
 | Python syntax (`compileall`) | VERIFIED |
 | 実機/USBログ/PWM/RS-485/OpenMV FPS | PENDING_HARDWARE: 今回は未実施 |
 

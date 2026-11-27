@@ -9,7 +9,8 @@ freshness budget. `fast_scan.py` is used only after startup/self-check condition
 scan remains available. RGB classification caching and bounded stage-time summaries already exist.
 
 This branch adds UART write attempt/completion/partial/failure/expiry/unknown counters and opt-in two-second
-CSV-only diagnostics. It does not change exposure, gain, LAB thresholds, mirror geometry, or floor calibration.
+CSV records with firmware/config identity and capture/scan/goal/guard/UART/total timing summaries. Startup
+messages remain textual. It does not change exposure, gain, LAB thresholds, mirror geometry, or floor calibration.
 
 ## Software evidence
 
@@ -17,7 +18,7 @@ CSV-only diagnostics. It does not change exposure, gain, LAB thresholds, mirror 
   fixed telemetry budget, stage reporting, and frame freshness.
 - `test_competition_vision.py`: per-color scheduling, line freshness priority, goal shapes/bearings,
   tracking expiry, UART partial writes, expiry and injected OSError/no-progress.
-- Python syntax and 109 Python tests pass on host.
+- Python syntax and 110 Python tests pass on host.
 
 ## Limits
 
