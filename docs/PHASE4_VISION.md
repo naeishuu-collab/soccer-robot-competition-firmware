@@ -8,8 +8,8 @@ checks one goal color per selected interval and skips/defers goal work when the 
 freshness budget. `fast_scan.py` is used only after startup/self-check conditions; otherwise the reference
 scan remains available. RGB classification caching and bounded stage-time summaries already exist.
 
-This branch adds UART write attempt/completion/partial/failure/expiry counters and opt-in two-second CSV
-diagnostics. It does not change exposure, gain, LAB thresholds, mirror geometry, or floor calibration.
+This branch adds UART write attempt/completion/partial/failure/expiry/unknown counters and opt-in two-second
+CSV-only diagnostics. It does not change exposure, gain, LAB thresholds, mirror geometry, or floor calibration.
 
 ## Software evidence
 

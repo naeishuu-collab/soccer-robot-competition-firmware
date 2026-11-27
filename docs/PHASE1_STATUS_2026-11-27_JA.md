@@ -7,7 +7,7 @@
 - IR: `i`で最後のサンプル12個とactive mask、ボール方位/強度/valid、サンプル時間・周期・角度処理時間、要求・応答・不正要求数を表示。既存raw検出とfiltered処理は変更していない。
 - MOTOR: `i`+Enterで既存通信統計と目標/現在/適用PWM、timeout/reverse wait/ramp状態を表示。停止遷移を16件記録。適用PWMはHブリッジ向け指令値であり、車輪回転検出値ではない。
 - OpenMV: 既存`DEBUG_STATS=True`経路にfirmware識別子、カメラ/ミラー準備状態、校正モード、ターゲット色、露出/gain、撮像失敗数、機能状態を追加表示。OSErrorによる撮像失敗は回数を保持して安全側で次フレームを待つ。既存FPSと段階別avg/max/p95、白線mask/escape、黄/青ゴール診断を再利用。
-- OpenMV送信診断: `LatestPacketTx`が試行・完了・部分送信・例外/進捗なし・部分フレーム期限切れ・送信バイト数を保持し、`DEBUG_STATS`で表示する。既存の同期送信経路も戻り値/例外を集計する。`DEBUG_FORMAT="CSV"`は2秒間隔のヘッダー付き診断行を出力する。送信失敗はMAINに古い走行情報を送らず、既存の期限切れ判定で停止側へ扱う。
+- OpenMV送信診断: `LatestPacketTx`が試行・完了・部分送信・例外/進捗なし・部分フレーム期限切れ・送信バイト数を保持し、`DEBUG_STATS`で表示する。既存の同期送信経路も戻り値/例外/戻り値不明を区別する。V2時の`DEBUG_FORMAT="CSV"`は2秒間隔でCSVヘッダーと行だけを出力する。送信失敗はMAINに新しい走行情報を送らず、MAIN側の期限切れ判定で停止側へ扱う。
 - 共通構成ID: Arduino各基板に`ROBOT_CONFIG_ID`とビルドIDを表示し、OpenMVの`CONFIG_ID`と合わせる。OpenMVのGIT SHAはカメラへ手動設定する方式のまま。
 - `docs/DEBUG_GUIDE.md`: 実在する操作だけを記載した初動手順を追加。
 

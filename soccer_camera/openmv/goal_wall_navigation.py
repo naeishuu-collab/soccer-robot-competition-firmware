@@ -677,11 +677,11 @@ def main_loop(send_uart=True, display=False):
     uart = (pyb.UART(3, 115200 if vision else 9600, timeout=0, timeout_char=0)
             if send_uart and nonblocking else pyb.UART(3, 115200 if vision else 9600) if send_uart else None)
     writer = LatestPacketTx(uart, time.ticks_diff) if uart is not None and nonblocking else None
-    uart_tx_attempts = uart_tx_complete = uart_tx_partial = uart_tx_failed = uart_tx_bytes = 0
+    uart_tx_attempts = uart_tx_complete = uart_tx_partial = uart_tx_failed = uart_tx_unknown = uart_tx_bytes = 0
     uart_tx_last = "NONE"
 
     def transmit(packet, now):
-        nonlocal uart_tx_attempts, uart_tx_complete, uart_tx_partial, uart_tx_failed, uart_tx_bytes, uart_tx_last
+        nonlocal uart_tx_attempts, uart_tx_complete, uart_tx_partial, uart_tx_failed, uart_tx_unknown, uart_tx_bytes, uart_tx_last
         if writer is not None:
             done = writer.send(packet, now)
             return done
@@ -694,7 +694,7 @@ def main_loop(send_uart=True, display=False):
             return False
         if count is None:
             # Some blocking UART implementations do not report a byte count.
-            uart_tx_complete += 1
+            uart_tx_unknown += 1
             uart_tx_last = "COUNT_UNAVAILABLE"
             return True
         uart_tx_bytes += count
@@ -796,21 +796,21 @@ def main_loop(send_uart=True, display=False):
                 ready, floor_ok, mask, escape, nearest, yellow, blue = vision.last or (False, False, 0, None, None, (None, None, 0, 0, 255), (None, None, 0, 0, 255))
                 if writer is not None:
                     tx_values = (writer.attempts, writer.completed, writer.partial, writer.failed,
-                                 writer.expired, writer.bytes_written, int(writer.packet is not None),
+                                 0, writer.expired, writer.bytes_written, int(writer.packet is not None),
                                  writer.offset, writer.last_error)
                 else:
                     tx_values = (uart_tx_attempts, uart_tx_complete, uart_tx_partial, uart_tx_failed,
-                                 0, uart_tx_bytes, 0, 0, uart_tx_last)
+                                 uart_tx_unknown, 0, uart_tx_bytes, 0, 0, uart_tx_last)
                 if not csv_header_sent:
-                    print("record,uptime_ms,fps,capture_ms,line_ms,ready,floor_ok,mask,escape_deg,yellow_deg,yellow_conf,blue_deg,blue_conf,capture_errors,tx_attempts,tx_complete,tx_partial,tx_failed,tx_expired,tx_bytes,tx_pending,tx_offset,tx_last")
+                    print("record,uptime_ms,fps,capture_ms,line_ms,ready,floor_ok,mask,escape_deg,yellow_deg,yellow_conf,blue_deg,blue_conf,capture_errors,tx_attempts,tx_complete,tx_partial,tx_failed,tx_unknown,tx_expired,tx_bytes,tx_pending,tx_offset,tx_last")
                     csv_header_sent = True
-                print("CAMERA,{},{:.1f},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}".format(
+                print("CAMERA,{},{:.1f},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}".format(
                     now, fps, capture_ms, line_ms, int(ready), int(floor_ok), mask,
                     -1 if escape is None else int(escape), -1 if yellow[0] is None else int(yellow[0]),
                     yellow[2], -1 if blue[0] is None else int(blue[0]), blue[2], capture_errors, *tx_values))
             else:
                 print("fps={:.1f} capture_ms={} line_ms={}".format(fps, capture_ms, line_ms))
-            if vision is not None:
+            if vision is not None and getattr(cfg, "DEBUG_FORMAT", "TEXT") != "CSV":
                 # Repeated, because the startup lines scroll away: what is actually running on the camera.
                 print("[CAMERA] fw={} git={} config={} ready={} setup={} protocol={} target={} exposure_us={} gain_db={} capture_errors={}".format(
                     getattr(cfg, "FIRMWARE_VERSION", "unknown"), getattr(cfg, "GIT_COMMIT", "unembedded"),
