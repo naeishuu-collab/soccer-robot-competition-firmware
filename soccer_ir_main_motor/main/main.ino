@@ -908,8 +908,9 @@ public:
 
     bool armOnFirstFreshBall(bool irFresh, bool ballFound, uint16_t directionDeg) {
         if (!autoStartPending_ || !irFresh || !ballFound) return false;
+        if (!arm(irFresh, ballFound, directionDeg)) return false;
         autoStartPending_ = false;
-        return arm(irFresh, ballFound, directionDeg);
+        return true;
     }
 
     void enableAutoStart() {
@@ -2891,6 +2892,7 @@ void pollMotorConsole(uint32_t nowMs) {
             }
         } else {
             autoMode = kAutoStopped;
+            irTestController.disableAutoStart();
             irTestController.disarm();
             irTestHeadingController.reset();
             motorMotion = {};

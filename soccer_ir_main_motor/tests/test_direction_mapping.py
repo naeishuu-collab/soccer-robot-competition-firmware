@@ -144,11 +144,15 @@ class DirectionMappingTests(unittest.TestCase):
         source = (PROJECT / "motor" / "motor.ino").read_text(encoding="utf-8")
         self.assertIn("constexpr int8_t kMotorOutputPolarity[4] = {-1, 1, 1, 1};", source)
 
-    def test_ir_auto_requires_explicit_arm_but_allows_unverified_wheel_test(self):
+    def test_ir_auto_starts_only_with_fresh_inputs_and_manual_stop_latches(self):
         source = (PROJECT / "main" / "main.ino").read_text(encoding="utf-8")
-        self.assertIn("AutoMode autoMode = kAutoStopped;", source)
-        self.assertNotIn("irTestController.enableAutoStart();", source)
-        self.assertNotIn("irTestController.armOnFirstFreshBall(", source)
+        self.assertIn("AutoMode autoMode = kAutoIrTest;", source)
+        self.assertIn("irTestController.enableAutoStart();", source)
+        self.assertIn("if (!irTestController.armed() && input.headingValid &&", source)
+        self.assertIn("irTestController.armOnFirstFreshBall(input.irFresh, input.ballFound, irDirection)", source)
+        self.assertIn("autoMode = kAutoStopped;\n            irTestController.disableAutoStart();\n            irTestController.disarm();", source)
+        self.assertIn("int16_t values[kMotorCommandWheelCount]{};", source)
+        self.assertIn("motorEnabled = irTestController.update(input.irFresh, input.ballFound, irDirection, motorMotion);", source)
         self.assertIn("constexpr bool kIrTestWheelMappingVerified = false;", source)
         self.assertIn("constexpr int8_t kBnoHeadingTurnSign = 0;", source)
         self.assertIn("if (autoMode == kAutoIrTest && headingFresh &&", source)
