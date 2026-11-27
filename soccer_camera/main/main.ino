@@ -8,6 +8,7 @@
 #include <SerialPIO.h>
 #include "main_logic.h"
 #include "zip_chase_pd.h"
+#include <RuntimeConfig.h>
 #include <Diagnostics.h>
 
 #ifndef ROBOT_ZIP_TRACK
@@ -691,8 +692,8 @@ void upgradeLoop() {
     if (cameraData.slow) conditions |= 1u << 6;
     if (cameraData.escaping || cameraData.lineCount) conditions |= 1u << 7;
     if (!cameraData.mask) conditions |= 1u << 8;
-    Serial.printf("[MAIN] fw=%s git=%s uptime_ms=%lu mode=%s state=%s reason=%s hold=%u\n",
-                  ROBOT_FW_VERSION, ROBOT_GIT_COMMIT, (unsigned long)now, brain::name(robot.heading.mode),
+    Serial.printf("[MAIN] fw=%s git=%s config=%s uptime_ms=%lu mode=%s state=%s reason=%s hold=%u\n",
+                  ROBOT_FW_VERSION, ROBOT_GIT_COMMIT, ROBOT_CONFIG_ID, (unsigned long)now, brain::name(robot.heading.mode),
                   brain::name(out.tactic), *out.reason ? out.reason : "NONE", unsigned(holdStop));
     Serial.printf("[STATE] previous=%u current=%u transition_reason=%s [PD] active=0 (upgrade path)\n",
                   unsigned(transitionFrom), unsigned(out.tactic), transitionReason);

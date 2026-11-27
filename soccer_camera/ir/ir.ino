@@ -3,6 +3,7 @@
 // MAINは定期ポーリングするため、この基板は要求を受けてから応答し、RS-485上の衝突を避ける。
 #include <Arduino.h>
 #include "ir_logic.h"
+#include <RuntimeConfig.h>
 #include <Diagnostics.h>
 
 // Keep the chase (3) per-poll sampling and raw sensor-index angle.
@@ -191,8 +192,8 @@ void loop() {
     if (command == 'i') diagnosticRequested = true;
   }
   if (diagnosticRequested && Serial && Serial.availableForWrite() >= 180) {
-    Serial.printf("[IR] fw=%s git=%s uptime_ms=%lu angle=%u strength=%u confidence=%u valid=%u faults=%03x active=%03x sample_us=%lu angle_us=%lu period_us=%lu max_sample_us=%lu req=%lu tx=%lu bad_request=%lu raw=",
-                  ROBOT_FW_VERSION, ROBOT_GIT_COMMIT, (unsigned long)millis(), lastIrResult.angle,
+    Serial.printf("[IR] fw=%s git=%s config=%s uptime_ms=%lu angle=%u strength=%u confidence=%u valid=%u faults=%03x active=%03x sample_us=%lu angle_us=%lu period_us=%lu max_sample_us=%lu req=%lu tx=%lu bad_request=%lu raw=",
+                  ROBOT_FW_VERSION, ROBOT_GIT_COMMIT, ROBOT_CONFIG_ID, (unsigned long)millis(), lastIrResult.angle,
                   lastIrResult.strength, lastIrResult.confidence, unsigned(lastIrResult.confidence != 0),
                   lastIrResult.faults, lastSensorMask, (unsigned long)irLastSampleUs, (unsigned long)irLastAngleUs,
                   (unsigned long)irSamplePeriodUs, (unsigned long)irMaxSampleUs,

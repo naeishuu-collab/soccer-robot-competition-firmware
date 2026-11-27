@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include <math.h>
 #include <string.h>
+#include <RuntimeConfig.h>
 #include "motor_logic.h"
 #include <Diagnostics.h>
 
@@ -563,8 +564,8 @@ void readDiagSerial(uint32_t now) {
     used = 0;
     if (strcmp(text, "i") == 0) {
       printDebug();
-      Serial.printf("[MOTOR] fw=%s git=%s uptime_ms=%lu (PWM values are applied commands, not measured wheel rotation)\n",
-                    ROBOT_FW_VERSION, ROBOT_GIT_COMMIT, (unsigned long)now);
+      Serial.printf("[MOTOR] fw=%s git=%s config=%s uptime_ms=%lu (PWM values are applied commands, not measured wheel rotation)\n",
+                    ROBOT_FW_VERSION, ROBOT_GIT_COMMIT, ROBOT_CONFIG_ID, (unsigned long)now);
       if (ROBOT_UPGRADE) Serial.printf("[MOTOR_STATE] stop=%s reverse_wait=%u ramp=%u timeout=%u\n",
                                        modelStop, unsigned(modelDrive.reversing()),
                                        unsigned(modelDrive.ramping()), unsigned(timedOut));
