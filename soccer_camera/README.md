@@ -4,7 +4,7 @@
 
 ## 現行版コード
 
-書き込みに使う現行版は `main/`・`ir/`・`motor/` の3基板と `openmv/goal_wall_navigation.py` です。OpenMVには `openmv/camera_calibration.py` も設定して保存します。`line/` は今回の chase 構成では未使用です。
+書き込みに使う現行版は `main/`・`ir/`・`motor/` の3基板と `openmv/goal_wall_navigation.py` です。OpenMVには `openmv/camera_calibration.py` と `openmv/competition_vision.py` も保存します。`line/` は今回の chase 構成では未使用です。
 
 `chase_verified/` と `legacy_before_chase/` は比較・検査用の保存版で、書き込みには使いません。`common/`・`tests/` はホスト検査用、`docs/` は手順と記録、`config/` は検査設定です。
 

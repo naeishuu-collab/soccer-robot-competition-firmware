@@ -28,6 +28,7 @@ SECTOR_DIRECTIONS = tuple((math.sin(math.radians(bearing)), math.cos(math.radian
 WALL_NEIGHBOR_GAP_CM = 8
 STREAM_INTERVAL_MS = 50
 MAX_FRAME_AGE_MS = 100
+LINE_MAX_WIDTH_CM = 8  # a field line is about 2 cm; wider white is not "thin"
 
 MODE_WAIT = 0
 MODE_AVOID = 1
@@ -35,7 +36,7 @@ MODE_TRACK_IR = 2
 FLAG_VIRTUAL_LINE = 0x01
 FLAG_DIRECTIONAL = 0x40  # Requires the matching MAIN firmware.
 
-GOAL_COLORS = {"YELLOW": (255, 255, 0), "BLUE": (0, 110, 255), "BALL": (255, 128, 0)}
+GOAL_COLORS = {"YELLOW": (255, 255, 0), "BLUE": (0, 110, 255)}
 MODES = ("WAIT", "AVOID", "TRACK IR")
 
 
@@ -192,7 +193,7 @@ class Mirror:
 
 
 def find_color_blob(img, mirror, thresholds, min_pixels, accept=None, dense_search=False):
-    """ミラーの有効領域から色領域を選ぶ。ボールとゴールの検出で共用する入口。"""
+    """ミラーの有効領域から最大の色領域を選ぶ。色の診断用で、走行判断には使わない。"""
     # 候補検出 → 最小画素数 → ミラー円内 → 呼び出し側の追加条件、を通った最大領域を返す。
     counts = [0, 0, 0]  # Color components, too small, rejected by mirror geometry.
     best = None
@@ -222,24 +223,6 @@ def find_color_blob(img, mirror, thresholds, min_pixels, accept=None, dense_sear
     return best, counts
 
 
-def ball_like(blob):
-    width, height = blob_value(blob, "w"), blob_value(blob, "h")
-    if not width or not height:
-        return False
-    fill = blob_value(blob, "pixels") / (width * height)
-    return min(width, height) / max(width, height) >= 0.45 and 0.20 <= fill <= 1.0
-
-
-def overlaps_ball(blob, ball):
-    if ball is None:
-        return False
-    x, y, w, h = (blob_value(blob, key) for key in ("x", "y", "w", "h"))
-    bx, by, bw, bh = (blob_value(ball, key) for key in ("x", "y", "w", "h"))
-    overlap_w = max(0, min(x + w, bx + bw) - max(x, bx))
-    overlap_h = max(0, min(y + h, by + bh) - max(y, by))
-    return w > 0 and h > 0 and overlap_w * overlap_h * 4 >= w * h
-
-
 def scan_ray(samples, color_at, include_wall=False):
     # 近距離から順に色を見て床の確認と、緑床の先にある白線/壁の最初の境界を返す。
     green_run = 0
@@ -263,22 +246,40 @@ def scan_ray(samples, color_at, include_wall=False):
     return ground_seen, None
 
 
-def scan_field(img, mirror, white_candidates=None, include_wall=False):
+def line_is_thin(samples, edge, color_at):
+    """白の始点から先を調べ、細い白の向こうに緑床が続けばTrue(白線らしい)。判断できなければFalse。"""
+    start = next((i for i, s in enumerate(samples) if s[0] == edge[2] and s[1] == edge[3]), None)
+    if start is None:
+        return False
+    for x, y, cm in samples[start + 1:]:
+        color = color_at(x, y)
+        if color == "GREEN":
+            return True
+        if cm - edge[1] > LINE_MAX_WIDTH_CM or color == "BLACK":
+            return False
+    return False
+
+
+def ground_color(img, x, y):
+    lab = image.rgb_to_lab(img.get_pixel((x, y), rgbtuple=True))
+    low_saturation = getattr(cfg, "GREEN_LOW_SATURATION", None)
+    if in_lab(lab, cfg.GREEN) or (low_saturation and in_lab(lab, low_saturation)):
+        return "GREEN"
+    if in_lab(lab, cfg.WHITE):
+        return "WHITE"
+    if in_lab(lab, cfg.BLACK):
+        return "BLACK"
+    return None
+
+
+def scan_field(img, mirror, white_candidates=None, include_wall=False, thin=None):
     """各方位の床色を調べ、走行可能セクターと境界候補を作る。"""
     # 各方位のサンプル色を分類し、床が見える方位集合と隣接確認済みの境界一覧に集約する。
-    low_saturation = getattr(cfg, "GREEN_LOW_SATURATION", None)
-
     def color_at(x, y):
-        lab = image.rgb_to_lab(img.get_pixel((x, y), rgbtuple=True))
-        if in_lab(lab, cfg.GREEN) or (low_saturation and in_lab(lab, low_saturation)):
-            return "GREEN"
-        if in_lab(lab, cfg.WHITE):
-            if white_candidates is not None:
-                white_candidates.add(bearing)
-            return "WHITE"
-        if in_lab(lab, cfg.BLACK):
-            return "BLACK"
-        return None
+        color = ground_color(img, x, y)
+        if color == "WHITE" and white_candidates is not None:
+            white_candidates.add(bearing)
+        return color
 
     visible = set()
     candidates = {}
@@ -288,6 +289,8 @@ def scan_field(img, mirror, white_candidates=None, include_wall=False):
             visible.add(bearing)
         if edge is not None:
             candidates[bearing] = edge
+            if thin is not None and edge[0] == "WHITE" and line_is_thin(samples, edge, color_at):
+                thin.add(bearing)
     boundaries = []
     for bearing, edge in candidates.items():
         color, distance, _, _ = edge
@@ -406,7 +409,7 @@ def draw_goal(img, blob, name):
 
 def main_loop(send_uart=True, display=False):
     """撮影→検出→安全方向決定→必要ならMAINへ送信、をフレームごとに繰り返す。"""
-    # 初期化後、各フレームで「撮影→床/境界走査→ゴール/ボール検出→判断→UART/表示」を実行。
+    # 初期化後、各フレームで「撮影→床/境界走査→ゴール検出→判断→UART/表示」を実行。
     init_camera()
     frame = sensor.snapshot()
     mirror = Mirror(frame.width(), frame.height(), frame)
@@ -414,7 +417,6 @@ def main_loop(send_uart=True, display=False):
         "detected" if mirror.detected else "configured", mirror.cx, mirror.cy, mirror.inner, mirror.outer))
     target = cfg.TARGET_GOAL
     setup_reason = setup_wait_reason(mirror)
-    goal_thresholds = (("YELLOW", cfg.YELLOW), ("BLUE", cfg.BLUE))
     vision = None
     if getattr(cfg, "PROTOCOL", 1) == 2:
         import competition_vision
@@ -424,13 +426,21 @@ def main_loop(send_uart=True, display=False):
     last_command = None
     last_report = last_tx
     sequence = 0
+    frames = shown_frames = 0
+    shown = {"BLUE": (False, 0), "YELLOW": (False, 0)}
     while True:
         started = time.ticks_ms()
         # 先に床/白線を評価して安全指令を作る。ゴール表示など重い処理より走行許可を優先する。
         img = sensor.snapshot()
         captured = time.ticks_ms() if vision else started
         white_candidates = set() if display else None
-        visible, boundaries = scan_field(img, mirror, white_candidates) if mirror.rays else ((), [])
+        thin = set()
+        if not mirror.rays:
+            visible, boundaries = (), []
+        elif vision is not None:
+            visible, boundaries = scan_field(img, mirror, white_candidates, thin=thin)
+        else:
+            visible, boundaries = scan_field(img, mirror, white_candidates)
         now = time.ticks_ms()
         frame_ms = time.ticks_diff(now, started)
         command = decide_navigation(setup_reason is None and frame_ms <= MAX_FRAME_AGE_MS,
@@ -440,7 +450,8 @@ def main_loop(send_uart=True, display=False):
             # Frame age is judged inside the pipeline, which also counts the detection time.
             ready = (setup_reason is None
                      and competition_vision.observed_rays(visible, boundaries) >= MIN_FLOOR_RAYS)
-            packet = vision.step(img, now, ready, frame_ms, visible, boundaries, time.ticks_ms)
+            packet = vision.step(img, now, ready, frame_ms, visible, boundaries, time.ticks_ms, thin,
+                                 lambda x, y: ground_color(img, x, y))
             if uart is not None:
                 uart.write(packet)
         elif uart is not None and (command != last_command
@@ -451,32 +462,42 @@ def main_loop(send_uart=True, display=False):
             sequence = (sequence + 1) & 0xff
             last_tx = now
             last_command = command
-        if vision is not None and time.ticks_diff(now, last_report) >= 2000:
-            last_report = now
-            print("ms capture={} line={} total={}".format(
-                time.ticks_diff(captured, started), time.ticks_diff(now, captured),
-                time.ticks_diff(time.ticks_ms(), started)))
-            print(vision.timing, vision.status)
+        frames += 1
+        if time.ticks_diff(now, last_report) >= 2000:
+            # FPS and stage times, to compare versions on the camera itself.
+            print("fps={:.1f} line_ms={}".format((frames - shown_frames) * 1000 / time.ticks_diff(now, last_report),
+                                                 frame_ms))
+            shown_frames, last_report = frames, now
+            if vision is not None:
+                print(vision.timing, vision.status())
         if display and vision is not None:
             draw_mirror(img, mirror)
             draw_floor_scan(img, mirror)
             for _, _, _, x, y in boundaries:
                 img.draw_cross((x, y), color=(255, 255, 255))
         elif display:
-            # Detect both colors before drawing so overlays never enter the other search.
-            ball_thresholds = getattr(cfg, "BALL", None)
-            ball, ball_counts = (find_color_blob(img, mirror, ball_thresholds, 10, ball_like, True)
-                                 if ball_thresholds else (None, [0, 0, 0]))
-            detections = [(name, find_color_blob(img, mirror, thresholds,
-                           getattr(cfg, "BLUE_MIN_PIXELS", 8) if name == "BLUE" else
-                           getattr(cfg, "YELLOW_MIN_PIXELS", 12),
-                           (lambda blob: not overlaps_ball(blob, ball)) if name == "YELLOW" else None,
-                           True)) for name, thresholds in goal_thresholds]
-            for name, (blob, counts) in detections:
-                if blob is not None:
-                    draw_goal(img, blob, name)
-            if ball is not None:
-                draw_goal(img, ball, "BALL")
+            # Preview only (never sent to MAIN): one goal colour per frame, judged like protocol 3 does.
+            name = ("BLUE", "YELLOW")[frames % 2]
+            try:
+                import competition_vision
+            except ImportError:
+                competition_vision = None
+            if competition_vision is not None:
+                min_pixels = getattr(cfg, name + "_MIN_PIXELS", 12)
+                roi = None
+                if mirror.ring_ready:
+                    r = math.ceil(mirror.outer)
+                    left, top = max(0, round(mirror.cx) - r), max(0, round(mirror.cy) - r)
+                    roi = (left, top, min(mirror.width - left, 2 * r + 1), min(mirror.height - top, 2 * r + 1))
+                found = img.find_blobs(getattr(cfg, name), roi=roi, pixels_threshold=min_pixels,
+                                       area_threshold=min_pixels, x_stride=2, merge=True, margin=2)
+                scored = [(competition_vision.goal_candidate(b, mirror, min_pixels, cfg,
+                                                             lambda x, y: ground_color(img, x, y)), b)
+                          for b in found]
+                scored = [item for item in scored if item[0] is not None]
+                shown[name] = (bool(scored), len(found))
+                if scored:
+                    draw_goal(img, max(scored, key=lambda item: item[0][1])[1], name)
             draw_mirror(img, mirror)
             draw_floor_scan(img, mirror)
             white_distances = []
@@ -504,22 +525,10 @@ def main_loop(send_uart=True, display=False):
             ring_status = "RING: " + ("AUTO" if mirror.detected else "CONFIG")
             img.draw_string((3, 39), ring_status, color=(0, 0, 0))
             img.draw_string((2, 38), ring_status, color=(255, 255, 255))
-            blue_blob, blue_counts = detections[1][1]
-            blue_status = "BLUE: {} C{} S{} R{}".format(
-                "YES" if blue_blob is not None else "NO", *blue_counts)
-            img.draw_string((3, 51), blue_status, color=(0, 0, 0))
-            img.draw_string((2, 50), blue_status, color=(255, 255, 255))
-            ball_status = ("BALL: {} C{} S{} R{} H{}".format(
-                "YES" if ball is not None else "NO", *ball_counts,
-                ball_counts[0] - ball_counts[1] - ball_counts[2] if ball is None else 0)
-                if ball_thresholds else "BALL: UPDATE CONFIG")
-            img.draw_string((3, 63), ball_status, color=(0, 0, 0))
-            img.draw_string((2, 62), ball_status, color=(255, 255, 255))
-            yellow_blob, yellow_counts = detections[0][1]
-            yellow_status = "YELLOW: {} C{} S{} R{}".format(
-                "YES" if yellow_blob is not None else "NO", *yellow_counts)
-            img.draw_string((3, 75), yellow_status, color=(0, 0, 0))
-            img.draw_string((2, 74), yellow_status, color=(255, 255, 255))
+            for row, name in ((50, "BLUE"), (62, "YELLOW")):
+                text = "{}: {} C{}".format(name, "YES" if shown[name][0] else "NO", shown[name][1])
+                img.draw_string((3, row + 1), text, color=(0, 0, 0))
+                img.draw_string((2, row), text, color=(255, 255, 255))
 
 
 if __name__ == "__main__":

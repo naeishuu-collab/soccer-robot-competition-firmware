@@ -14,7 +14,7 @@ constexpr uint16_t kUnknown = 0xFFFF;
 
 struct Config {
   // Speed requests for the MOTOR wheel model (210 = full). Values below the motors' holding speed are raised there.
-  uint16_t speedSlow = 160, speedNormal = 160, speedFast = 185, speedAttack = 195, speedAvoid = 175;
+  uint16_t speedSlow = 160, speedNormal = 160, speedAttack = 195, speedAvoid = 175;
   int turnSign = 1;            // +1 = clockwise by wheel geometry; verify with wheels raised
   float headingKp = 0.5f, headingKd = 0.05f;
   float headingEnter = 10, headingExit = 5;
@@ -24,8 +24,8 @@ struct Config {
   uint32_t lineHoldMs = 150;  // a slow camera frame may reuse line data this old, never older
   uint32_t goalMemoryMs = 1000, goalMemoryGyroMs = 3000;
   uint8_t ballMinConfidence = 25, goalMinConfidence = 40, headingMinConfidence = 50;
+  uint8_t irMaxFaults = 3;  // more excluded IR sensors than this: the ball bearing is not trusted
   float attackEnterDeg = 15, attackExitDeg = 30, alignDeg = 45;
-  uint8_t nearCm = 25, farCm = 50;
   // Both default to the cautious choice; enable only after the matching bench check.
   bool blindTracking = false;        // drive at the ball while the attack direction is unknown
   bool bnoPowerOnReference = false;  // robot is always powered up facing the attack goal
@@ -36,8 +36,8 @@ inline float wrap(float a) { a = fmodf(a + 180, 360); return (a < 0 ? a + 360 : 
 inline float norm(float a) { a = fmodf(a, 360); return a < 0 ? a + 360 : a; }
 inline float clampf(float v, float limit) { return v > limit ? limit : (v < -limit ? -limit : v); }
 
-// ---------------- Camera protocol 2 ----------------
-constexpr uint8_t kCameraSize = 37;
+// ---------------- Camera protocol 3 (goals, lines, heading; the camera never reports a ball) ----------------
+constexpr uint8_t kCameraVersion = 3, kCameraSize = 32;
 
 struct Seen {
   bool seen = false;
@@ -51,7 +51,7 @@ struct CameraData {
   bool received = false, ready = false, escaping = false, targetValid = false, targetBlue = false, slow = false;
   uint8_t sequence = 0, lineCount = 0, lineCm = 255, frameMs = 0, headingConfidence = 0;
   uint16_t mask = 0, escape = kUnknown, line = kUnknown, heading = kUnknown;
-  Seen ball, yellow, blue;
+  Seen yellow, blue;
   uint32_t receivedMs = 0;
 };
 
@@ -86,7 +86,7 @@ public:
 
 private:
   bool headerPlausible() const {
-    return !((used_ >= 2 && buffer_[1] != 0x5C) || (used_ >= 3 && buffer_[2] != 2) ||
+    return !((used_ >= 2 && buffer_[1] != 0x5C) || (used_ >= 3 && buffer_[2] != kCameraVersion) ||
              (used_ >= 4 && buffer_[3] != kCameraSize));
   }
   void resync() {
@@ -132,13 +132,12 @@ private:
     d.lineCount = buffer_[13];
     if (!angleOk(d.escape) || !angleOk(d.line) || d.escaping != (d.escape != kUnknown) ||
         (!d.ready && d.mask)) return false;
-    if (!seen(d.ball, 14, buffer_[18], now) || !seen(d.yellow, 19, buffer_[24], now) ||
-        !seen(d.blue, 25, buffer_[30], now)) return false;
-    d.yellow.width = buffer_[23];
-    d.blue.width = buffer_[29];
-    d.heading = u16(31);
-    d.headingConfidence = buffer_[33];
-    d.frameMs = buffer_[34];
+    if (!seen(d.yellow, 14, buffer_[19], now) || !seen(d.blue, 20, buffer_[25], now)) return false;
+    d.yellow.width = buffer_[18];
+    d.blue.width = buffer_[24];
+    d.heading = u16(26);
+    d.headingConfidence = buffer_[28];
+    d.frameMs = buffer_[29];
     return angleOk(d.heading);
   }
 
@@ -345,7 +344,7 @@ private:
   bool engaged_ = false, have_ = false;
 };
 
-// ---------------- Ball fusion and prediction ----------------
+// ---------------- Ball tracking and prediction (IR only) ----------------
 // WAIT only before the first sighting; afterwards TRACK -> PREDICT -> SEARCH -> REACQUIRE -> TRACK.
 enum class BallState { TRACK, PREDICT, SEARCH, REACQUIRE, WAIT };
 inline const char *name(BallState s) {
@@ -364,54 +363,20 @@ class Ball {
 public:
   BallState state = BallState::WAIT;
   uint8_t confidence = 0;
-  int distanceCm = -1;
   float bearing = 0;  // filtered, or predicted while lost
   float rate = 0;     // deg/s relative to the robot (includes the robot's own motion)
 
-  // headingKnown/heading let the track be rotated with the robot (BNO); otherwise prediction stays short.
-  void update(const Observation &ir, const Observation &cam, int cameraCm, bool headingKnown, float heading,
-              const Config &cfg, uint32_t now) {
+  // The only ball source is the IR board. headingKnown/heading let the track be rotated with the robot
+  // (BNO); otherwise prediction stays short.
+  void update(const Observation &ir, bool headingKnown, float heading, const Config &cfg, uint32_t now) {
     if (headingKnown && headingWasKnown_ && ever_) filtered_ = norm(filtered_ - wrap(heading - heading_));
     headingWasKnown_ = headingKnown;
     heading_ = heading;
 
-    const bool useIr = ir.valid && ir.confidence >= cfg.ballMinConfidence && ir.stampMs != irStamp_;
-    const bool useCam = cam.valid && cam.confidence >= cfg.ballMinConfidence &&
-                        (!camStamp_ || int32_t(cam.stampMs - camStamp_) > 15);
-    if (useIr) irStamp_ = ir.stampMs, lastIr_ = ir;
-    if (useCam) camStamp_ = cam.stampMs, lastCam_ = cam;
-    if (useIr || useCam) {
-      // The other sensor's latest reading still counts while it is recent.
-      const bool a = irStamp_ && uint32_t(now - lastIr_.stampMs) <= 100;
-      const bool b = camStamp_ && uint32_t(now - lastCam_.stampMs) <= 150;
-      float z;
-      int conf;
-      if (a && b && fabsf(wrap(lastIr_.bearing - lastCam_.bearing)) <= 30) {
-        const float total = float(lastIr_.confidence + lastCam_.confidence);
-        z = norm(lastIr_.bearing + wrap(lastCam_.bearing - lastIr_.bearing) * lastCam_.confidence / total);
-        const int hi = lastIr_.confidence > lastCam_.confidence ? lastIr_.confidence : lastCam_.confidence;
-        conf = hi + int(total - hi) / 2;
-      } else if (a && b) {
-        // Disagreement: quality weighted by continuity with the track; trust it less.
-        auto score = [&](const Observation &o) {
-          const bool near = ever_ && fabsf(wrap(o.bearing - filtered_)) <= 30;
-          return o.confidence * (near ? 1.5f : 1.0f);
-        };
-        const Observation &o = score(lastIr_) >= score(lastCam_) ? lastIr_ : lastCam_;
-        z = o.bearing;
-        conf = o.confidence * 7 / 10;
-      } else {
-        const Observation &o = useIr ? lastIr_ : lastCam_;
-        z = o.bearing;
-        conf = o.confidence;
-      }
-      measure(z, uint8_t(conf > 100 ? 100 : conf), now);
+    if (ir.valid && ir.confidence >= cfg.ballMinConfidence && ir.stampMs != irStamp_) {
+      irStamp_ = ir.stampMs;
+      measure(ir.bearing, ir.confidence, now);
     }
-    if (cam.valid && uint32_t(now - cam.stampMs) <= 150 && cameraCm >= 0) {
-      distanceCm = distanceCm < 0 ? cameraCm : (distanceCm + cameraCm) / 2;
-      distanceMs_ = now;
-    }
-    if (distanceCm >= 0 && uint32_t(now - distanceMs_) > 300) distanceCm = -1;
 
     if (!ever_) { state = BallState::WAIT; return; }
     const uint32_t lost = now - seenMs_;
@@ -469,9 +434,8 @@ private:
     measuredMs_ = seenMs_ = now;
   }
 
-  Observation lastIr_, lastCam_;
   float filtered_ = 0, heading_ = 0, jumpBearing_ = 0;
-  uint32_t irStamp_ = 0, camStamp_ = 0, measuredMs_ = 0, seenMs_ = 0, distanceMs_ = 0;
+  uint32_t irStamp_ = 0, measuredMs_ = 0, seenMs_ = 0;
   uint32_t reacquiredMs_ = 0;
   bool ever_ = false, jump_ = false, headingWasKnown_ = false, reacquiring_ = false;
 };
@@ -545,13 +509,12 @@ public:
     };
     heading.update(bno, cam, camFresh, usable(target) || usable(own), cfg, now);
 
-    Observation i, c;
-    i.valid = irFresh && ir.strength > 0;
+    Observation i;
+    const bool irSensorsOk = faultCount(ir.faults) <= cfg.irMaxFaults;
+    i.valid = irFresh && irSensorsOk && ir.strength > 0;
     i.bearing = ir.angle; i.confidence = ir.confidence; i.stampMs = ir.stampMs;
-    c.valid = camFresh && cam.ball.seen;
-    c.bearing = cam.ball.bearing; c.confidence = cam.ball.confidence; c.stampMs = cam.ball.stampMs;
     const bool gyro = heading.mode == Mode::FUSED || heading.mode == Mode::BNO_ONLY;
-    ball.update(i, c, camFresh ? cam.ball.distanceCm : -1, gyro, heading.heading(), cfg, now);
+    ball.update(i, gyro, heading.heading(), cfg, now);
 
     const bool gyroNow = gyro && !heading.disagreement;
     // Attack direction: the goal itself, else opposite our own goal, else the heading, else memory.
@@ -592,9 +555,9 @@ public:
     }
     const uint16_t mask = lineMask_;
     if (!mask) return stop(out, "no safe direction");
-    const bool cameraBall = c.valid && c.confidence >= cfg.ballMinConfidence && uint32_t(now - c.stampMs) <= 150;
-    const bool searching = ball.state == BallState::SEARCH || ball.state == BallState::WAIT;
-    if (!irFresh && (searching || !cameraBall)) return stop(out, "no ball sensor");
+    // No IR observation means no ball: the camera cannot substitute. "No ball seen" is a different state.
+    if (!irFresh) return stop(out, "IR link lost");
+    if (!irSensorsOk) return stop(out, "IR sensors failed");
 
     const int line = lineBearing_ == kUnknown ? -1 : int(lineBearing_);
     // 2. line escape, with no heading correction
@@ -629,14 +592,14 @@ public:
       }
       wanted = norm(float(searchAnchor_) + side_ * 45.0f * (uint32_t(now - searchMs_) / cfg.searchLegMs % 8));
       speed = cfg.speedSlow;
-      note = "searching";
+      note = "no ball detected: searching";
     } else if (recovering_) {
       tactic = Tactic::RECOVER;
       wanted = norm(ball.bearing + 180);
     } else if (!isfinite(goal)) {
-      if (cfg.blindTracking || ball.distanceCm > cfg.farCm) {
+      if (cfg.blindTracking) {
         wanted = ball.lead();
-        note = "goal unknown: closing on a far ball";
+        note = "goal unknown: blind tracking";
       } else {
         // Circle the ball without touching it until a goal is seen again.
         tactic = Tactic::ORBIT;
@@ -650,24 +613,20 @@ public:
       const float size = fabsf(delta);
       const bool attacking = ball.state != BallState::REACQUIRE &&
                              (previous_ == Tactic::ATTACK ? size <= cfg.attackExitDeg : size <= cfg.attackEnterDeg);
-      const bool far = ball.distanceCm > cfg.farCm;
       if (size < 150) side_ = delta < 0 ? -1 : 1;  // keep the side while the ball is nearly straight behind
       if (attacking) {
         tactic = Tactic::ATTACK;
         wanted = norm(ball.bearing + clampf(delta * 0.5f, 15));
         speed = cfg.speedAttack;
       } else if (size < cfg.alignDeg) {
-        tactic = far ? Tactic::APPROACH : Tactic::ALIGN;
-        wanted = norm((far ? ball.lead() : ball.bearing) + clampf(delta * (far ? 0.5f : 1.5f), 60));
-        speed = far ? cfg.speedFast : cfg.speedNormal;
+        // IR strength is not a calibrated distance, so there is no far/near switching.
+        tactic = Tactic::ALIGN;
+        wanted = norm(ball.lead() + clampf(delta * 1.5f, 60));
       } else {
         tactic = Tactic::ORBIT;
-        float offset = size < 90 ? size : 90;
-        if (ball.distanceCm > cfg.nearCm) offset *= float(cfg.nearCm) / ball.distanceCm + 0.2f;
-        if (offset > 90) offset = 90;
+        const float offset = size < 90 ? size : 90;
         wanted = norm(ball.bearing + side_ * offset);
         orbitLimit = fminf(orbitLimit, offset);
-        speed = far ? cfg.speedFast : cfg.speedNormal;
       }
     }
 
@@ -708,6 +667,11 @@ public:
   }
 
 private:
+  static int faultCount(uint16_t mask) {
+    int n = 0;
+    for (; mask; mask &= uint16_t(mask - 1)) ++n;
+    return n;
+  }
   Output &stop(Output &out, const char *reason) { return finish(out, Tactic::SAFE_STOP, reason, false, 0); }
   Output &finish(Output &out, Tactic tactic, const char *reason, bool correct, float error, float gain = 1) {
     out.tactic = tactic;

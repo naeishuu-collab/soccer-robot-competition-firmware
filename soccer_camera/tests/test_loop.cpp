@@ -29,23 +29,22 @@ struct Frame { uint16_t direction, power; int turn; bool avoid; };
 struct Rig {
   MockSerial mainBus, motorBus, irBus;
   std::vector<Frame> sent;
-  bool camera = true, ir = true, cameraBall = false, corrupt = false, noBall = false;
+  bool camera = true, ir = true, corrupt = false, noBall = false;
   uint16_t mask = 0xFFFF, escape = 0xFFFF, ballAngle = 0;
   uint8_t sequence = 0;
   uint32_t lastCameraMs = 0, replyAt = 0;
   bool pollPending = false, sentDuringReply = false;
 
   void cameraFrame() {
-    uint8_t f[brain::kCameraSize] = {0xC5, 0x5C, 2, brain::kCameraSize, sequence++, 0};
+    uint8_t f[brain::kCameraSize] = {0xC5, 0x5C, brain::kCameraVersion, brain::kCameraSize, sequence++, 0};
     f[5] = uint8_t(1 | 16 | (escape != 0xFFFF ? 2 : 0));
     auto put = [&](int at, uint16_t v) { f[at] = uint8_t(v); f[at + 1] = uint8_t(v >> 8); };
     put(6, mask); put(8, escape); put(10, 0xFFFF);
     f[12] = 255;
-    for (int at : {14, 25, 31}) put(at, 0xFFFF);
-    f[16] = 255; f[18] = 255; f[27] = 255; f[30] = 255;
-    put(19, 0); f[21] = 255; f[22] = 90; f[23] = 20; f[24] = 0;  // yellow goal ahead
-    if (cameraBall) { put(14, 0); f[17] = 80; f[18] = 0; }
-    put(35, brain::crc16(f, brain::kCameraSize - 2));
+    for (int at : {20, 26}) put(at, 0xFFFF);
+    f[22] = 255; f[25] = 255;
+    put(14, 0); f[16] = 255; f[17] = 90; f[18] = 20; f[19] = 0;  // yellow goal ahead
+    put(30, brain::crc16(f, brain::kCameraSize - 2));
     if (corrupt) { f[7] ^= 1; corrupt = false; }
     mainboard::cameraSerial.feed(f, sizeof(f));
   }
@@ -150,14 +149,14 @@ int main() {
   for (int i = 0; i < 300; ++i) { rig.tick(); stopped += Rig::still(); }
   CHECK("a single bad CRC does not stop", stopped == 0);
 
-  // IR silent but the camera sees the ball: the drive stream must not gap past the MOTOR watchdog.
-  rig.cameraBall = true;
-  rig.run(300);
+  // IR silent with a healthy camera: nothing tracks a ball, and stop frames keep flowing.
   rig.ir = false;
-  stopped = 0;
-  for (int i = 0; i < 1000; ++i) { rig.tick(); stopped += Rig::still(); }
-  CHECK("camera ball keeps the motors running without IR", stopped == 0);
-  rig.ir = true; rig.cameraBall = false;
+  rig.run(400);
+  const size_t before = rig.sent.size();
+  rig.run(600);
+  CHECK("IR loss with a good camera stays stopped", Rig::still() && rig.sent.back().power == 0 &&
+        rig.sent.size() > before + 5);
+  rig.ir = true;
   rig.run(500);
 
   // A lost ball: the patrol must keep the motors turning, not sit in reverse pauses.

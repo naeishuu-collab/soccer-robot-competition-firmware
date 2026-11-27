@@ -42,7 +42,6 @@ static void protocols() {
   assert(feed(p, golden, kCameraSize, 100, d));
   assert(d.ready && !d.escaping && d.targetBlue && d.targetValid && d.mask == 0xFF0F && d.escape == kUnknown);
   assert(d.line == 350 && d.lineCm == 31 && d.lineCount == 1);
-  assert(d.ball.seen && d.ball.bearing == 10 && d.ball.distanceCm == -1 && d.ball.confidence == 80 && d.ball.stampMs == 80);
   assert(d.yellow.distanceCm == 120 && d.blue.bearing == 180 && d.blue.distanceCm == -1 && d.blue.stampMs == 70);
   assert(d.heading == 355 && d.headingConfidence == 55 && d.frameMs == 33);
   assert(!feed(p, golden, kCameraSize, 150, d));  // repeated sequence is stale
@@ -65,6 +64,12 @@ static void protocols() {
   CameraData f;
   feed(r, golden, 20, 100, f);
   assert(feed(r, golden, kCameraSize, 200, f));  // partial frame times out
+
+  // A version 2 camera (which still carried ball fields) is rejected as a whole.
+  uint8_t old[37] = {0xC5, 0x5C, 2, 37};
+  CameraParser o;
+  CameraData g;
+  assert(!feed(o, old, sizeof(old), 100, g) && !g.received);
 
   irx::Result sent;
   sent.angle = 270; sent.strength = 0xAA55; sent.confidence = 88; sent.faults = 0x801;
@@ -89,7 +94,7 @@ static void irFilterTests() {
   count[3] = 400;
   irx::Result r = f.update(count, 1000);
   assert(r.angle == 90 && r.confidence == 100 && r.strength == 400);
-  // Opposing detections: strong but no direction, so low confidence.
+  // Two nearly equal sources on opposite sides: ambiguous, so low confidence.
   count[9] = 380;
   r = f.update(count, 1000);
   assert(r.confidence < 10);
@@ -121,11 +126,50 @@ static void irFilterTests() {
   irx::Filter dead;
   memset(count, 0, sizeof(count));
   count[1] = 600; count[3] = 600;
+  r = dead.update(count, 1000);  // usable from the first poll, before the sensor is declared dead
+  assert(r.angle == 60 && r.confidence >= 50 && !r.faults);
   for (int i = 0; i < 100; ++i) r = dead.update(count, 1000);
   assert(r.faults == (1 << 2) && r.angle == 60);
   memset(count, 0, sizeof(count));
   r = dead.update(count, 1000);
   assert(r.strength == 0 && r.confidence == 0);
+
+  // Interpolation between two neighbouring sensors, including across the 330/0 seam.
+  irx::Filter mid;
+  count[11] = 400; count[0] = 400;
+  r = mid.update(count, 1000);
+  assert(r.angle == 345 && r.confidence >= 90);
+  // A strong reflection (40% of the ball) in a separate run does not bend the bearing.
+  irx::Filter refl;
+  memset(count, 0, sizeof(count));
+  count[2] = 500; count[3] = 500; count[8] = 400;
+  r = refl.update(count, 1000);
+  assert(r.angle == 75 && r.confidence >= 50);
+  // With two similar runs the previous bearing wins.
+  irx::Filter keep;
+  memset(count, 0, sizeof(count));
+  count[0] = 500;
+  keep.update(count, 1000);
+  count[6] = 560;
+  r = keep.update(count, 1000);
+  assert(r.angle == 0 && r.confidence < 25);
+  // Every sensor active in turn gives its own angle with no lag on a large move.
+  for (int i = 0; i < 12; ++i) {
+    memset(count, 0, sizeof(count));
+    count[i] = 500;
+    irx::Filter one;
+    assert(one.update(count, 1000).angle == i * 30);
+  }
+  // Flooded receivers (ambient IR) are a sensor failure, not a ball.
+  irx::Filter flood;
+  for (int i = 0; i < 12; ++i) count[i] = i < 9 ? 1000 : 0;
+  r = flood.update(count, 1000);
+  assert(r.strength == 0 && r.confidence == 0 && r.faults == 0xFFF);
+  // All lit weakly (no gap at all) has no direction.
+  irx::Filter all;
+  for (int i = 0; i < 12; ++i) count[i] = 200;
+  r = all.update(count, 1000);
+  assert(r.confidence < 5);
 }
 
 static void headingModes() {
@@ -252,15 +296,31 @@ static void ballStates() {
   World m;
   for (int i = 0; i < 30; ++i) { m.ir.angle = uint16_t((340 + i * 2) % 360); m.run(); }
   assert(m.robot.ball.rate > 40 && wrap(m.robot.ball.lead() - m.robot.ball.bearing) > 0);
-  // Low confidence IR is not used; an agreeing camera raises confidence.
+  // Low confidence IR is not used.
   World c;
   c.ir.confidence = 10;
   c.run(3);
   assert(c.robot.ball.state == BallState::WAIT);
-  c.ir.confidence = 60; c.ir.angle = 355;
-  c.cam.ball.seen = true; c.cam.ball.bearing = 5; c.cam.ball.confidence = 60;
-  for (int i = 0; i < 5; ++i) { c.cam.ball.stampMs = c.now + 20; c.run(); }
-  assert(c.robot.ball.confidence > 60 && fabsf(wrap(c.robot.ball.bearing)) < 6);
+  // Failed IR sensors: do not track, and say so. A few excluded sensors are tolerated.
+  World broken;
+  broken.goal(0); broken.run(5);
+  broken.ir.faults = 0x00F;
+  Output failedOut = broken.run(3);
+  assert(!failedOut.power && strcmp(failedOut.reason, "IR sensors failed") == 0);
+  broken.ir.faults = 0x007;
+  assert(broken.run(10).power);
+  broken.irOn = false;
+  failedOut = broken.run(10);
+  assert(!failedOut.power && strcmp(failedOut.reason, "IR link lost") == 0);
+  broken.irOn = true; broken.ball = false;
+  failedOut = broken.run(60);
+  assert(failedOut.power && strcmp(failedOut.reason, "no ball detected: searching") == 0);
+  // A single jumped goal frame does not swing the robot: heading control slews.
+  World jump;
+  jump.goal(0); jump.run(20);
+  jump.goal(150);
+  const Output once = jump.run(1);
+  assert(abs(once.turn) <= jump.robot.cfg.turnSlew);
 }
 
 static void tactics() {
@@ -315,12 +375,6 @@ static void tactics() {
     assert(o.tactic == Tactic::SEARCH && o.power && fabsf(wrap(o.direction - 0.0f)) >= 45);
   }
 
-  // A held camera ball (unchanged stamp) does not keep the track alive.
-  World held;
-  held.irOn = true; held.ball = false;
-  held.cam.ball.seen = true; held.cam.ball.confidence = 80; held.cam.ball.stampMs = held.now + 20;
-  held.run(15);
-  assert(held.robot.ball.state != BallState::TRACK);
   // millis wrap keeps working.
   World z;
   z.now = UINT32_MAX - 100;

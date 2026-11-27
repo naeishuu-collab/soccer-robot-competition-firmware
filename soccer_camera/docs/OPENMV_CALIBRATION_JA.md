@@ -4,7 +4,7 @@
 
 | スクリプト | 用途 |
 |---|---|
-| `goal_wall_navigation.py` | 競技用。カメラの `main.py` として保存し、同じ場所に `camera_calibration.py` を置く。 |
+| `goal_wall_navigation.py` | 競技用。カメラの `main.py` として保存し、同じ場所に `camera_calibration.py` と `competition_vision.py` を置く。ボールは検出しない。 |
 | `camera_only_display.py` | 両色のゴールの輪郭、ミラー中心・リング・正面、白線の検出点と現在のモードを表示する。UARTは初期設定で無効。 |
 | `debug_thresholds.py` | ゴール候補数、面積とミラー領域での除外数、撮像設定、FPS、任意の位置のLAB分布を記録する。 |
 | `wall_only.py` | 黒壁の候補と床を走査した境界点を比較する。診断用の旧形式 `0x02` と `0x14` を送信する。 |

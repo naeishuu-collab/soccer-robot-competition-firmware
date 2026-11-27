@@ -127,12 +127,12 @@ static void tactics() {
 }
 
 static void parser() {
-  uint8_t f[kCameraSize] = {0xC5, 0x5C, 2, kCameraSize, 9, 1};
+  uint8_t f[kCameraSize] = {0xC5, 0x5C, kCameraVersion, kCameraSize, 9, 1};
   f[6] = f[7] = 0xFF;
-  for (int at : {8, 10, 14, 19, 25, 31}) f[at] = f[at + 1] = 0xFF;
-  f[18] = f[24] = f[30] = 255;
+  for (int at : {8, 10, 14, 20, 26}) f[at] = f[at + 1] = 0xFF;
+  f[19] = f[25] = 255;
   const uint16_t crc = crc16(f, kCameraSize - 2);
-  f[35] = uint8_t(crc); f[36] = uint8_t(crc >> 8);
+  f[30] = uint8_t(crc); f[31] = uint8_t(crc >> 8);
   CameraParser p;
   CameraData d;
   bool first = false, again = false;

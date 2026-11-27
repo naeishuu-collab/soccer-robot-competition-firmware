@@ -528,11 +528,11 @@ void upgradeLoop() {
   }
   if (now - lastLogMs >= 500 && Serial && Serial.availableForWrite() >= 240) {
     lastLogMs = now;
-    Serial.printf("%s%s %s mode=%s%s dir=%u spd=%u turn=%d ball=%s %d c%u d%d goal=%d\n",
+    Serial.printf("%s%s %s mode=%s%s dir=%u spd=%u turn=%d ball=%s %d c%u goal=%d\n",
                   holdStop ? "HOLD " : "", brain::name(out.tactic), out.reason, brain::name(robot.heading.mode),
                   robot.heading.disagreement ? "(mismatch)" : "", out.direction, out.power, out.turn,
                   brain::name(robot.ball.state), int(robot.ball.bearing), robot.ball.confidence,
-                  robot.ball.distanceCm, isfinite(out.goal) ? int(out.goal) : -1);
+                  isfinite(out.goal) ? int(out.goal) : -1);
     Serial.printf("cam=%u ready=%d mask=%04x err=%lu gap=%lums ir c%u f%03x rtt=%luus bno=%d loop=%luus brain=%luus\n",
                   unsigned(now - cameraData.receivedMs), int(cameraData.ready), cameraData.mask,
                   static_cast<unsigned long>(parser.errors), static_cast<unsigned long>(cameraGapMaxMs),

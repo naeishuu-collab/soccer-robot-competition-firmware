@@ -13,21 +13,7 @@ static int failed = 0;
   do { if (!(condition)) { ++failed; printf("FAIL %s (line %d)\n", name, __LINE__); } } while (0)
 
 static float apart(float a, float b) { return fabsf(wrap(a - b)); }
-static void cameraBall(World &w, float bearing) {
-  w.cam.ball.seen = true; w.cam.ball.bearing = bearing; w.cam.ball.confidence = 80;
-}
-// Steps with a fresh camera ball observation every frame.
-static Output runWithCameraBall(World &w, int steps) {
-  Output o;
-  for (int i = 0; i < steps; ++i) { w.cam.ball.stampMs = w.now + 20; o = w.run(); }
-  return o;
-}
-
 static void mustContinue() {
-  World ir;
-  ir.goal(0); cameraBall(ir, 0); ir.irOn = false;
-  CHECK("camera ball replaces a dead IR link", runWithCameraBall(ir, 20).power > 0);
-
   World lost;
   lost.goal(0); lost.ir.angle = 90; lost.run(10);
   lost.ball = false;
@@ -82,10 +68,9 @@ static void mustContinue() {
   CHECK("held line data expires", !o.power);
 
   World farOrbit;
-  farOrbit.goal(0); farOrbit.ir.angle = 90; farOrbit.cam.ball.distanceCm = 100;
-  cameraBall(farOrbit, 90);
-  o = runWithCameraBall(farOrbit, 20);
-  CHECK("orbiting a far ball keeps moving", o.tactic == Tactic::ORBIT && o.power);
+  farOrbit.goal(0); farOrbit.ir.angle = 90;
+  o = farOrbit.run(20);
+  CHECK("orbiting keeps moving", o.tactic == Tactic::ORBIT && o.power);
 
   World held;
   held.ir.angle = 20; held.run(10);

@@ -16,15 +16,20 @@ CLOCKWISE = False  # False if moving a target to the robot's right decreases its
 GROUND_POINTS = ((50, 18), (74, 50))
 TARGET_GOAL = "YELLOW"  # Set to "YELLOW" or "BLUE" before each half.
 
-# 1 = legacy 8-byte UART at 9600 (default). 2 = extended packet at 115200; needs MAIN ROBOT_UPGRADE=1
-# and competition_vision.py on the camera.
+# 1 = legacy 8-byte UART at 9600 (default). 2 = extended packet (wire version 3) at 115200; needs MAIN
+# ROBOT_UPGRADE=1 from the same commit and competition_vision.py on the camera.
 PROTOCOL = 1
 LINE_BLOCK_CM = 35  # Protocol 2: headings toward a line closer than this are closed early. Unverified.
-# Separate (radius_px, distance_cm) tables measured for THESE objects. Empty = distance unknown.
-# Never copy GROUND_POINTS here without measuring.
-BALL_DISTANCE = ()
+# (radius_px, distance_cm) table measured for the goals. Empty = distance unknown.
+# Never copy GROUND_POINTS here without measuring. The camera does not detect the ball at all.
 GOAL_DISTANCE = ()
-BALL_MIN_PIXELS = 10
+# Goal shape limits (mirror image). Unverified: tune with real goals and robots in view.
+GOAL_MIN_WIDTH_DEG = 6
+GOAL_MAX_WIDTH_DEG = 150
+GOAL_MIN_ASPECT = 0.8   # arc length / radial height
+GOAL_MIN_DENSITY = 0.2  # color pixels / bounding box
+FILL_SINGLE_GAP = True  # reopen a single 15 degree floor gap (small object) between clear neighbours
+
 
 # Capture settings are shared by all four scripts. None uses automatic exposure and gain.
 EXPOSURE_US = 45000
@@ -34,8 +39,6 @@ RGB_GAIN_DB = None  # None freezes the white balance measured after warm-up.
 # Yellow sample at 45 ms: LAB (78–79, 24–26, 29–30).
 YELLOW = [(30, 62, 5, 24, 26, 64), (79, 86, -3, 7, 57, 70),
           (69, 88, 18, 32, 22, 39), (62, 88, 14, 32, 40, 55)]
-# Orange ball: use its more saturated portion; illuminated yellow can overlap.
-BALL = [(14, 82, 26, 65, 18, 70)]
 # Additional sample: LAB L=21..22, A=8..9, B=-34..-33.
 # Additional blue sample: L=43..45, A=10..11, B=-39..-38.
 # Mid-brightness blue sample: L=28..29, A=9..10, B=-35..-34.

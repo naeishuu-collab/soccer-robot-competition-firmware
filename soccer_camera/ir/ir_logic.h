@@ -16,6 +16,7 @@ constexpr float kReflectionRatio = 0.2f;  // below this share of the peak: treat
 constexpr uint16_t kNoise = 10;           // permille
 constexpr float kFullLevel = 100.0f;      // peak permille giving full confidence; measure with the real ball
 constexpr uint16_t kStuckPolls = 100;     // ~3 s at the 30 ms poll interval
+constexpr int kFloodSensors = 8;          // this many saturated at once: ambient IR or wiring, not a ball
 
 struct Result {
   uint16_t angle = 0;       // raw sensor-index angle, same convention as the legacy reply
@@ -35,6 +36,13 @@ public:
       raw_[i] = uint16_t(count[i] * 1000UL / samples);
       level[i] = fminf(raw_[i] * kGain[i] / 1000.0f, 1000.0f);
     }
+    int saturated = 0;
+    for (int i = 0; i < kSensors; ++i) saturated += raw_[i] >= 980;
+    if (saturated >= kFloodSensors) {
+      valid_ = false;
+      out.faults = (1u << kSensors) - 1;  // report every sensor unusable; MAIN does not track
+      return out;
+    }
     detectFaults();
     float peak = 0;
     for (int i = 0; i < kSensors; ++i) {
@@ -47,14 +55,35 @@ public:
       }
       peak = fmaxf(peak, level[i]);
     }
-    float x = 0, y = 0, total = 0;
-    for (int i = 0; i < kSensors; ++i) {
-      if (level[i] < kNoise || level[i] < peak * kReflectionRatio) continue;
+    // A ball lights one run of neighbouring sensors; a reflection shows up as a separate run. Take the
+    // strongest run (favouring the previous bearing) and interpolate inside it with its vector sum.
+    bool lit[kSensors];
+    for (int i = 0; i < kSensors; ++i) lit[i] = level[i] >= kNoise && level[i] >= peak * kReflectionRatio;
+    // One silent sensor between two lit ones (dead but not yet excluded) does not split a run.
+    bool seen[kSensors];
+    for (int i = 0; i < kSensors; ++i) seen[i] = lit[i];
+    for (int i = 0; i < kSensors; ++i)
+      if (seen[(i + kSensors - 1) % kSensors] && seen[(i + 1) % kSensors]) lit[i] = true;
+    int start = 0;
+    while (start < kSensors && lit[start]) ++start;  // begin at a gap so no run is split at index 0
+    float x = 0, y = 0, total = 0, bestScore = 0, bestTotal = 0, secondTotal = 0;
+    float cx = 0, cy = 0, ct = 0;
+    for (int n = 1; n <= kSensors; ++n) {
+      const int i = (start + n) % kSensors;
+      if (start < kSensors && !lit[i]) {
+        close(cx, cy, ct, x, y, bestScore, bestTotal, secondTotal);
+        total = bestTotal;
+        cx = cy = ct = 0;
+        continue;
+      }
+      if (!lit[i]) continue;
       const float radians = i * 6.28318531f / kSensors;
-      x += level[i] * cosf(radians);
-      y += level[i] * sinf(radians);
-      total += level[i];
+      cx += level[i] * cosf(radians);
+      cy += level[i] * sinf(radians);
+      ct += level[i];
     }
+    close(cx, cy, ct, x, y, bestScore, bestTotal, secondTotal);
+    total = bestTotal;
     out.faults = faults_;
     if (total <= 0 || hypotf(x, y) < 1) {
       if (++missed_ >= 3) valid_ = false;  // reacquire without dragging an old bearing
@@ -78,13 +107,33 @@ public:
     if (angle < 0) angle += 360;
     out.angle = uint16_t(angle + 0.5f) % 360;
     out.strength = uint16_t(total);
-    out.confidence = uint8_t(concentration * 100 * fminf(1.0f, peak / kFullLevel) + 0.5f);
+    // A second run nearly as strong makes the choice doubtful.
+    const float ratio = secondTotal / total;
+    const float clear = ratio > 0.5f ? fmaxf(0.0f, 1.0f - ratio) : 1.0f;  // the previous run may be the weaker one
+    out.confidence = uint8_t(concentration * clear * 100 * fminf(1.0f, peak / kFullLevel) + 0.5f);
     return out;
   }
 
   uint16_t raw(int i) const { return raw_[i]; }
 
 private:
+  void close(float cx, float cy, float ct, float &x, float &y, float &bestScore, float &bestTotal,
+             float &secondTotal) const {
+    if (ct <= 0) return;
+    const float length = hypotf(cx, cy);
+    const bool continues = valid_ && length > 0 && (cx * ex_ + cy * ey_) / length > 0.87f;  // within 30 deg
+    const float score = ct * (continues ? 1.3f : 1.0f);
+    if (score > bestScore) {
+      if (bestTotal > secondTotal) secondTotal = bestTotal;
+      bestScore = score;
+      bestTotal = ct;
+      x = cx;
+      y = cy;
+    } else if (ct > secondTotal) {
+      secondTotal = ct;
+    }
+  }
+
   // A sensor that is saturated while the opposite side is also silent-or-not for seconds is stuck.
   // A sensor that stays silent while both neighbours see the ball strongly is dead.
   void detectFaults() {

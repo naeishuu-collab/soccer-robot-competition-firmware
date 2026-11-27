@@ -1,4 +1,4 @@
-﻿Build timestamp: 2026-11-26 22:55:48 UTC
+﻿Build timestamp: 2026-11-27 06:38:42 UTC
 Arduino CLI: arduino-cli  Version: 1.6.0 Commit: 50a0e80da Date: 2026-11-10T15:30:44Z
 Core: rp2040:rp2040 6.3.2
 Target: Generic RP2350, selected A/B chip variant, 2MB flash; no upload performed.
@@ -7,7 +7,7 @@ Target: Generic RP2350, selected A/B chip variant, 2MB flash; no upload performe
 最大524288バイトのRAMのうち、グローバル変数が10828バイト（2%）を使っていて、ローカル変数で513460バイト使うことができます。
 RESULT: 0
 === IR RP2354A [rp2040:rp2040:generic_rp2350:variantchip=RP2350A,flash=2097152_0] ===
-最大2088960バイトのフラッシュメモリのうち、スケッチが58880バイト（2%）を使っています。
+最大2088960バイトのフラッシュメモリのうち、スケッチが59464バイト（2%）を使っています。
 最大524288バイトのRAMのうち、グローバル変数が10388バイト（1%）を使っていて、ローカル変数で513900バイト使うことができます。
 RESULT: 0
 === LINE RP2354B [rp2040:rp2040:generic_rp2350:variantchip=RP2350B,flash=2097152_0] ===

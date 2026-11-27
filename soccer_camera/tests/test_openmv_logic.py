@@ -18,57 +18,6 @@ VISIBLE = set(range(0, 360, 15))
 
 
 class OpenMvNavigationTests(unittest.TestCase):
-    def test_yellow_search_skips_ball_but_keeps_other_goal(self):
-        class Blob:
-            def __init__(self, x, y, w, h, pixels):
-                self.x, self.y, self.w, self.h, self.pixels = x, y, w, h, pixels
-                self.cx, self.cy = x + w // 2, y + h // 2
-
-        ball = Blob(200, 120, 20, 20, 250)
-        ball_yellow = Blob(204, 122, 10, 8, 80)
-        goal = Blob(100, 50, 20, 8, 40)
-        class Frame:
-            def find_blobs(self, *args, **kwargs):
-                return [ball_yellow, goal]
-        with patch.multiple(nav.cfg, IMAGE_SIZE=(320, 240), MIRROR_CENTER=(160, 120),
-                            MIRROR_RING=(20, 100)):
-            selected, _ = nav.find_color_blob(Frame(), nav.Mirror(320, 240), nav.cfg.YELLOW, 12,
-                                              lambda blob: not nav.overlaps_ball(blob, ball), True)
-        self.assertIs(selected, goal)
-        self.assertFalse(nav.overlaps_ball(goal, None))
-        self.assertTrue(nav.overlaps_ball(ball_yellow, ball))
-
-    def test_ball_shape_distinguishes_round_blob_from_goal_shapes(self):
-        class Blob:
-            def __init__(self, w, h, pixels):
-                self.w, self.h, self.pixels = w, h, pixels
-
-        self.assertTrue(nav.ball_like(Blob(20, 20, 310)))
-        self.assertFalse(nav.ball_like(Blob(40, 15, 450)))
-        self.assertTrue(nav.ball_like(Blob(20, 20, 400)))
-        self.assertTrue(nav.ball_like(Blob(20, 12, 110)))
-        self.assertTrue(nav.ball_like(Blob(20, 20, 100)))
-        self.assertFalse(nav.ball_like(Blob(20, 20, 50)))
-        self.assertFalse(nav.ball_like(Blob(0, 20, 0)))
-
-    def test_ball_search_uses_dense_sampling_and_merges_fragments(self):
-        class Blob:
-            cx, cy, w, h, pixels = 200, 150, 12, 10, 35
-
-        class Frame:
-            def find_blobs(self, thresholds, **options):
-                self.options = options
-                return [Blob()]
-
-        frame = Frame()
-        with patch.multiple(nav.cfg, IMAGE_SIZE=(320, 240), MIRROR_CENTER=(160, 120),
-                            MIRROR_RING=(20, 100)):
-            ball, _ = nav.find_color_blob(frame, nav.Mirror(320, 240), nav.cfg.BALL, 10,
-                                          nav.ball_like, True)
-        self.assertIsNotNone(ball)
-        self.assertEqual((frame.options["x_stride"], frame.options["y_stride"],
-                          frame.options["merge"], frame.options["margin"]), (1, 1, True, 2))
-
     def test_startup_detects_matching_circles_and_rechecks_ground_calibration(self):
         class Circle:
             def __init__(self, x, y, r):
@@ -381,6 +330,7 @@ class OpenMvNavigationTests(unittest.TestCase):
     def test_camera_reports_white_line_sends_changed_heading_and_stops_on_stale_frame(self):
         class Goal:
             pixels, cx, cy = 50, 160, 50
+            x, y, w, h = 154, 46, 12, 8
             corners = [(156, 46), (164, 46), (164, 54), (156, 54)]
 
         class Frame:
@@ -405,6 +355,9 @@ class OpenMvNavigationTests(unittest.TestCase):
             def draw_string(self, position, text, *, color):
                 if position == (2, 26):
                     self.labels.append(text)
+
+            def get_pixel(self, position, *, rgbtuple):
+                return (0, 0, 0)
 
             def draw_cross(self, *args, **kwargs):
                 pass
@@ -450,6 +403,7 @@ class OpenMvNavigationTests(unittest.TestCase):
                             MIRROR_RING=(20, 100), GROUND_POINTS=((40, 10), (80, 55)),
                             TARGET_GOAL="YELLOW"):
             with patch.multiple(nav, sensor=Sensor, time=Time, pyb=Board,
+                                image=type("Image", (), {"rgb_to_lab": staticmethod(lambda c: (0, 0, 0))}),
                                 init_camera=lambda: None,
                                 scan_field=scan_scene):
                 with self.assertRaises(StopIteration):
@@ -464,7 +418,8 @@ class OpenMvNavigationTests(unittest.TestCase):
                             for packet in Board.packets if packet[5] == nav.MODE_WAIT))
         self.assertEqual(Frame.labels.count("WHITE LINE: DETECTED (1, 15 cm)"), 7)
         self.assertEqual(Frame.labels[3], "WHITE LINE: UNCONFIRMED (1)")
-        self.assertEqual(Frame.goal_colors, [nav.GOAL_COLORS["BLUE"]] * 8)
+        # One colour per frame: BLUE on every other one.
+        self.assertEqual(Frame.goal_colors, [nav.GOAL_COLORS["BLUE"]] * 4)
 
     def test_diagnostic_goal_blob_filters_by_mirror_and_size(self):
         class Blob:
@@ -517,16 +472,6 @@ class OpenMvNavigationTests(unittest.TestCase):
     def test_orange_and_yellow_measured_colors_are_candidates(self):
         for sample in ((75, 16, 47), (80, 26, 50), (72, 21, 45), (77, 24, 49)):
             self.assertTrue(any(nav.in_lab(sample, threshold) for threshold in nav.cfg.YELLOW))
-
-    def test_ball_saturated_samples_and_yellow_goal_sample(self):
-        for l in (17, 70):
-            for a in (29, 59):
-                for b in (21, 58):
-                    self.assertTrue(any(nav.in_lab((l, a, b), threshold)
-                                        for threshold in nav.cfg.BALL))
-        for sample in ((38, 51, 45), (69, 40, 59), (73, 31, 52)):
-            self.assertTrue(any(nav.in_lab(sample, threshold) for threshold in nav.cfg.BALL))
-        self.assertFalse(any(nav.in_lab((77, 21, 49), threshold) for threshold in nav.cfg.BALL))
 
     def test_wire_format_signed_motion_checksum_and_protocol_marker(self):
         vx, vy, mask, mode = nav.decide_navigation(True, VISIBLE, [edge(90)])

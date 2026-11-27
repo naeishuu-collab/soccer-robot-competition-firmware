@@ -1,7 +1,7 @@
 """色しきい値・露出・検出候補の診断用。検出関数はgoal_wall_navigation.pyから再利用する。
 ここでLAB値やROIを観察し、調整値はcamera_calibration.pyへ反映する。走行制御用ではない。
 """
-from goal_wall_navigation import (GOAL_COLORS, Mirror, ball_like, blob_value, cfg, draw_goal, draw_mirror, overlaps_ball,
+from goal_wall_navigation import (GOAL_COLORS, Mirror, blob_value, cfg, draw_goal, draw_mirror,
                                   find_color_blob, init_camera, sensor, time)
 
 # Optional named ROIs in raw image pixels. Sample the inside of each target.
@@ -25,25 +25,15 @@ def main():
         now = time.ticks_ms()
         log = time.ticks_diff(now, last_print) >= PRINT_INTERVAL_MS
         detections = []
-        ball_thresholds = getattr(cfg, "BALL", None)
-        ball, ball_counts = (find_color_blob(img, mirror, ball_thresholds, 10, ball_like, True)
-                             if ball_thresholds else (None, [0, 0, 0]))
         for name, thresholds in (("YELLOW", cfg.YELLOW), ("BLUE", cfg.BLUE)):
             blob, counts = find_color_blob(img, mirror, thresholds,
                                            getattr(cfg, "BLUE_MIN_PIXELS", 8) if name == "BLUE" else
-                                           getattr(cfg, "YELLOW_MIN_PIXELS", 12),
-                                           (lambda candidate: not overlaps_ball(candidate, ball)) if name == "YELLOW" else None,
-                                           True)
+                                           getattr(cfg, "YELLOW_MIN_PIXELS", 12), None, True)
             if blob is not None:
                 detections.append((name, blob))
             if log:
                 rect = blob_value(blob, "rect") if blob is not None else None
                 print("{} components/small/masked={} selected={}".format(name, counts, rect))
-        if log:
-            print("BALL components/small/masked={} selected={}".format(
-                ball_counts, blob_value(ball, "rect") if ball is not None else None))
-        if ball is not None:
-            detections.append(("BALL", ball))
         if log:
             last_print = now
             print("fps={:.1f} exposure_us={} gain_db={} rgb_gain={}".format(
