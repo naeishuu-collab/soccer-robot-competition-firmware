@@ -10,7 +10,12 @@ import competition_vision as vision_module
 TELEMETRY_SIZE = 19
 STALE_LINK_MS = 400  # MAIN data older than this is not shown
 STALE_BALL_MS = 200  # IR detection older than this (at the camera) is not shown
-DEBUG_INTERVAL_FRAMES = 10
+REFRESH_FRAMES = 4  # goal candidates are searched again every Nth frame (one colour at a time)
+DEBUG_REFRESH_FRAMES = 3
+DEBUG_PRINT_MS = 1000
+BLACK, GREY, BAD = (0, 0, 0), (120, 120, 120), (255, 40, 40)
+CHARACTER_PX = 8
+LEFT_X, RIGHT_X, BOTTOM_Y = 0, 254, 214  # text columns kept outside the mirror image (QVGA)
 DEBUG_MAX_LISTED = 5
 
 RED, YELLOW, BLUE = (255, 0, 0), (255, 255, 0), (0, 110, 255)
@@ -118,25 +123,52 @@ class Overlay:
         self.fps = 0.0
         self.fps_ms = None
         self.fps_frames = 0
+        self.searches = 0
+        self.print_ms = None
 
     def text(self, img, x, y, message, color=WHITE):
-        img.draw_string((x + 1, y + 1), message, color=(0, 0, 0))
-        img.draw_string((x, y), message, color=color)
+        """黒い下地に1行。背景の映像に埋もれないようにする。"""
+        img.draw_rectangle((x, y, len(message) * CHARACTER_PX + 2, 11), color=BLACK, fill=True)
+        img.draw_string((x + 1, y + 1), message, color=color)
 
-    def arrow(self, img, bearing, radius, color, thickness=2):
+    def arrow(self, img, bearing, radius, color, thickness=2, label=None):
         cx, cy = round(self.mirror.cx), round(self.mirror.cy)
         tip = image_point(self.cfg, self.mirror, bearing, radius)
         img.draw_line((cx, cy, tip[0], tip[1]), color=color, thickness=thickness)
         img.draw_circle((tip[0], tip[1], 3), color=color, thickness=thickness)
+        if label:
+            self.text(img, tip[0] + 4, tip[1] - 5, label, color)
 
     def goal_status(self, name):
         """未検出の場合の説明。色が無いのか、候補があって除外されたのかを区別する。"""
         reports = self.reports[name]
         if not reports:
-            return "NO COLOR"
+            return "NOCOLOR"
         if reports[0].get("reason") == "OK":
             return "SEEN"
-        return "REJECT {} x{}".format(reports[0].get("reason", "?"), len(reports))
+        return "NG " + reports[0].get("reason", "?")
+
+    def search(self, img, now, ticks_diff, color_of):
+        """表示用の候補検索。毎フレームは行わない（競技判定はvision側で別に行う）。"""
+        every = DEBUG_REFRESH_FRAMES if self.debug_goals else REFRESH_FRAMES
+        if self.frame > 2 and self.frame % every:
+            return
+        self.searches += 1
+        name = ("YELLOW", "BLUE")[(self.searches - 1) % 2]
+        self.reports[name] = inspect_goals(img, name, self.cfg, self.mirror, color_of,
+                                           1 if self.debug_goals else 2)
+        if not self.debug_goals or (self.print_ms is not None and self.searches > 2
+                                    and ticks_diff(now, self.print_ms) < DEBUG_PRINT_MS):
+            return
+        if self.searches % 2:
+            print("ring center=({}, {}) inner={} outer={} front={}".format(
+                self.mirror.cx, self.mirror.cy, self.mirror.inner, self.mirror.outer, self.cfg.FRONT_DEG))
+        else:
+            self.print_ms = now
+        if not self.reports[name]:
+            print(name, "no colour candidate: check LAB threshold", getattr(self.cfg, name))
+        for report in self.reports[name][:DEBUG_MAX_LISTED]:
+            print(describe(name, report))
 
     def draw(self, img, now, vision, boundaries, ticks_diff, color_of):
         self.frame += 1
@@ -146,65 +178,76 @@ class Overlay:
         elif ticks_diff(now, self.fps_ms) >= 1000:
             self.fps = self.fps_frames * 1000 / ticks_diff(now, self.fps_ms)
             self.fps_ms, self.fps_frames = now, 0
-        # One colour per frame keeps the extra cost to a single search. Done before any drawing.
-        name = ("YELLOW", "BLUE")[self.frame % 2]
-        self.reports[name] = inspect_goals(img, name, self.cfg, self.mirror, color_of,
-                                           1 if self.debug_goals else 2)
-        if self.debug_goals and self.frame % DEBUG_INTERVAL_FRAMES in (0, 1):
-            print("ring center=({}, {}) inner={} outer={} front={}".format(
-                self.mirror.cx, self.mirror.cy, self.mirror.inner, self.mirror.outer, self.cfg.FRONT_DEG))
-            if not self.reports[name]:
-                print(name, "no colour candidate: check LAB threshold", getattr(self.cfg, name))
-            for report in self.reports[name][:DEBUG_MAX_LISTED]:
-                print(describe(name, report))
+        self.search(img, now, ticks_diff, color_of)  # before any drawing touches the image
         if not self.show:
             return
         data, ball = self.link.current(now, ticks_diff)
-        ready, floor_ok, mask, escape, _, yellow, blue = vision.last
+        ready, floor_ok, mask, _, _, yellow, blue = vision.last
+        self.draw_map(img, data, ball, mask, boundaries)
+        self.draw_goals(img, yellow, blue)
+        self.draw_panel(img, data, ball, ready, floor_ok)
+
+    def draw_map(self, img, data, ball, mask, boundaries):
         mirror = self.mirror
         cx, cy = round(mirror.cx), round(mirror.cy)
         for radius in (mirror.inner, mirror.outer):
-            img.draw_circle((cx, cy, round(radius)), color=(128, 128, 128))
+            img.draw_circle((cx, cy, round(radius)), color=GREY)
         for sector in range(16):  # safe directions: cyan ticks just outside the ring
             if mask & (1 << sector):
-                a = image_point(self.cfg, mirror, sector * 22.5, mirror.outer - 6)
-                b = image_point(self.cfg, mirror, sector * 22.5, mirror.outer + 6)
+                a = image_point(self.cfg, mirror, sector * 22.5, mirror.outer + 1)
+                b = image_point(self.cfg, mirror, sector * 22.5, mirror.outer + 9)
                 img.draw_line((a[0], a[1], b[0], b[1]), color=CYAN, thickness=3)
         for edge in boundaries:
-            img.draw_cross((edge[3], edge[4]), color=WHITE)
-        self.arrow(img, 0, mirror.outer, RED, 1)
-        goals = {"YELLOW": yellow, "BLUE": blue}
-        for goal_name, reports in self.reports.items():
+            img.draw_cross((edge[3], edge[4]), color=WHITE, size=3)
+        self.arrow(img, 0, mirror.outer, RED, 2, "F")
+        if ball is not None:
+            self.arrow(img, ball, mirror.outer * 0.75, ORANGE, 3, "B")
+        if data and data["direction"] is not None and data["power"]:
+            self.arrow(img, data["direction"], mirror.outer * 0.55, GREEN, 4, "M")
+
+    def draw_goals(self, img, yellow, blue):
+        for name, reports in self.reports.items():
             for report in reports[:DEBUG_MAX_LISTED if self.debug_goals else 1]:
                 accepted = report.get("reason") == "OK"
                 if not accepted and not self.debug_goals:
                     continue
-                img.draw_rectangle(report["box"], color=COLORS[goal_name], thickness=2 if accepted else 1)
-                img.draw_cross((report["cx"], report["cy"]), color=COLORS[goal_name])
+                img.draw_rectangle(report["box"], color=COLORS[name], thickness=2 if accepted else 1)
+                img.draw_cross((report["cx"], report["cy"]), color=COLORS[name])
                 label = "{:.0f}".format(report["bearing"]) if accepted else report.get("reason", "?")
-                self.text(img, report["box"][0], max(0, report["box"][1] - 10), label, COLORS[goal_name])
-        if ball is not None:
-            self.arrow(img, ball, mirror.outer * 0.75, ORANGE)
-        if data and data["direction"] is not None and data["power"]:
-            self.arrow(img, data["direction"], mirror.outer * 0.55, GREEN, 3)
+                self.text(img, report["box"][0], max(0, report["box"][1] - 11), label, COLORS[name])
+        # Right column: tracked bearing and confidence, then what the last search saw.
+        for row, name, goal in ((0, "YELLOW", yellow), (42, "BLUE", blue)):
+            self.text(img, RIGHT_X, row, name, COLORS[name])
+            self.text(img, RIGHT_X, row + 12,
+                      "---" if goal[0] is None else "{:.0f} c{}".format(goal[0], goal[2]), COLORS[name])
+            status = self.goal_status(name)
+            self.text(img, RIGHT_X, row + 24, status, GREEN if status == "SEEN" else BAD)
 
-        row = 0
-        for goal_name in ("YELLOW", "BLUE"):
-            bearing, _, confidence = goals[goal_name][0], goals[goal_name][1], goals[goal_name][2]
-            line = "{} {}".format(goal_name[0], "---" if bearing is None else "{:.0f} c{}".format(bearing, confidence))
-            self.text(img, 2, row, line + " " + self.goal_status(goal_name), COLORS[goal_name])
-            row += 10
-        self.text(img, 2, row, "FPS {:.1f} {}".format(self.fps, "OK" if ready else "SLOW" if floor_ok else "NOFLOOR"))
-        row = 190
+    def draw_panel(self, img, data, ball, ready, floor_ok):
+        # Left column: the numbers that matter while testing.
+        self.text(img, LEFT_X, 0, "FPS {:.1f}".format(self.fps))
+        floor = "FLOOR OK" if ready else "SLOW" if floor_ok else "NO FLOOR"
+        self.text(img, LEFT_X, 12, floor, GREEN if ready else BAD)
+        self.text(img, LEFT_X, 30, "BALL(IR)", ORANGE)
+        self.text(img, LEFT_X, 42, "---" if ball is None else "{} deg".format(ball), ORANGE)
+        confidence = None if ball is None or data is None else data["ball_confidence"]
+        self.text(img, LEFT_X, 54, "conf {}".format("-" if confidence is None else confidence), ORANGE)
         if data is None:
-            self.text(img, 2, row, "MAIN: NO DATA (check J6 pin1 -> P5)", ORANGE)
+            self.text(img, LEFT_X, BOTTOM_Y, "MAIN: NO DATA", BAD)
+            self.text(img, LEFT_X, BOTTOM_Y + 12, "check J6 pin1 -> P5", BAD)
             return
-        self.text(img, 2, row, "IR ball {} conf {}".format(
-            "---" if ball is None else ball,
-            "-" if ball is None or data["ball_confidence"] is None else data["ball_confidence"]), ORANGE)
-        self.text(img, 2, row + 10, "CMD {} pwr {} turn {}{}".format(
-            "---" if data["direction"] is None else data["direction"], data["power"], data["turn"],
-            " HOLD" if data["hold"] else ""), GREEN)
-        self.text(img, 2, row + 20, "{} {}".format(data["tactic"], data["mode"]))
-        self.text(img, 2, row + 30, "link IR {} CAM {} BNO {}".format(
-            "OK" if data["ir_link"] else "NG", "OK" if data["camera_link"] else "NG", data["bno"]))
+        self.text(img, LEFT_X, 72, "MOVE", GREEN)
+        moving = data["direction"] is not None and data["power"]
+        self.text(img, LEFT_X, 84, "{} deg".format(data["direction"]) if moving else "STOP", GREEN)
+        self.text(img, LEFT_X, 96, "pwr {}".format(data["power"]), GREEN)
+        self.text(img, LEFT_X, 108, "turn {}".format(data["turn"]), GREEN)
+        if data["hold"]:
+            self.text(img, LEFT_X, 120, "HOLD", BAD)
+        # Bottom: control state, then link chips.
+        self.text(img, LEFT_X, BOTTOM_Y, "{} / {}".format(data["tactic"], data["mode"]))
+        x = LEFT_X
+        for label, good in (("IR " + ("OK" if data["ir_link"] else "NG"), data["ir_link"]),
+                            ("CAM " + ("OK" if data["camera_link"] else "NG"), data["camera_link"]),
+                            ("BNO " + data["bno"], data["bno"] == "USED")):
+            self.text(img, x, BOTTOM_Y + 12, label, GREEN if good else GREY if label == "BNO OFF" else BAD)
+            x += len(label) * CHARACTER_PX + 10

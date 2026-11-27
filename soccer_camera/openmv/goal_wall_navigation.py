@@ -15,6 +15,12 @@ try:
 except ImportError:
     sensor = image = time = pyb = None
 
+try:
+    import micropython
+except ImportError:
+    class micropython:  # host: the native decorator does nothing
+        native = staticmethod(lambda function: function)
+
 LINE_CLEARANCE_CM = 25  # Provisional, verify stopping distance before floor use.
 LOOKAHEAD_CM = 50
 RAY_COUNT = 24
@@ -26,6 +32,7 @@ SECTOR_RAYS = tuple(frozenset((bearing + offset) % 360 for offset in (-30, -15, 
 SECTOR_DIRECTIONS = tuple((math.sin(math.radians(bearing)), math.cos(math.radians(bearing)))
                           for bearing in range(0, 360, SECTOR_STEP_DEG))
 WALL_NEIGHBOR_GAP_CM = 8
+COLOR_CACHE_LIMIT = 2048  # distinct camera colours remembered between frames
 STREAM_INTERVAL_MS = 50
 MAX_FRAME_AGE_MS = 100
 LINE_MAX_WIDTH_CM = 8  # a field line is about 2 cm; wider white is not "thin"
@@ -223,6 +230,7 @@ def find_color_blob(img, mirror, thresholds, min_pixels, accept=None, dense_sear
     return best, counts
 
 
+@micropython.native
 def scan_ray(samples, color_at, include_wall=False):
     # 近距離から順に色を見て床の確認と、緑床の先にある白線/壁の最初の境界を返す。
     green_run = 0
@@ -260,8 +268,8 @@ def line_is_thin(samples, edge, color_at):
     return False
 
 
-def ground_color(img, x, y):
-    lab = image.rgb_to_lab(img.get_pixel((x, y), rgbtuple=True))
+def classify_rgb(rgb):
+    lab = image.rgb_to_lab(rgb)
     low_saturation = getattr(cfg, "GREEN_LOW_SATURATION", None)
     if in_lab(lab, cfg.GREEN) or (low_saturation and in_lab(lab, low_saturation)):
         return "GREEN"
@@ -272,11 +280,44 @@ def ground_color(img, x, y):
     return None
 
 
-def scan_field(img, mirror, white_candidates=None, include_wall=False, thin=None):
+def ground_color(img, x, y):
+    return classify_rgb(img.get_pixel((x, y), rgbtuple=True))
+
+
+class ColorCache:
+    """ground_color()と同じ結果を、見たことのある色は表引きで返す（床の色は繰り返し現れる）。
+
+    しきい値は起動中に変わらない前提。変える場合は作り直す。
+    """
+
+    def __init__(self):
+        self.known = {}
+
+    def __call__(self, img, x, y):
+        rgb = img.get_pixel((x, y), rgbtuple=True)
+        color = self.known.get(rgb, False)  # None is a real answer, so False marks "not seen"
+        return self.learn(rgb) if color is False else color
+
+    def learn(self, rgb):
+        color = classify_rgb(rgb)
+        if len(self.known) >= COLOR_CACHE_LIMIT:
+            self.known.clear()  # the same dict object stays in use
+        self.known[rgb] = color
+        return color
+
+
+def scan_field(img, mirror, white_candidates=None, include_wall=False, thin=None, cache=None):
     """各方位の床色を調べ、走行可能セクターと境界候補を作る。"""
     # 各方位のサンプル色を分類し、床が見える方位集合と隣接確認済みの境界一覧に集約する。
+    cache = cache or ColorCache()
+    # Looked up once: this function runs hundreds of times per frame.
+    get_pixel, lookup, learn = img.get_pixel, cache.known.get, cache.learn
+
     def color_at(x, y):
-        color = ground_color(img, x, y)
+        rgb = get_pixel((x, y), rgbtuple=True)
+        color = lookup(rgb, False)
+        if color is False:
+            color = learn(rgb)
         if color == "WHITE" and white_candidates is not None:
             white_candidates.add(bearing)
         return color
@@ -421,6 +462,7 @@ def main_loop(send_uart=True, display=False):
     if getattr(cfg, "PROTOCOL", 1) == 2:
         import competition_vision
         vision = competition_vision.Pipeline(cfg, mirror, LINE_CLEARANCE_CM, MAX_FRAME_AGE_MS)
+    colors = ColorCache()
     overlay = None
     debug_goals = getattr(cfg, "GOAL_DEBUG", False)
     if vision is not None and (display or debug_goals):
@@ -438,12 +480,12 @@ def main_loop(send_uart=True, display=False):
         # 先に床/白線を評価して安全指令を作る。ゴール表示など重い処理より走行許可を優先する。
         img = sensor.snapshot()
         captured = time.ticks_ms() if vision else started
-        white_candidates = set() if display else None
+        white_candidates = set() if display and vision is None else None
         thin = set()
         if not mirror.rays:
             visible, boundaries = (), []
         elif vision is not None:
-            visible, boundaries = scan_field(img, mirror, white_candidates, thin=thin)
+            visible, boundaries = scan_field(img, mirror, white_candidates, thin=thin, cache=colors)
         else:
             visible, boundaries = scan_field(img, mirror, white_candidates)
         now = time.ticks_ms()
@@ -456,7 +498,7 @@ def main_loop(send_uart=True, display=False):
             ready = (setup_reason is None
                      and competition_vision.observed_rays(visible, boundaries) >= MIN_FLOOR_RAYS)
             packet = vision.step(img, now, ready, frame_ms, visible, boundaries, time.ticks_ms, thin,
-                                 lambda x, y: ground_color(img, x, y))
+                                 lambda x, y: colors(img, x, y))
             if uart is not None:
                 uart.write(packet)
         elif uart is not None and (command != last_command
@@ -470,8 +512,10 @@ def main_loop(send_uart=True, display=False):
         frames += 1
         if time.ticks_diff(now, last_report) >= 2000:
             # FPS and stage times, to compare versions on the camera itself.
-            print("fps={:.1f} line_ms={}".format((frames - shown_frames) * 1000 / time.ticks_diff(now, last_report),
-                                                 frame_ms))
+            # capture includes waiting for the exposure (EXPOSURE_US limits the frame rate).
+            print("fps={:.1f} capture_ms={} line_ms={}".format(
+                (frames - shown_frames) * 1000 / time.ticks_diff(now, last_report),
+                time.ticks_diff(captured, started), time.ticks_diff(now, captured)))
             shown_frames, last_report = frames, now
             if vision is not None:
                 print(vision.timing, vision.status())
@@ -482,7 +526,7 @@ def main_loop(send_uart=True, display=False):
                 if waiting:
                     overlay.link.feed(uart.read(min(waiting, 128)), time.ticks_ms())
             overlay.draw(img, time.ticks_ms(), vision, boundaries, time.ticks_diff,
-                         lambda x, y: ground_color(img, x, y))
+                         lambda x, y: colors(img, x, y))
         elif display and vision is None:
             # Preview only (never sent to MAIN): one goal colour per frame, judged like protocol 3 does.
             name = ("BLUE", "YELLOW")[frames % 2]

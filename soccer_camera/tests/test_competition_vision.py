@@ -303,6 +303,45 @@ class RecognitionTests(unittest.TestCase):
         self.assertEqual(p.fill_gap(ALL - {90}, lines((105, 20))), ALL - {90})
         self.assertEqual(p.fill_gap(ALL - {90}, lines((90, 20))), ALL - {90})
 
+    def test_table_crc_matches_the_bitwise_definition(self):
+        def bitwise(data):
+            crc = 0xFFFF
+            for byte in data:
+                crc ^= byte << 8
+                for _ in range(8):
+                    crc = ((crc << 1) ^ (0x1021 if crc & 0x8000 else 0)) & 0xFFFF
+            return crc
+
+        for n in range(64):
+            data = bytes((i * 37 + n * 11) & 0xFF for i in range(n))
+            self.assertEqual(v.crc16(data), bitwise(data))
+
+    def test_color_cache_answers_like_the_direct_classification(self):
+        class Frame:
+            def get_pixel(self, position, *, rgbtuple):
+                x = position[0]
+                return (x % 7 * 15, x % 5 * 20 - 40, x % 3 * 25 - 30)
+
+        calls = []
+
+        class Lab:
+            @staticmethod
+            def rgb_to_lab(rgb):
+                calls.append(rgb)
+                return rgb
+
+        with patch.object(nav, "image", Lab):
+            cache = nav.ColorCache()
+            expected = [nav.ground_color(Frame(), x, 0) for x in range(600)]
+            calls.clear()
+            self.assertEqual([cache(Frame(), x, 0) for x in range(600)], expected)
+            self.assertEqual(len(calls), len(cache.known))  # each colour classified once, None included
+            self.assertIn(None, expected)
+            with patch.object(nav, "COLOR_CACHE_LIMIT", 4):
+                small = nav.ColorCache()
+                self.assertEqual([small(Frame(), x, 0) for x in range(600)], expected)
+                self.assertLessEqual(len(small.known), 4)
+
     def test_golden_packet_shared_with_main(self):
         packet = v.make_packet(7, 0x15, 0xFF0F, None, (350, 31), 1,
                                [0, 120, 90, 25, 0], [180, None, 60, 20, 3], (355, 55), 33)

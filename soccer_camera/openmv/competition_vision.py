@@ -5,6 +5,12 @@
 """
 import math
 
+try:
+    import micropython
+except ImportError:
+    class micropython:  # host: the native decorator does nothing
+        native = staticmethod(lambda function: function)
+
 SECTORS = 16
 SECTOR_STEP = 360 / SECTORS
 SECTOR_HALF_WIDTH = 30  # Every floor ray this close to a heading must be visible and clear.
@@ -38,6 +44,12 @@ def polar(x, y):
 def value(blob, name):
     attribute = getattr(blob, name)
     return attribute() if callable(attribute) else attribute
+
+
+# Floor rays that must all be clear for each of the 16 headings (computed once).
+SECTOR_WINDOWS = tuple(tuple(r for r in range(0, 360, 15)
+                             if abs((r - s * SECTOR_STEP + 180) % 360 - 180) <= SECTOR_HALF_WIDTH)
+                       for s in range(SECTORS))
 
 
 class LineGuard:
@@ -80,8 +92,10 @@ class LineGuard:
         mask = 0
         for sector in range(SECTORS):
             heading = sector * SECTOR_STEP
-            window = [r for r in range(0, 360, 15) if abs(wrap(r - heading)) <= SECTOR_HALF_WIDTH]
-            if all(r in clear for r in window):
+            for r in SECTOR_WINDOWS[sector]:
+                if r not in clear:
+                    break
+            else:
                 open_sectors.append(heading)
                 if all(abs(wrap(heading - b)) >= APPROACH_LIMIT_DEG for b in blocked):
                     mask |= 1 << sector
@@ -285,12 +299,23 @@ def estimate_heading(own, opponent):
     return (-axis) % 360, confidence
 
 
+def _crc_entry(value):
+    crc = value << 8
+    for _ in range(8):
+        crc = ((crc << 1) ^ (0x1021 if crc & 0x8000 else 0)) & 0xFFFF
+    return crc
+
+
+CRC_TABLE = tuple(_crc_entry(i) for i in range(256))
+
+
+@micropython.native
 def crc16(data):
+    """CRC16-CCITT (0xFFFF, 0x1021), one table lookup per byte."""
     crc = 0xFFFF
+    table = CRC_TABLE
     for byte in data:
-        crc ^= byte << 8
-        for _ in range(8):
-            crc = ((crc << 1) ^ (0x1021 if crc & 0x8000 else 0)) & 0xFFFF
+        crc = ((crc << 8) & 0xFFFF) ^ table[(crc >> 8) ^ byte]
     return crc
 
 
