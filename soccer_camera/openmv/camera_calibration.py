@@ -3,6 +3,11 @@
 competition_vision.pyへ切り替える場合はPROTOCOLとMAIN側ROBOT_UPGRADE設定も対応させる。
 """
 
+# Update these identifiers when copying firmware to the OpenMV board. The camera cannot query Git.
+FIRMWARE_VERSION = "0.1.0"
+GIT_COMMIT = "unembedded"
+CONFIG_ID = "RCJ-IR-SW-2026-11-27-A"
+
 FRAME_SIZE = "QVGA"
 # Enter (image_width, image_height), (center_x, center_y), and (inner_px, outer_px).
 IMAGE_SIZE = (320, 240)
@@ -21,12 +26,15 @@ TARGET_GOAL = "YELLOW"  # Set to "YELLOW" or "BLUE" before each half.
 # 1 = legacy 8-byte UART at 9600 (default). 2 = extended packet (wire version 3) at 115200; needs MAIN
 # ROBOT_UPGRADE=1 from the same commit and competition_vision.py on the camera.
 PROTOCOL = 2
+# Competition mode needs only floor/line safety; leave goal colour searches out of the frame loop.
+CHASE_ONLY = True
 # Overlay and text in the OpenMV IDE (needs visualize.py). Set True on the bench; keep False for matches
 # because the extra search and drawing lower the frame rate.
 VISUALIZE = False
 # Every goal colour candidate with its numbers and rejection reason (drawn and printed). Slow: bench only.
 GOAL_DEBUG = False
 DEBUG_STATS = False  # Enable stage timing and floor diagnostics only when measuring.
+DEBUG_FORMAT = "TEXT"  # TEXT or CSV; periodic, rate-limited diagnostics only.
 # True: the overall "enough floor seen" condition is treated as met (screen: FLOOR OK (FORCED)). Directions
 # whose floor is not seen stay closed, and setup errors and late frames still stop. False: traditional.
 FORCE_FLOOR_OK = True

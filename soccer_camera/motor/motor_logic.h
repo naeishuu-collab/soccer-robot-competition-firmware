@@ -279,6 +279,8 @@ public:
 
   int duty(int i) const { return current_[i]; }
   int target(int i) const { return target_[i]; }
+  bool reversing() const { return waiting_; }
+  bool ramping() const { for (int i = 0; i < 4; ++i) if (ramp_[i]) return true; return false; }
   const Mix &mix() const { return mix_; }
 
 private:

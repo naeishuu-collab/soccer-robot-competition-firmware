@@ -578,32 +578,87 @@ def read_telemetry(uart, link, now):
         link.feed(uart.read(min(waiting, 32)) or b"", now)
 
 
+CAMERA_CSV_FIELDS = tuple(("record,uptime_ms,fps,capture_ms,line_ms,ready,floor_ok,mask,escape_deg,"
+                          "yellow_deg,yellow_conf,blue_deg,blue_conf,capture_errors,fw,git,config,"
+                          "tx_attempts,tx_complete,tx_partial,tx_failed,tx_unknown,tx_expired,tx_bytes,"
+                          "tx_pending,tx_offset,tx_last,capture_avg_ms,capture_max_ms,capture_p95_ms,"
+                          "scan_avg_ms,scan_max_ms,scan_p95_ms,goal_avg_ms,goal_max_ms,goal_p95_ms,"
+                          "guard_avg_ms,guard_max_ms,guard_p95_ms,uart_avg_ms,uart_max_ms,uart_p95_ms,"
+                          "total_avg_ms,total_max_ms,total_p95_ms").split(","))
+
+
+def format_camera_csv(fields):
+    if len(fields) != len(CAMERA_CSV_FIELDS):
+        raise ValueError("camera CSV field count mismatch")
+    return ",".join(str(value) for value in fields)
+
+
+def diagnostic_csv_values(stats, name):
+    result = stats.summary(name)
+    return tuple(round(value, 1) for value in result) if result is not None else (-1, -1, -1)
+
+
 class LatestPacketTx:
     """Bounded nonblocking writer: one in-flight frame, never a telemetry queue."""
     def __init__(self, uart, ticks_diff, max_age_ms=100):
         self.uart, self.ticks_diff, self.max_age_ms = uart, ticks_diff, max_age_ms
         self.packet, self.offset, self.started = None, 0, 0
+        self.attempts = self.completed = self.partial = self.failed = self.expired = 0
+        self.bytes_written = 0
+        self.last_error = "NONE"
 
     def send(self, packet, now):
+        self.attempts += 1
         if self.packet is not None and self.ticks_diff(now, self.started) > self.max_age_ms:
+            self.expired += 1
+            self.last_error = "PARTIAL_EXPIRED"
             self.packet = None  # receiver must resynchronise after a partial expired frame
+            self.offset = 0
         if self.packet is None:
             self.packet, self.offset, self.started = packet, 0, now
         try:
             count = self.uart.write(memoryview(self.packet)[self.offset:])
         except OSError:
-            count = None
+            self.failed += 1
+            self.last_error = "UART_OSERROR"
+            return False
+        if count is None or count < 0:
+            self.failed += 1
+            self.last_error = "UART_NO_PROGRESS"
+            return False
+        if count == 0:
+            self.failed += 1
+            self.last_error = "UART_NO_PROGRESS"
+            return False
         if count:
             self.offset += count
+            self.bytes_written += count
             if self.offset >= len(self.packet):
                 self.packet = None
+                self.offset = 0
+                self.completed += 1
+                self.last_error = "NONE"
+                return True
+            self.partial += 1
+            self.last_error = "PARTIAL_WRITE"
+        return False
+
+    def status(self):
+        return "attempts={} complete={} partial={} failed={} expired={} bytes={} pending={} offset={} last={}".format(
+            self.attempts, self.completed, self.partial, self.failed, self.expired,
+            self.bytes_written, int(self.packet is not None), self.offset, self.last_error)
 
 
 def main_loop(send_uart=True, display=False):
     """撮影→検出→安全方向決定→必要ならMAINへ送信、をフレームごとに繰り返す。"""
     # 初期化後、各フレームで「撮影→床/境界走査→ゴール検出→判断→UART/表示」を実行。
     init_camera()
-    frame = sensor.snapshot()
+    capture_errors = 0
+    try:
+        frame = sensor.snapshot()
+    except OSError as error:
+        print("[CAMERA_ERROR] first capture failed: {!r}".format(error))
+        return
     mirror = Mirror(frame.width(), frame.height(), frame)
     print("mirror {} center=({}, {}) ring=({}, {})".format(
         "detected" if mirror.detected else "configured", mirror.cx, mirror.cy, mirror.inner, mirror.outer))
@@ -642,11 +697,45 @@ def main_loop(send_uart=True, display=False):
     uart = (pyb.UART(3, 115200 if vision else 9600, timeout=0, timeout_char=0)
             if send_uart and nonblocking else pyb.UART(3, 115200 if vision else 9600) if send_uart else None)
     writer = LatestPacketTx(uart, time.ticks_diff) if uart is not None and nonblocking else None
+    uart_tx_attempts = uart_tx_complete = uart_tx_partial = uart_tx_failed = uart_tx_unknown = uart_tx_bytes = 0
+    uart_tx_last = "NONE"
+
+    def transmit(packet, now):
+        nonlocal uart_tx_attempts, uart_tx_complete, uart_tx_partial, uart_tx_failed, uart_tx_unknown, uart_tx_bytes, uart_tx_last
+        if writer is not None:
+            done = writer.send(packet, now)
+            return done
+        uart_tx_attempts += 1
+        try:
+            count = uart.write(packet)
+        except OSError:
+            uart_tx_failed += 1
+            uart_tx_last = "UART_OSERROR"
+            return False
+        if count is None:
+            # Some blocking UART implementations do not report a byte count.
+            uart_tx_unknown += 1
+            uart_tx_last = "COUNT_UNAVAILABLE"
+            return True
+        uart_tx_bytes += count
+        if count >= len(packet):
+            uart_tx_complete += 1
+            uart_tx_last = "NONE"
+            return True
+        if count > 0:
+            uart_tx_partial += 1
+            uart_tx_last = "PARTIAL_WRITE"
+        else:
+            uart_tx_failed += 1
+            uart_tx_last = "UART_NO_PROGRESS"
+        return False
     last_tx = time.ticks_ms()
     last_command = None
     last_report = last_tx
+    csv_header_sent = False
     sequence = 0
     frames = shown_frames = 0
+    last_capture_error_report = last_tx
     shown = {"BLUE": (False, 0), "YELLOW": (False, 0)}
     loop_us = None
     while True:
@@ -657,7 +746,16 @@ def main_loop(send_uart=True, display=False):
             loop_us = tick
         started = time.ticks_ms()
         # 先に床/白線を評価して安全指令を作る。ゴール表示など重い処理より走行許可を優先する。
-        img = sensor.snapshot()
+        try:
+            img = sensor.snapshot()
+        except OSError as error:
+            capture_errors += 1
+            if (getattr(cfg, "DEBUG_STATS", False) and
+                    time.ticks_diff(started, last_capture_error_report) >= 1000):
+                print("[CAMERA_ERROR] count={} last={!r}".format(capture_errors, error))
+                last_capture_error_report = started
+            time.sleep_ms(10)
+            continue
         captured = time.ticks_ms() if vision else started
         if stats is not None:
             shot = time.ticks_us()
@@ -696,20 +794,14 @@ def main_loop(send_uart=True, display=False):
             stepped = time.ticks_us()
             stats.add("vision", time.ticks_diff(stepped, scanned))
             if uart is not None:
-                if writer is None:
-                    uart.write(packet)
-                else:
-                    writer.send(packet, now)
+                transmit(packet, now)
                 stats.add("uart", time.ticks_diff(time.ticks_us(), stepped))
         elif uart is not None and (command != last_command
                                  or time.ticks_diff(now, last_tx) >= STREAM_INTERVAL_MS):
             # 旧8-byte系は状態変化時または定期送信。新しい拡張系はPipelineが毎フレーム送る。
             vx, vy, sectors, _ = command
             packet = make_nav_packet(vx, vy, sectors, mode, sequence)
-            if writer is None:
-                uart.write(packet)
-            else:
-                writer.send(packet, now)
+            transmit(packet, now)
             sequence = (sequence + 1) & 0xff
             last_tx = now
             last_command = command
@@ -717,17 +809,52 @@ def main_loop(send_uart=True, display=False):
         if (display or debug_goals or getattr(cfg, "DEBUG_STATS", False)) and time.ticks_diff(now, last_report) >= 2000:
             # FPS and stage times, to compare versions on the camera itself.
             # capture includes waiting for the exposure (EXPOSURE_US limits the frame rate).
-            print("fps={:.1f} capture_ms={} line_ms={}".format(
-                (frames - shown_frames) * 1000 / time.ticks_diff(now, last_report),
-                time.ticks_diff(captured, started), time.ticks_diff(now, captured)))
+            fps = (frames - shown_frames) * 1000 / time.ticks_diff(now, last_report)
+            capture_ms, line_ms = time.ticks_diff(captured, started), time.ticks_diff(now, captured)
             shown_frames, last_report = frames, now
-            if vision is not None:
+            if getattr(cfg, "DEBUG_FORMAT", "TEXT") == "CSV" and vision is not None:
+                ready, floor_ok, mask, escape, nearest, yellow, blue = vision.last or (False, False, 0, None, None, (None, None, 0, 0, 255), (None, None, 0, 0, 255))
+                if writer is not None:
+                    tx_values = (writer.attempts, writer.completed, writer.partial, writer.failed,
+                                 0, writer.expired, writer.bytes_written, int(writer.packet is not None),
+                                 writer.offset, writer.last_error)
+                else:
+                    tx_values = (uart_tx_attempts, uart_tx_complete, uart_tx_partial, uart_tx_failed,
+                                 uart_tx_unknown, 0, uart_tx_bytes, 0, 0, uart_tx_last)
+                stage_values = tuple(value for name in ("capture", "scan", "goal", "guard", "uart", "total")
+                                     for value in diagnostic_csv_values(stats, name))
+                if not csv_header_sent:
+                    print(",".join(CAMERA_CSV_FIELDS))
+                    csv_header_sent = True
+                values = ["CAMERA", now, round(fps, 1), capture_ms, line_ms, int(ready), int(floor_ok), mask,
+                          -1 if escape is None else int(escape), -1 if yellow[0] is None else int(yellow[0]),
+                          yellow[2], -1 if blue[0] is None else int(blue[0]), blue[2], capture_errors,
+                          getattr(cfg, "FIRMWARE_VERSION", "unknown"), getattr(cfg, "GIT_COMMIT", "unembedded"),
+                          getattr(cfg, "CONFIG_ID", "unknown")]
+                values.extend(tx_values)
+                values.extend(stage_values)
+                print(format_camera_csv(values))
+            else:
+                print("fps={:.1f} capture_ms={} line_ms={}".format(fps, capture_ms, line_ms))
+            if vision is not None and getattr(cfg, "DEBUG_FORMAT", "TEXT") != "CSV":
                 # Repeated, because the startup lines scroll away: what is actually running on the camera.
-                print("cfg scan={} VISUALIZE={} GOAL_DEBUG={} FORCE_FLOOR_OK={}".format(
+                print("[CAMERA] fw={} git={} config={} ready={} setup={} protocol={} target={} exposure_us={} gain_db={} capture_errors={}".format(
+                    getattr(cfg, "FIRMWARE_VERSION", "unknown"), getattr(cfg, "GIT_COMMIT", "unembedded"),
+                    getattr(cfg, "CONFIG_ID", "unknown"), int(setup_reason is None and mirror.ring_ready), setup_reason, getattr(cfg, "PROTOCOL", 1),
+                    getattr(cfg, "TARGET_GOAL", "unset"), getattr(cfg, "EXPOSURE_US", "auto"),
+                    getattr(cfg, "GAIN_DB", "auto"), capture_errors))
+                print("cfg scan={} VISUALIZE={} GOAL_DEBUG={} DEBUG_STATS={} FORCE_FLOOR_OK={} features={}".format(
                     "fast" if scanner is not None else "reference", int(display), int(bool(debug_goals)),
-                    int(floor_forced())))
+                    int(bool(getattr(cfg, "DEBUG_STATS", False))), int(floor_forced()),
+                    "LINE+GOAL" if vision is not None else "LINE"))
                 print("ms avg/max/p95", stats.report())
                 print(vision.timing, vision.status())
+                if writer is not None:
+                    print("[UART_TX]", writer.status())
+                else:
+                    print("[UART_TX] attempts={} complete={} partial={} failed={} bytes={} last={}".format(
+                        uart_tx_attempts, uart_tx_complete, uart_tx_partial, uart_tx_failed,
+                        uart_tx_bytes, uart_tx_last))
                 if mirror.rays:
                     print(floor_report(img, mirror, colors, visible, boundaries, setup_reason,
                                        observed, vision.last[2]))

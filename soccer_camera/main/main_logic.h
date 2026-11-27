@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <math.h>
+#include <RuntimeConfig.h>
 
 namespace brain {
 
@@ -555,8 +556,13 @@ public:
     const Seen &target = cam.targetBlue ? cam.blue : cam.yellow;
     const Seen &own = cam.targetBlue ? cam.yellow : cam.blue;
     auto usable = [&](const Seen &s) {
+#if ENABLE_GOAL_DETECTION
       return camFresh && cam.targetValid && s.seen && s.confidence >= cfg.goalMinConfidence &&
              uint32_t(now - s.stampMs) <= 500;
+#else
+      (void)s;
+      return false;
+#endif
     };
     heading.update(bno, cam, camFresh, usable(target) || usable(own), cfg, now);
 
@@ -628,7 +634,13 @@ public:
     if (!i.valid || i.confidence < cfg.ballMinConfidence) return stop(out, "no ball detected");
 
     if (recovering_ && uint32_t(now - recoverMs_) >= cfg.recoverMs) recovering_ = false;
-    if (ball.state == BallState::WAIT) return finish(out, Tactic::SEARCH, "no ball seen yet", false, 0);
+    if (ball.state == BallState::WAIT) {
+#if ENABLE_BALL_SEARCH
+      return finish(out, Tactic::SEARCH, "no ball seen yet", false, 0);
+#else
+      return stop(out, "ball not acquired");
+#endif
+    }
 
     float wanted = 0;
     uint16_t speed = cfg.speedNormal;
@@ -637,6 +649,7 @@ public:
     bool keepAway = false;  // never get closer to the ball
     float orbitLimit = 45;  // a rerouted orbit never heads closer to the ball than this, or than planned
     if (ball.state == BallState::SEARCH) {
+#if ENABLE_BALL_SEARCH
       // Octagon patrol from the last bearing. 45 degree steps need no reverse pause (a wheel changing
       // sign has been idle for a whole leg), and the loop returns near its start.
       tactic = Tactic::SEARCH;
@@ -647,6 +660,9 @@ public:
       wanted = norm(float(searchAnchor_) + side_ * 45.0f * (uint32_t(now - searchMs_) / cfg.searchLegMs % 8));
       speed = cfg.speedSlow;
       note = "no ball detected: searching";
+#else
+      return stop(out, "ball lost; search disabled");
+#endif
     } else if (recovering_) {
       tactic = Tactic::RECOVER;
       wanted = norm(ball.bearing + 180);
@@ -655,18 +671,26 @@ public:
         wanted = ball.lead();
         note = "goal unknown: blind tracking";
       } else {
+#if ENABLE_ORBIT
         // Circle the ball without touching it until a goal is seen again.
         tactic = Tactic::ORBIT;
         wanted = norm(ball.bearing + side_ * 90.0f);
         keepAway = true;
         note = "goal unknown: repositioning";
+#else
+        wanted = ball.lead();
+        note = "goal unknown: orbit disabled";
+#endif
       }
       speed = cfg.speedSlow;
     } else {
       const float delta = wrap(ball.bearing - goal);
       const float size = fabsf(delta);
-      const bool attacking = ball.state != BallState::REACQUIRE &&
+      bool attacking = ball.state != BallState::REACQUIRE &&
                              (previous_ == Tactic::ATTACK ? size <= cfg.attackExitDeg : size <= cfg.attackEnterDeg);
+#if !ENABLE_ATTACK
+      attacking = false;
+#endif
       if (size < 150) side_ = delta < 0 ? -1 : 1;  // keep the side while the ball is nearly straight behind
       if (attacking) {
         tactic = Tactic::ATTACK;
@@ -677,10 +701,16 @@ public:
         tactic = Tactic::ALIGN;
         wanted = norm(ball.lead() + clampf(delta * 1.5f, 60));
       } else {
+#if ENABLE_ORBIT
         tactic = Tactic::ORBIT;
         const float offset = size < 90 ? size : 90;
         wanted = norm(ball.bearing + side_ * offset);
         orbitLimit = fminf(orbitLimit, offset);
+#else
+        tactic = Tactic::APPROACH;
+        wanted = ball.lead();
+        note = "orbit disabled: direct chase";
+#endif
       }
     }
 

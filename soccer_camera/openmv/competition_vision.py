@@ -463,19 +463,21 @@ class Pipeline:
         period = 6 if slow else 4  # slow: still inside GOAL_HOLD_MS at 10 fps
         self.frame += 1
         stage = self.mark(None)
-        for name, phase in (("YELLOW", 1), ("BLUE", 1 + period // 2)):
-            if self.frame % period != phase:
-                continue
-            if self.ran_ms[name] is not None and now - self.ran_ms[name] < GOAL_MIN_INTERVAL_MS:
-                continue
-            # Line data comes first: skip a detection that would make this packet stale, but not forever.
-            fits = frame_ms + clock() - began + self.timing[name] <= self.max_frame_ms * 0.9
-            if fits or self.frame - self.ran[name] >= 20:
-                self.ran[name] = self.frame
-                self.ran_ms[name] = now
-                start = clock()
-                self.goals[name].update(now, self.candidates(img, name, color_of))
-                self.timing[name] = clock() - start
+        chase_only = bool(getattr(cfg, "CHASE_ONLY", False))
+        if not chase_only:
+            for name, phase in (("YELLOW", 1), ("BLUE", 1 + period // 2)):
+                if self.frame % period != phase:
+                    continue
+                if self.ran_ms[name] is not None and now - self.ran_ms[name] < GOAL_MIN_INTERVAL_MS:
+                    continue
+                # Line data comes first: skip a detection that would make this packet stale, but not forever.
+                fits = frame_ms + clock() - began + self.timing[name] <= self.max_frame_ms * 0.9
+                if fits or self.frame - self.ran[name] >= 20:
+                    self.ran[name] = self.frame
+                    self.ran_ms[name] = now
+                    start = clock()
+                    self.goals[name].update(now, self.candidates(img, name, color_of))
+                    self.timing[name] = clock() - start
         age_ms = frame_ms + clock() - began
         floor_ok = ready
         ready = floor_ok and age_ms <= self.max_frame_ms
@@ -487,9 +489,13 @@ class Pipeline:
         mask, escape, nearest, count = self.guard.update(ready, visible, boundaries, thin, now)
         self.mark("guard", stage)
         start = clock()
-        yellow = list(self.goals["YELLOW"].fields(now))
-        blue = list(self.goals["BLUE"].fields(now))
-        separate_goals(yellow, blue)
+        if chase_only:
+            yellow = [None, None, 0, 0, 255]
+            blue = [None, None, 0, 0, 255]
+        else:
+            yellow = list(self.goals["YELLOW"].fields(now))
+            blue = list(self.goals["BLUE"].fields(now))
+            separate_goals(yellow, blue)
         target = getattr(cfg, "TARGET_GOAL", None)
         flags = FLAG_READY if ready else 0
         if escape is not None:
@@ -497,7 +503,7 @@ class Pipeline:
         if floor_ok and not ready:
             flags |= FLAG_SLOW  # late, not blind: MAIN may reuse the previous line data briefly
         self.heading = (None, 0)
-        if target in ("YELLOW", "BLUE"):
+        if not chase_only and target in ("YELLOW", "BLUE"):
             flags |= FLAG_TARGET_VALID | (FLAG_TARGET_BLUE if target == "BLUE" else 0)
             opponent, own = (blue, yellow) if target == "BLUE" else (yellow, blue)
             if max(own[4], opponent[4]) <= HEADING_MAX_AGE:
