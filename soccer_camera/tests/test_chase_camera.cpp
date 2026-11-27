@@ -89,7 +89,7 @@ int main() {
   lock.update(70, true, 178);
   assert(lock.active(70) && lock.direction() == 3);
   lock.update(100, false, 0);
-  assert(lock.active(130) && !lock.active(131));
+  assert(!lock.active(100));
   lock.update(131, true, 177);
   assert(lock.active(131) && lock.direction() == 177);
   lock.update(160, true, 310);

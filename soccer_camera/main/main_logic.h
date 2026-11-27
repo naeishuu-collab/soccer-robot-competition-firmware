@@ -306,7 +306,8 @@ public:
         disagree_ = Gate();
       }
     }
-    if (uint32_t(now - bnoStamp_) > 200) bno_ = Gate();
+    if (!bno.ok || !isfinite(bno.yaw) || bno.yaw < 0 || bno.yaw >= 360 ||
+        uint32_t(now - bnoStamp_) > 200) bno_ = Gate();
 
     absolute = true;
     if (bno_.open) {
@@ -564,7 +565,8 @@ public:
     i.valid = irFresh && irSensorsOk && ir.strength > 0;
     i.bearing = ir.angle; i.confidence = ir.confidence; i.stampMs = ir.stampMs;
     const bool gyro = heading.mode == Mode::FUSED || heading.mode == Mode::BNO_ONLY;
-    ball.update(i, gyro, heading.heading(), cfg, now);
+    if (!i.valid || i.confidence < cfg.ballMinConfidence) ball = Ball();
+    else ball.update(i, gyro, heading.heading(), cfg, now);
 
     const bool gyroNow = gyro && !heading.disagreement;
     // Attack direction: the goal itself, else opposite our own goal, else the heading, else memory.
@@ -623,6 +625,8 @@ public:
       return finish(out, Tactic::AVOID_LINE, "line", false, 0);
     }
 
+    if (!i.valid || i.confidence < cfg.ballMinConfidence) return stop(out, "no ball detected");
+
     if (recovering_ && uint32_t(now - recoverMs_) >= cfg.recoverMs) recovering_ = false;
     if (ball.state == BallState::WAIT) return finish(out, Tactic::SEARCH, "no ball seen yet", false, 0);
 
@@ -647,7 +651,7 @@ public:
       tactic = Tactic::RECOVER;
       wanted = norm(ball.bearing + 180);
     } else if (!isfinite(goal)) {
-      if (cfg.blindTracking) {
+      if (cfg.blindTracking || !gyro) {
         wanted = ball.lead();
         note = "goal unknown: blind tracking";
       } else {
@@ -722,7 +726,7 @@ private:
     for (; mask; mask &= uint16_t(mask - 1)) ++n;
     return n;
   }
-  Output &stop(Output &out, const char *reason) { return finish(out, Tactic::SAFE_STOP, reason, false, 0); }
+  Output &stop(Output &out, const char *reason) { ball = Ball(); return finish(out, Tactic::SAFE_STOP, reason, false, 0); }
   Output &finish(Output &out, Tactic tactic, const char *reason, bool correct, float error, float gain = 1) {
     out.tactic = tactic;
     out.reason = reason;

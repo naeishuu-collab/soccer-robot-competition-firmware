@@ -1,5 +1,6 @@
 // The default build (ROBOT_UPGRADE=0): real MAIN and MOTOR loops wired together on the host.
 #define ROBOT_UPGRADE 0
+#define ROBOT_ZIP_COMPAT 0
 #include <Arduino.h>
 #include <SerialPIO.h>
 #include <Wire.h>
@@ -85,7 +86,7 @@ int main() {
   CHECK("tracks the ball", rig.power == 160 && !Rig::still());
   rig.ball = false;
   rig.run(400);
-  CHECK("short ball loss holds the bearing", rig.power == 160);
+  CHECK("ball loss stops", rig.power == 0 && Rig::still());
   rig.run(400);
   CHECK("longer ball loss stops", rig.power == 0 && Rig::still());
   rig.ball = true;

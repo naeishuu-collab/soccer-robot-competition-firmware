@@ -509,7 +509,16 @@ def main_loop(send_uart=True, display=False):
     scanner = None
     stats = None
     if vision is not None:
-        stats = competition_vision.Stats(("capture", "scan", "vision", "uart", "show", "total"))
+        stats = competition_vision.Stats(("capture", "scan", "vision", "goal", "gap", "guard", "uart", "show",
+                                          "search", "draw", "total"))
+
+        def mark(name, since=None):
+            now_us = time.ticks_us()
+            if since is not None:
+                stats.add(name, time.ticks_diff(now_us, since))
+            return now_us
+
+        vision.mark = mark
         if mirror.rays and getattr(cfg, "FAST_SCAN", True):
             scanner = prepare_fast_scan(mirror)
     overlay = None
@@ -517,6 +526,7 @@ def main_loop(send_uart=True, display=False):
     if vision is not None and (display or debug_goals):
         import visualize  # loaded only when something is shown, so competition runs pay nothing
         overlay = visualize.Overlay(cfg, mirror, show=display, debug_goals=debug_goals)
+        overlay.mark = mark
     uart = pyb.UART(3, 115200 if vision else 9600) if send_uart else None
     last_tx = time.ticks_ms()
     last_command = None
@@ -584,6 +594,10 @@ def main_loop(send_uart=True, display=False):
                 time.ticks_diff(captured, started), time.ticks_diff(now, captured)))
             shown_frames, last_report = frames, now
             if vision is not None:
+                # Repeated, because the startup lines scroll away: what is actually running on the camera.
+                print("cfg scan={} VISUALIZE={} GOAL_DEBUG={} FORCE_FLOOR_OK={}".format(
+                    "fast" if scanner is not None else "reference", int(display), int(bool(debug_goals)),
+                    int(floor_forced())))
                 print("ms avg/max/p95", stats.report())
                 print(vision.timing, vision.status())
                 if mirror.rays:

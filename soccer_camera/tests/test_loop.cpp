@@ -1,5 +1,6 @@
 // Runs the real MAIN, MOTOR and IR sketches (setup/loop, ROBOT_UPGRADE=1) wired together on the host.
 #define ROBOT_UPGRADE 1
+#define ROBOT_ZIP_COMPAT 0
 #include <Arduino.h>
 #include <SerialPIO.h>
 #include <Wire.h>
@@ -122,6 +123,12 @@ int main() {
   for (int pin = 18; pin <= 29; ++pin) mockPin[pin] = HIGH;
   mainboard::setup();
   motorboard::setup();
+  motorboard::applyMotor(0, 1);
+  CHECK("positive PWM floor", mockPwm[6] == 140 && mockPwm[7] == 0);
+  motorboard::applyMotor(0, -250);
+  CHECK("negative PWM ceiling", mockPwm[6] == 0 && mockPwm[7] == 210);
+  motorboard::applyMotor(0, 0);
+  CHECK("zero coasts", mockPwm[6] == 0 && mockPwm[7] == 0);
   Rig rig;
 
   rig.run(1500);
@@ -164,7 +171,7 @@ int main() {
   rig.run(700);
   stopped = 0;
   for (int i = 0; i < 4000; ++i) { rig.tick(); stopped += Rig::still(); }
-  CHECK("searching keeps moving", stopped == 0 && Rig::legalDuty());
+  CHECK("ball loss stops", stopped == 4000 && Rig::legalDuty());
   rig.noBall = false;
   rig.run(700);
 

@@ -10,7 +10,9 @@ import competition_vision as vision_module
 TELEMETRY_SIZE = 19
 STALE_LINK_MS = 400  # MAIN data older than this is not shown
 STALE_BALL_MS = 200  # IR detection older than this (at the camera) is not shown
-DEBUG_REFRESH_FRAMES = 3  # GOAL_DEBUG searches the whole image again every Nth frame, one colour
+# GOAL_DEBUG searches the whole image again, one colour: at most every Nth frame AND once per interval.
+DEBUG_REFRESH_FRAMES = 3
+DEBUG_MIN_INTERVAL_MS = 500
 DEBUG_PRINT_MS = 1000
 BLACK, GREY, BAD = (0, 0, 0), (120, 120, 120), (255, 40, 40)
 CHARACTER_PX = 8
@@ -123,7 +125,11 @@ class Overlay:
         self.fps_ms = None
         self.fps_frames = 0
         self.searches = 0
+        self.search_frame = 0
+        self.search_ms = 0
         self.print_ms = None
+        self.printing = True
+        self.mark = lambda name, since=None: 0  # stage timer, set by the camera loop
 
     def text(self, img, x, y, message, color=WHITE):
         """黒い下地に1行。背景の映像に埋もれないようにする。"""
@@ -154,19 +160,22 @@ class Overlay:
             vision.keep_reports = True
             self.reports = vision.reports
             return
-        every = DEBUG_REFRESH_FRAMES
-        if self.frame > 2 and self.frame % every:
+        if self.frame > 2 and (self.frame - self.search_frame < DEBUG_REFRESH_FRAMES
+                               or ticks_diff(now, self.search_ms) < DEBUG_MIN_INTERVAL_MS):
             return
+        self.search_frame, self.search_ms = self.frame, now
         self.searches += 1
         name = ("YELLOW", "BLUE")[(self.searches - 1) % 2]
         self.reports[name] = inspect_goals(img, name, self.cfg, self.mirror, color_of, 1)
-        if self.print_ms is not None and self.searches > 2 and ticks_diff(now, self.print_ms) < DEBUG_PRINT_MS:
+        if self.searches % 2:  # yellow starts a pair; both colours of a pair are printed or neither
+            self.printing = self.print_ms is None or ticks_diff(now, self.print_ms) >= DEBUG_PRINT_MS
+            if self.printing:
+                self.print_ms = now
+        if not self.printing:
             return
         if self.searches % 2:
             print("ring center=({}, {}) inner={} outer={} front={}".format(
                 self.mirror.cx, self.mirror.cy, self.mirror.inner, self.mirror.outer, self.cfg.FRONT_DEG))
-        else:
-            self.print_ms = now
         if not self.reports[name]:
             print(name, "no colour candidate: check LAB threshold", getattr(self.cfg, name))
         for report in self.reports[name][:DEBUG_MAX_LISTED]:
@@ -180,7 +189,9 @@ class Overlay:
         elif ticks_diff(now, self.fps_ms) >= 1000:
             self.fps = self.fps_frames * 1000 / ticks_diff(now, self.fps_ms)
             self.fps_ms, self.fps_frames = now, 0
+        stage = self.mark(None)
         self.search(img, now, ticks_diff, color_of, vision)  # before any drawing touches the image
+        stage = self.mark("search", stage)
         if not self.show:
             return
         data, ball = self.link.current(now, ticks_diff)
@@ -188,6 +199,7 @@ class Overlay:
         self.draw_map(img, data, ball, mask, boundaries)
         self.draw_goals(img, yellow, blue)
         self.draw_panel(img, data, ball, ready, floor_ok, vision.forced)
+        self.mark("draw", stage)
 
     def draw_map(self, img, data, ball, mask, boundaries):
         mirror = self.mirror

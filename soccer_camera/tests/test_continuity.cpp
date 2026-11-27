@@ -23,12 +23,11 @@ static void mustContinue() {
   for (int i = 0; i < 400; ++i) { o = lost.run(); if (o.power) { ++moving; directions[o.direction] = true; } }
   int distinct = 0;
   for (bool d : directions) distinct += d;
-  CHECK("a lost ball is searched for, not waited for", moving > 380 && o.power && o.tactic == Tactic::SEARCH);
-  CHECK("the search changes direction", distinct >= 3);
+  CHECK("a lost ball stops", moving == 0 && !o.power && o.tactic == Tactic::SAFE_STOP);
+  CHECK("no search directions", distinct == 0);
   lost.ball = true; lost.ir.angle = 270;
   o = lost.run();
-  CHECK("a found ball is reacquired at once", strcmp(name(lost.robot.ball.state), "REACQUIRE") == 0 && o.power &&
-        o.tactic != Tactic::SEARCH && o.tactic != Tactic::ATTACK);
+  CHECK("a found ball is reacquired at once", lost.robot.ball.state == BallState::TRACK && o.power);
   lost.run(10);
   CHECK("then tracked", lost.robot.ball.state == BallState::TRACK);
 
@@ -38,10 +37,10 @@ static void mustContinue() {
   for (int i = 0; i < 200; ++i) {
     o = unknown.run();
     if (i > 5) always = always && o.power;
-    never = never && (!o.power || apart(o.direction, 20) >= 90);
+    never = never && (!o.power || apart(o.direction, 20) < 1);
   }
   CHECK("unknown attack direction: reposition instead of stopping", always);
-  CHECK("unknown attack direction: never approach the ball", never);
+  CHECK("unknown attack direction without BNO: follow the ball", never);
 
   World own;
   own.goal(0); own.own(0); own.ir.angle = 0;
@@ -76,8 +75,7 @@ static void mustContinue() {
   held.ir.angle = 20; held.run(10);
   held.cam.ready = false; held.cam.slow = true;
   o = held.run(2);
-  CHECK("held line data still repositions in an exact direction", o.power && o.direction % 45 == 0 &&
-        apart(o.direction, 20) >= 89);
+  CHECK("held line data still uses an exact safe direction", o.power && o.direction % 45 == 0);
 
   CHECK("near lines a bench-verified direction beats a slightly closer diagonal",
         safeDirection(uint16_t((1u << 0) | (1u << 2)), 30) == 0 && nearestExact(uint16_t((1u << 0) | (1u << 2)), 30) == 0);

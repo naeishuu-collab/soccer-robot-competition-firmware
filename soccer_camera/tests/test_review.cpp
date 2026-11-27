@@ -89,7 +89,7 @@ static void tactics() {
   World u;
   u.ir.angle = 180;
   Output o = u.run(10);
-  CHECK("unknown attack direction: no pushing by default", !o.power || fabsf(wrap(o.direction - 180.0f)) >= 90);
+  CHECK("unknown attack direction without BNO follows IR", o.power && o.direction == 180 && !o.turn);
 
   World orbit;
   orbit.goal(0); orbit.ir.angle = 180;

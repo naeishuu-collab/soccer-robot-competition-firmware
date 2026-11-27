@@ -86,7 +86,8 @@ public:
     total = bestTotal;
     out.faults = faults_;
     if (total <= 0 || hypotf(x, y) < 1) {
-      if (++missed_ >= 3) valid_ = false;  // reacquire without dragging an old bearing
+      ++missed_;
+      valid_ = false;  // reacquire without dragging an old bearing
       return out;
     }
     missed_ = 0;

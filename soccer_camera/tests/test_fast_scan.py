@@ -248,6 +248,13 @@ class MainLoopTests(unittest.TestCase):
             self.assertIn("forced=", output)
             self.assertTrue(sent and all(len(p) == v.PACKET_SIZE for p in sent))
 
+    def test_report_names_the_running_configuration_and_stages(self):
+        for fast, scan in ((True, "fast"), (False, "reference")):
+            output = self.run_loop(True, fast, True, frames=200)[1]
+            self.assertIn("cfg scan={} VISUALIZE=1 GOAL_DEBUG=1".format(scan), output)
+            for stage in ("goal=", "gap=", "guard=", "search=", "draw="):
+                self.assertIn(stage, output)
+
     def test_fast_and_reference_paths_send_identical_packets(self):
         fast, _ = self.run_loop(False, True)
         slow, output = self.run_loop(False, False)
@@ -328,6 +335,35 @@ class ForcedFloorTests(unittest.TestCase):
         with patch.object(nav.cfg, "FORCE_FLOOR_OK", True, create=True):
             line = nav.floor_report(None, nav.Mirror(320, 240), lambda *a: None, self.FEW, [], None, 5, 0x100)
         self.assertIn("actual=NOFLOOR observed=5/24 forced=1 mask=0100", line)
+
+
+class ForcedFloorCostTests(unittest.TestCase):
+    """Performance guard: forcing the floor condition must not add image searches or other image work."""
+
+    def work(self, forced):
+        asked = []
+
+        class Image:
+            def find_blobs(self, thresholds, **kwargs):
+                asked.append((str(thresholds), kwargs["roi"], kwargs["x_stride"]))
+                return []
+
+            def __getattr__(self, name):
+                raise AssertionError("unexpected image access: " + name)
+
+        few = set(range(0, 90, 15))
+        with patch.multiple(nav.cfg, IMAGE_SIZE=(320, 240), MIRROR_CENTER=(160, 120), MIRROR_RING=(20, 100),
+                            FORCE_FLOOR_OK=forced, create=True):
+            pipe = v.Pipeline(nav.cfg, nav.Mirror(320, 240), 25, 100)
+            for i in range(120):
+                ready = v.observed_rays(few, []) >= nav.MIN_FLOOR_RAYS or nav.floor_forced()
+                pipe.step(Image(), i * 40, ready, 20, few, [])
+        return asked
+
+    def test_same_image_work_with_and_without_the_override(self):
+        forced = self.work(True)
+        self.assertEqual(forced, self.work(False))
+        self.assertGreater(len(forced), 0)
 
 
 class TimingAndReleaseTests(unittest.TestCase):

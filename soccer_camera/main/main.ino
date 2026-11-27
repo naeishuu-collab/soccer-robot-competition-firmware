@@ -19,6 +19,11 @@
 #define ROBOT_TELEMETRY 1
 #endif
 
+// The installed chase (4) IR and MOTOR use their original RS485 protocol.
+#ifndef ROBOT_ZIP_COMPAT
+#define ROBOT_ZIP_COMPAT 1
+#endif
+
 struct CameraState;
 
 // BEGIN HOST-TESTED CAMERA LOGIC
@@ -121,7 +126,7 @@ public:
 
   void update(uint32_t now, bool detected, uint16_t direction) {
     if (!detected || direction >= kNoDirection) {
-      candidate_ = kNoDirection;
+      reset();
       return;
     }
     if (!active(now) || angleDistance(direction, direction_) <= 45 ||
@@ -210,7 +215,6 @@ constexpr uint16_t MOVE_POWER = 160;
 // Not below the MOTOR running floor: 128 could leave the robot stalled on a line.
 constexpr uint16_t AVOID_POWER = 160;
 constexpr uint16_t MAX_POWER = 200;
-constexpr uint32_t BALL_HOLD_MS = 500;  // keep the last bearing this long after the ball lock
 
 static_assert(AVOID_POWER <= MOVE_POWER && MOVE_POWER <= MAX_POWER,
               "MOVE_POWER exceeds MAX_POWER");
@@ -606,6 +610,80 @@ void upgradeLoop() {
   }
 }
 
+void zipLoop() {
+  static brain::CameraParser parser;
+  static brain::CameraData cam;
+  static IrReplyReceiver receiver;
+  static uint32_t pollMs = 0, irMs = 0, logMs = 0;
+  static uint16_t angle = 0, strength = 0;
+  static bool waiting = false, haveIr = false, moving = false;
+  static const char *lastReason = "";
+
+  telemetry.pump(cameraSerial);
+  while (cameraSerial.available()) parser.push(uint8_t(cameraSerial.read()), millis(), cam);
+  const uint32_t now = millis();
+  bool reply = false;
+  while (Serial1.available()) {
+    const uint8_t byte = uint8_t(Serial1.read());
+    if (waiting && uint32_t(now - pollMs) < UPGRADE_IR_WAIT_MS && receiver.push(byte, angle, strength)) {
+      waiting = false;
+      haveIr = true;
+      irMs = now;
+      reply = true;
+      delayMicroseconds(50);
+    }
+  }
+  if (waiting && uint32_t(now - pollMs) >= UPGRADE_IR_WAIT_MS) {
+    waiting = false;
+    haveIr = false;
+    strength = 0;
+  }
+  const char *reason = "";
+  if (holdStop) reason = "manual stop";
+  else if (!cam.received || uint32_t(now - cam.receivedMs) > 200) reason = "camera link";
+  else if (!cam.ready || cam.slow) reason = "floor not recognised";
+  else if (cam.escaping || cam.mask != 0xFFFF || cam.line != brain::kUnknown || cam.lineCount) reason = "line or unsafe direction";
+  else if (!haveIr || uint32_t(now - irMs) > IR_REPLY_TIMEOUT_MS) reason = "IR link lost";
+  else if (!strength) reason = "no ball detected";
+
+  if (!waiting && (reply || (moving && *reason))) {
+    const uint16_t d = *reason ? 0 : angle;
+    const uint16_t count = *reason ? 0 : strength;
+    uint8_t frame[] = {0xC3, 0x3C, uint8_t(d >> 8), uint8_t(d), uint8_t(count >> 8), uint8_t(count), 0, 0x5A};
+    frame[6] = frame[2] ^ frame[3] ^ frame[4] ^ frame[5];
+    sendRs485(frame, sizeof(frame));
+    moving = count != 0;
+  }
+  if (Serial && (*reason || *lastReason) &&
+      (strcmp(reason, lastReason) != 0 || uint32_t(now - logMs) >= 500) && Serial.availableForWrite() >= 80) {
+    Serial.printf("%s reason=%s\n", *reason ? "SAFE_STOP" : "TRACK", *reason ? reason : "clear");
+    logMs = now;
+    lastReason = reason;
+  }
+  if (telemetryDue(now)) {
+    brain::Telemetry t;
+    t.upgrade = true;
+    t.irLink = haveIr && uint32_t(now - irMs) <= IR_REPLY_TIMEOUT_MS;
+    t.cameraLink = cam.received && uint32_t(now - cam.receivedMs) <= 200;
+    if (t.irLink && strength) { t.ball = angle; t.ballAgeMs = now - irMs; }
+    t.direction = moving ? angle : 0;
+    t.power = moving ? 175 : 0;  // ZIP MOTOR's nominal forward duty; actual duties are local.
+    t.tactic = uint8_t(moving ? brain::Tactic::APPROACH : brain::Tactic::SAFE_STOP);
+    t.mode = uint8_t(brain::Mode::DEGRADED);
+    t.bno = 0;
+    publishTelemetry(t, cam.yellow.seen ? int(cam.yellow.bearing) : -1, cam.yellow.confidence,
+                     cam.blue.seen ? int(cam.blue.bearing) : -1, cam.blue.confidence,
+                     moving ? "APPROACH" : "SAFE_STOP", "DEGRADED");
+  }
+  if (!waiting && uint32_t(now - pollMs) >= 20) {
+    const uint8_t poll[] = {0xA5, 0x5A, 0x01, 0xFE};
+    receiver.reset();
+    sendRs485(poll, sizeof(poll));
+    pollMs = millis();
+    waiting = true;
+  }
+}
+
 // ============================================================
 // Main loop
 // ============================================================
@@ -629,6 +707,10 @@ void loop() {
     if (command == 'd' || command == 's') holdStop = true;
     if (command == 'g') holdStop = false;
     if (command == 'v') usbViewer = !usbViewer;
+  }
+  if (ROBOT_ZIP_COMPAT) {
+    zipLoop();
+    return;
   }
   if (ROBOT_UPGRADE) {
     upgradeLoop();
@@ -707,7 +789,7 @@ void loop() {
       lastBallDirection = ballLock.direction();
       lastBallMs = now;
     }
-    const bool ballHeld = lastBallDirection < 360 && now - lastBallMs <= BALL_HOLD_MS;
+    const bool ballHeld = strength > 0 && ballLock.active(now);
     chooseChaseMotion(camera, now, ballHeld, lastBallDirection,
                       MOVE_POWER, AVOID_POWER, direction, power);
     sendDrive(sequence++, direction, power, camera.mode == 1);

@@ -162,7 +162,8 @@ class OverlayTests(unittest.TestCase):
             self.assertGreater(nav.distance(nearest_x - real.cx, nearest_y - real.cy), real.outer, (x, y, w, h))
 
     def test_overlay_reuses_the_recognition_and_searches_only_in_debug(self):
-        for debug, expected in ((False, 0), (True, 2 + 42 // viz.DEBUG_REFRESH_FRAMES)):
+        # 42 frames 50 ms apart: two warm-up searches, then one per interval (frames 12, 22, 32, 42).
+        for debug, expected in ((False, 0), (True, 6)):
             image = Image()
             overlay = viz.Overlay(nav.cfg, mirror(), debug_goals=debug)
             p = self.pipeline()
@@ -170,6 +171,19 @@ class OverlayTests(unittest.TestCase):
                 for i in range(42):
                     overlay.draw(image, i * 50, p, [], diff, None)
             self.assertEqual(sum(1 for name, _, _ in image.calls if name == "find"), expected)
+
+    def test_debug_search_is_bounded_in_time_and_in_frames(self):
+        p = self.pipeline()
+        for step, frames, expected in ((10, 1000, 2 + 19), (1000, 44, 2 + 14)):  # per interval; every 3rd frame
+            image = Image()
+            overlay = viz.Overlay(nav.cfg, mirror(), debug_goals=True)
+            with patch("builtins.print") as log:
+                for i in range(frames):
+                    overlay.draw(image, i * step, p, [], diff, None)
+            self.assertEqual(sum(1 for name, _, _ in image.calls if name == "find"), expected, step)
+            printed = [str(call[0][0]) for call in log.call_args_list]
+            for name in ("YELLOW", "BLUE"):  # the slower rate must not silence one colour
+                self.assertGreater(sum(line.startswith(name) for line in printed), 3, (step, name))
 
     def test_hidden_overlay_draws_nothing(self):
         image = Image()

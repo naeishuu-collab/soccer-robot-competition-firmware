@@ -407,6 +407,8 @@ class Pipeline:
         self.forced = bool(getattr(cfg, "FORCE_FLOOR_OK", False))  # shown on screen and in the log
         self.heading = (None, 0)
         self.last = None
+        # Stage timer: mark(name, since) records the time since `since` and returns now. Set by the camera loop.
+        self.mark = lambda name, since=None: 0
 
     def candidates(self, img, name, color_of=None):
         mirror = self.mirror
@@ -460,6 +462,7 @@ class Pipeline:
         slow = frame_ms + max(self.timing["YELLOW"], self.timing["BLUE"]) > self.max_frame_ms * 0.7
         period = 6 if slow else 4  # slow: still inside GOAL_HOLD_MS at 10 fps
         self.frame += 1
+        stage = self.mark(None)
         for name, phase in (("YELLOW", 1), ("BLUE", 1 + period // 2)):
             if self.frame % period != phase:
                 continue
@@ -476,9 +479,12 @@ class Pipeline:
         age_ms = frame_ms + clock() - began
         floor_ok = ready
         ready = floor_ok and age_ms <= self.max_frame_ms
+        stage = self.mark("goal", stage)
         visible = self.fill_gap(visible, boundaries)
+        stage = self.mark("gap", stage)
         # ライン情報を確定してから、追跡値と姿勢値を同じ連番の送信データにまとめる。
         mask, escape, nearest, count = self.guard.update(ready, visible, boundaries, thin, now)
+        self.mark("guard", stage)
         start = clock()
         yellow = list(self.goals["YELLOW"].fields(now))
         blue = list(self.goals["BLUE"].fields(now))

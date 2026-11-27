@@ -91,6 +91,12 @@ static void protocols() {
 
 static void irFilterTests() {
   uint16_t count[12] = {};
+  irx::Filter reacquire;
+  count[0] = 500; reacquire.update(count, 1000);
+  count[0] = 0; assert(reacquire.update(count, 1000).strength == 0);
+  count[1] = 500;
+  assert(reacquire.update(count, 1000).angle == 30);
+  count[1] = 0;
   irx::Filter f;
   count[3] = 400;
   irx::Result r = f.update(count, 1000);
@@ -176,8 +182,8 @@ static void irFilterTests() {
 static void headingModes() {
   World w;
   w.ir.angle = 0;
-  const Output circle = w.run(10);  // default: attack direction unknown, never approach
-  assert(circle.power && fabsf(wrap(circle.direction - 0.0f)) >= 90);
+  const Output circle = w.run(10);  // no heading or goal: follow the IR ball
+  assert(circle.power && circle.direction == 0 && circle.turn == 0);
   w.robot.cfg.blindTracking = true;
   Output o = w.run(10);
   assert(w.robot.heading.mode == Mode::DEGRADED && o.turn == 0 && o.power > 0);  // restricted IR tracking
@@ -230,6 +236,17 @@ static void headingModes() {
   assert(fabsf(b.robot.heading.heading()) < 1);
   b.yaw = 359; b.run(15);  // re-acquired against the recent estimate
   assert(fabsf(b.robot.heading.heading()) < 1);
+  b.yaw = 14; o = b.run(20);
+  assert(o.turn < 0);
+  b.bnoOn = false; b.bno.ok = false;
+  o = b.run();
+  assert(o.power && !o.turn && b.robot.heading.mode == Mode::DEGRADED);
+  b.bnoOn = true;
+  o = b.run(20);
+  assert(o.power && b.robot.heading.mode == Mode::BNO_ONLY && b.robot.heading.absolute);
+  b.irOn = false;
+  o = b.run(30);
+  assert(o.tactic == Tactic::SAFE_STOP && !o.power && !o.turn && strcmp(o.reason, "IR link lost") == 0);
 }
 
 static void safety() {
@@ -286,11 +303,10 @@ static void ballStates() {
   assert(fabsf(wrap(w.robot.ball.bearing - 200)) < 5);
   w.ball = false;
   w.run(7);
-  assert(w.robot.ball.state == BallState::PREDICT);
+  assert(w.robot.ball.state == BallState::WAIT);
   w.run(15);
-  assert(w.robot.ball.state == BallState::SEARCH);
   o = w.run(300);
-  assert(w.robot.ball.state == BallState::SEARCH && o.power);  // keeps searching while observations are valid
+  assert(w.robot.ball.state == BallState::WAIT && !o.power);
   w.ball = true; w.ir.angle = 90; w.run(8);
   assert(w.robot.ball.state == BallState::TRACK && fabsf(wrap(w.robot.ball.bearing - 90)) < 5);  // reacquired
   // Moving ball: positive rate, lead ahead, wraparound.
@@ -315,7 +331,7 @@ static void ballStates() {
   assert(!failedOut.power && strcmp(failedOut.reason, "IR link lost") == 0);
   broken.irOn = true; broken.ball = false;
   failedOut = broken.run(60);
-  assert(failedOut.power && strcmp(failedOut.reason, "no ball detected: searching") == 0);
+  assert(!failedOut.power && strcmp(failedOut.reason, "no ball detected") == 0);
   // A single jumped goal frame does not swing the robot: heading control slews.
   World jump;
   jump.goal(0); jump.run(20);
@@ -373,7 +389,7 @@ static void tactics() {
   own.run(30);
   for (int i = 0; i < 200; ++i) {
     o = own.run();
-    assert(o.tactic == Tactic::SEARCH && o.power && fabsf(wrap(o.direction - 0.0f)) >= 45);
+    assert(o.tactic == Tactic::SAFE_STOP && !o.power);
   }
 
   // Telemetry: golden bytes shared with the camera, and a port that accepts one byte at a time.
@@ -415,6 +431,14 @@ static void tactics() {
 }
 
 int main() {
+  Config cfg;
+  cfg.headingKp = 0; cfg.headingKd = 0.05f; cfg.turnMin = 0; cfg.turnMax = 250; cfg.turnSlew = 250;
+  Turn turn;
+  assert(wrap(-179.0f - 179.0f) == 2.0f);
+  assert(turn.update(true, 20, cfg) == 0);
+  assert(turn.update(true, 40, cfg) == 10);
+  assert(turn.update(false, 0, cfg) == 0);
+  assert(turn.update(true, -179, cfg) == 0);
   protocols();
   irFilterTests();
   headingModes();

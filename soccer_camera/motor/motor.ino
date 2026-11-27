@@ -38,6 +38,7 @@ const uint8_t MOTOR_IN2[4] = {7, 13, 10, 8};
 constexpr bool OUTPUTS_ENABLED = true;
 constexpr uint32_t PWM_FREQ = 20000;
 constexpr int16_t PWM_MAX = 210;
+constexpr int16_t OUTPUT_MIN_DUTY = 140; // ZIP reference; calibrate with the actual motors
 constexpr int16_t MIN_RUNNING_DUTY = 160;
 
 // Matched to the bench result of 2026-11-27 (front/right/back/left at PWM 160).
@@ -102,7 +103,7 @@ uint16_t receivedPower = 0;
 bool commandReceived = false;
 bool timedOut = true;
 
-static_assert(MIN_RUNNING_DUTY <= PWM_MAX,
+static_assert(OUTPUT_MIN_DUTY >= 0 && OUTPUT_MIN_DUTY <= PWM_MAX && MIN_RUNNING_DUTY <= PWM_MAX,
               "Invalid PWM range");
 
 // ============================================================
@@ -263,6 +264,8 @@ void calculateWheelPWM(uint16_t direction,
 void applyMotor(uint8_t motor, int16_t duty) {
   // dutyの符号で回転極性を選び、2本のHブリッジ入力を同時に有効にしない。
   duty = clampPWM(duty);
+  if (duty > 0 && duty < OUTPUT_MIN_DUTY) duty = OUTPUT_MIN_DUTY;
+  if (duty < 0 && duty > -OUTPUT_MIN_DUTY) duty = -OUTPUT_MIN_DUTY;
 
   if (!OUTPUTS_ENABLED) {
     analogWrite(MOTOR_IN1[motor], 0);
