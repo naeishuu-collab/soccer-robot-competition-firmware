@@ -19,6 +19,8 @@ Escape does not require IR. The current direct-PWM escape implementation support
 
 MAIN diagnostics are requested over USB with `i`; output includes the state, stop reason, PD values, calculated/safety/transmitted PWM, camera age, IR age, and safety mask. MOTOR has independent USB diagnostics. MAIN receives no MOTOR status reply, so MAIN logs cannot confirm applied motor output.
 
+MOTOR independently rejects invalid frames/CRC and out-of-range commands, starts with zero targets, and stops after 100 ms without a valid command. Its command and applied PWM clamp is ±210; current reverse protection waits 200 ms per affected wheel. These are MOTOR-local conditions and do not appear as an authoritative MAIN `MOTOR_ERROR` because there is no return status channel. MOTOR USB diagnostics are needed to distinguish a MAIN zero command from MOTOR timeout, bad frame, or reverse wait.
+
 ## Conservative path check
 
 `zipPathClear()` requires a matching 8-wheel grouping. Equal signed groups check the corresponding forward or reverse sector. A split group is treated as a turn and requires all 16 sectors. This can cause nuisance stops. No new rule is enabled because the checked-in repository does not establish wheel-to-sector motion, footprint sweep, camera blind spots, or stopping distance. The old rule can be restored from the parent commit (`63cffa17e4f71df638646ffabf6585a3e2a44489`) with `git revert <change-commit>` or by checking out that commit in a separate worktree.
