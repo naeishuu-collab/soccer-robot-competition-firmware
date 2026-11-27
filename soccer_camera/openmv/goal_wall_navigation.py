@@ -723,9 +723,14 @@ def main_loop(send_uart=True, display=False):
             shown_frames, last_report = frames, now
             if vision is not None:
                 # Repeated, because the startup lines scroll away: what is actually running on the camera.
-                print("cfg scan={} VISUALIZE={} GOAL_DEBUG={} FORCE_FLOOR_OK={}".format(
+                print("[CAMERA] fw={} git={} ready={} setup={} protocol={} target={} exposure_us={} gain_db={}".format(
+                    getattr(cfg, "FIRMWARE_VERSION", "unknown"), getattr(cfg, "GIT_COMMIT", "unembedded"),
+                    int(setup_reason is None and mirror.ring_ready), setup_reason, getattr(cfg, "PROTOCOL", 1),
+                    getattr(cfg, "TARGET_GOAL", "unset"), getattr(cfg, "EXPOSURE_US", "auto"),
+                    getattr(cfg, "GAIN_DB", "auto")))
+                print("cfg scan={} VISUALIZE={} GOAL_DEBUG={} DEBUG_STATS={} FORCE_FLOOR_OK={}".format(
                     "fast" if scanner is not None else "reference", int(display), int(bool(debug_goals)),
-                    int(floor_forced())))
+                    int(bool(getattr(cfg, "DEBUG_STATS", False))), int(floor_forced())))
                 print("ms avg/max/p95", stats.report())
                 print(vision.timing, vision.status())
                 if mirror.rays:

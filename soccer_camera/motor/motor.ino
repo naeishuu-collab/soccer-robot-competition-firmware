@@ -5,6 +5,7 @@
 #include <math.h>
 #include <string.h>
 #include "motor_logic.h"
+#include <Diagnostics.h>
 
 // 0 = legacy mixer. 1 = wheel model with start ramp and boost (default since 2026-11-27 to match MAIN;
 // not yet verified on hardware).
@@ -81,6 +82,7 @@ constexpr uint32_t DEBUG_INTERVAL_MS = 1000;
 // State
 int16_t targetPWM[4] = {};
 int16_t currentPWM[4] = {};
+int16_t appliedPWM[4] = {};  // H-bridge PWM command after local clamping; not wheel-speed feedback
 
 uint32_t reverseUntil[4] = {};
 int8_t pausedSign[4] = {};
@@ -266,6 +268,7 @@ void applyMotor(uint8_t motor, int16_t duty) {
   duty = clampPWM(duty);
   if (duty > 0 && duty < OUTPUT_MIN_DUTY) duty = OUTPUT_MIN_DUTY;
   if (duty < 0 && duty > -OUTPUT_MIN_DUTY) duty = -OUTPUT_MIN_DUTY;
+  appliedPWM[motor] = OUTPUTS_ENABLED ? duty : 0;
 
   if (!OUTPUTS_ENABLED) {
     analogWrite(MOTOR_IN1[motor], 0);
@@ -487,7 +490,7 @@ void printDebug() {
       ? millis() - lastCommandMs
       : 0;
 
-  char line[256];
+  char line[320];
 
   const int len = snprintf(
       line,
@@ -496,7 +499,7 @@ void printDebug() {
       "TIMEOUT=%lu AGE=%lums STATUS=%s "
       "DIR=%u POWER=%u "
       "TARGET=%d,%d,%d,%d "
-      "PWM=%d,%d,%d,%d\n",
+      "PWM=%d,%d,%d,%d APPLIED=%d,%d,%d,%d\n",
       static_cast<unsigned long>(receivedFrames),
       unsigned(lastSequence),
       static_cast<unsigned long>(crcErrors),
@@ -509,7 +512,8 @@ void printDebug() {
       targetPWM[0], targetPWM[1],
       targetPWM[2], targetPWM[3],
       currentPWM[0], currentPWM[1],
-      currentPWM[2], currentPWM[3]
+      currentPWM[2], currentPWM[3],
+      appliedPWM[0], appliedPWM[1], appliedPWM[2], appliedPWM[3]
   );
 
   if (len > 0 &&
@@ -532,6 +536,7 @@ uint32_t startRequestUs = 0, startLatencyUs = 0;
 uint32_t diagExitMs = 0;
 bool diagCooling = false;  // after diag, wait one reverse pause before obeying MAIN
 const char *modelStop = "no command yet";  // why the wheel-model path is stopped; "" while driving
+robotdiag::EventRing<16> motorEvents;
 
 void readDiagSerial(uint32_t now) {
   static char text[32];
@@ -545,6 +550,25 @@ void readDiagSerial(uint32_t now) {
     if (!used) continue;
     text[used] = 0;
     used = 0;
+    if (strcmp(text, "i") == 0) {
+      printDebug();
+      Serial.printf("[MOTOR] fw=%s git=%s uptime_ms=%lu (PWM values are applied commands, not measured wheel rotation)\n",
+                    ROBOT_FW_VERSION, ROBOT_GIT_COMMIT, (unsigned long)now);
+      if (ROBOT_UPGRADE) Serial.printf("[MOTOR_STATE] stop=%s reverse_wait=%u ramp=%u timeout=%u\n",
+                                       modelStop, unsigned(modelDrive.reversing()),
+                                       unsigned(modelDrive.ramping()), unsigned(timedOut));
+      const size_t first = motorEvents.size() > 6 ? motorEvents.size() - 6 : 0;
+      for (size_t i = first; i < motorEvents.size(); ++i) {
+        const robotdiag::Event &event = motorEvents.oldest(i);
+        if (event.kind == robotdiag::EventKind::STOP)
+          Serial.printf("[MOTOR_STOP] age_ms=%lu code=%u name=%s\n", (unsigned long)(now - event.atMs),
+                        unsigned(event.code), robotdiag::name(robotdiag::StopReason(event.code)));
+        else
+          Serial.printf("[EVENT] age_ms=%lu kind=%u code=%u value=%d\n",
+                        (unsigned long)(now - event.atMs), unsigned(event.kind), unsigned(event.code), int(event.value));
+      }
+      continue;
+    }
     const bool wasActive = diag.active();
     Serial.println(diag.line(text, now));
     if (diag.active() != wasActive) {
@@ -613,6 +637,7 @@ void runModel(uint32_t now) {
   if (direct) {
     if (commandReceived && !timedOut && now - lastCommandMs >= COMMAND_TIMEOUT_MS) {
       timedOut = true; ++timeoutEvents; receivedPower = 0;
+      modelStop = "command timeout";
       for (int i = 0; i < 4; ++i) targetPWM[i] = currentPWM[i] = 0;
     }
     applyAllMotors();
@@ -670,6 +695,8 @@ void setup() {
   Serial.println("MD - OMNI PWM max 210 / startup duty up to 160");
   Serial.println("RS485 115200 / PWM 20kHz");
   Serial.println("Debug interval: 1000ms");
+  if (Serial) Serial.printf("[MOTOR] fw=%s git=%s mode=%s\n", ROBOT_FW_VERSION, ROBOT_GIT_COMMIT,
+                            ROBOT_UPGRADE ? "WHEEL_MODEL" : "LEGACY");
 }
 
 // ============================================================
@@ -695,6 +722,25 @@ void loop() {
       handleDrive(frame);
     }
     updateMotors();
+  }
+
+  static const char *previousStop = nullptr;
+  if (modelStop != previousStop) {
+    const uint16_t reason = timedOut ? uint16_t(robotdiag::StopReason::MOTOR_TIMEOUT)
+                           : strcmp(modelStop, "MAIN stop") == 0 ? uint16_t(robotdiag::StopReason::MANUAL_STOP)
+                                                                 : uint16_t(robotdiag::StopReason::NONE);
+    motorEvents.push(now, robotdiag::EventKind::STOP, reason);
+    previousStop = modelStop;
+  }
+  static int16_t lastLoggedPWM[4] = {};
+  for (uint8_t wheel = 0; wheel < 4; ++wheel) {
+    const int16_t applied = appliedPWM[wheel];
+    const int difference = int(applied) - int(lastLoggedPWM[wheel]);
+    if ((applied == 0) != (lastLoggedPWM[wheel] == 0) ||
+        ((applied < 0) != (lastLoggedPWM[wheel] < 0)) || abs(difference) >= 20) {
+      motorEvents.push(now, robotdiag::EventKind::PWM, wheel, applied);
+      lastLoggedPWM[wheel] = applied;
+    }
   }
 
   if (millis() - lastDebugMs >=

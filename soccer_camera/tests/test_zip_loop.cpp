@@ -1,6 +1,7 @@
 #define ROBOT_ZIP_TRACK 0
 #define ROBOT_ZIP_COMPAT 1
 #include <Arduino.h>
+#include <Diagnostics.h>
 #include <SerialPIO.h>
 #include <Wire.h>
 #include <assert.h>

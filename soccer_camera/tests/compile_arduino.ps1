@@ -25,7 +25,7 @@ foreach ($build in $builds) {
     $fqbn = "rp2040:rp2040:generic_rp2350:variantchip=$($build.Variant),flash=2097152_0"
     $log.Add("=== $($build.Name) [$fqbn] ===")
     Write-Host "Building $($build.Name)"
-    $output = & $cliPath compile --fqbn $fqbn --warnings all $build.Sketch 2>&1
+    $output = & $cliPath compile --fqbn $fqbn --warnings all --libraries (Join-Path $root 'libraries') $build.Sketch 2>&1
     $exitCode = $LASTEXITCODE
     foreach ($line in $output) { $log.Add([string]$line) }
     $log.Add("RESULT: $exitCode")

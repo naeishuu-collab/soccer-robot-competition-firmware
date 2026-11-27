@@ -4,6 +4,7 @@
 #define ROBOT_ZIP_COMPAT 0
 #define ROBOT_RAW_IR 0
 #include <Arduino.h>
+#include <Diagnostics.h>
 #include <SerialPIO.h>
 #include <Wire.h>
 #include <stdio.h>

@@ -8,6 +8,7 @@
 #include <SerialPIO.h>
 #include "main_logic.h"
 #include "zip_chase_pd.h"
+#include <Diagnostics.h>
 
 #ifndef ROBOT_ZIP_TRACK
 #define ROBOT_ZIP_TRACK 0
@@ -308,8 +309,23 @@ constexpr uint32_t CAMERA_BAUD = ROBOT_UPGRADE ? 115200 : 9600;
 SerialPIO cameraSerial(2, 3, 256);
 bool holdStop = false;  // USB 'd' / 's': diagnostics and soft stop, 'g' resumes
 bool usbViewer = false;  // USB 'v': print VIZ lines for tools/viewer.html
+bool usbDiagnosticRequested = false;
 brain::TelemetrySender telemetry;
 constexpr uint32_t TELEMETRY_INTERVAL_MS = 100;
+
+robotdiag::StopReason diagnosticStopReason(const char *reason) {
+  if (!reason || !*reason) return robotdiag::StopReason::NONE;
+  if (strstr(reason, "manual")) return robotdiag::StopReason::MANUAL_STOP;
+  if (strstr(reason, "camera link")) return robotdiag::StopReason::CAMERA_TIMEOUT;
+  if (strstr(reason, "expired") || strstr(reason, "slow")) return robotdiag::StopReason::CAMERA_SLOW;
+  if (strstr(reason, "floor")) return robotdiag::StopReason::CAMERA_NOT_READY;
+  if (strstr(reason, "line")) return robotdiag::StopReason::LINE_DETECTED;
+  if (strstr(reason, "safe")) return robotdiag::StopReason::NO_SAFE_DIRECTION;
+  if (strstr(reason, "IR link")) return robotdiag::StopReason::IR_TIMEOUT;
+  if (strstr(reason, "IR sensor")) return robotdiag::StopReason::IR_INVALID;
+  if (strstr(reason, "ball")) return robotdiag::StopReason::BALL_LOST;
+  return robotdiag::StopReason::INTERNAL_ERROR;
+}
 
 CameraState camera;
 uint8_t cameraFrame[8] = {};
@@ -522,8 +538,14 @@ void upgradeLoop() {
   static uint8_t sequence = 0;
   static uint32_t lastPollMs = 0, lastDriveMs = 0, lastLogMs = 0, lastUs = 0, loopMaxUs = 0;
   static uint32_t pollUs = 0, irRoundTripUs = 0, cameraGapMaxMs = 0, brainMaxUs = 0;
+  static uint32_t irPolls = 0, irReplies = 0, irTimeouts = 0;
   static bool waitingForIr = false, urgent = false;
   static bool configured = false;
+  static uint8_t previousTactic = 0xff;
+  static const char *previousStop = nullptr;
+  static robotdiag::EventRing<16> events;
+  static bool previousIrValid = false, previousCameraValid = false;
+  static uint16_t previousPower = 0;
   if (!configured) { robot.cfg.blindTracking = true; configured = true; }
 
   const uint32_t us = micros();
@@ -553,12 +575,24 @@ void upgradeLoop() {
       reply.stampMs = now;
       irData = reply;
       irRoundTripUs = micros() - pollUs;
+      ++irReplies;
       waitingForIr = false;
       delayMicroseconds(50);
     }
   }
-  if (waitingForIr && now - lastPollMs >= UPGRADE_IR_WAIT_MS) waitingForIr = false;
+  if (waitingForIr && now - lastPollMs >= UPGRADE_IR_WAIT_MS) { waitingForIr = false; ++irTimeouts; }
   if (waitingForIr) return;  // never transmit inside the IR reply window
+
+  const bool irValid = irData.received && uint32_t(now - irData.stampMs) <= robot.cfg.irTimeoutMs;
+  const bool cameraValid = cameraData.received && uint32_t(now - cameraData.receivedMs) <= robot.cfg.cameraTimeoutMs;
+  if (irValid != previousIrValid) {
+    events.push(now, robotdiag::EventKind::SENSOR_VALIDITY, 1, irValid ? 1 : 0);
+    previousIrValid = irValid;
+  }
+  if (cameraValid != previousCameraValid) {
+    events.push(now, robotdiag::EventKind::SENSOR_VALIDITY, 2, cameraValid ? 1 : 0);
+    previousCameraValid = cameraValid;
+  }
 
   if (BNO_ENABLED) {
   updateBno(now, bno);
@@ -571,6 +605,19 @@ void upgradeLoop() {
     if (micros() - start > brainMaxUs) brainMaxUs = micros() - start;
     headingTurn = int8_t(out.turn);
     if (holdStop) { out.direction = out.power = 0; out.turn = 0; out.tactic = brain::Tactic::SAFE_STOP; out.reason = "manual stop"; }
+    const uint8_t tactic = uint8_t(out.tactic);
+    if (tactic != previousTactic) {
+      events.push(now, robotdiag::EventKind::STATE, tactic);
+      previousTactic = tactic;
+    }
+    if (out.reason != previousStop) {
+      events.push(now, robotdiag::EventKind::STOP, uint16_t(diagnosticStopReason(out.reason)));
+      previousStop = out.reason;
+    }
+    if (out.power != previousPower && (!out.power || !previousPower || abs(int(out.power) - int(previousPower)) >= 20)) {
+      events.push(now, robotdiag::EventKind::PWM, out.direction, int16_t(out.power));
+      previousPower = out.power;
+    }
     sendDrive(sequence++, out.direction, out.power, out.avoid);
     lastDriveMs = now;
     urgent = false;
@@ -605,6 +652,7 @@ void upgradeLoop() {
     irFrame.reset();
     rawIrFrame.reset();
     sendRs485(poll, sizeof(poll));
+    ++irPolls;
     lastPollMs = millis();
     pollUs = micros();
     waitingForIr = true;
@@ -625,6 +673,36 @@ void upgradeLoop() {
       default: Serial.printf("drive=%u/%u turn=%d loop=%luus\n", unsigned(out.direction), unsigned(holdStop ? 0 : out.power), holdStop ? 0 : out.turn, (unsigned long)loopMaxUs); break;
     }
     detailMs = now;
+  }
+  if (usbDiagnosticRequested && Serial && Serial.availableForWrite() >= 220) {
+    const uint32_t irAge = irData.received ? now - irData.stampMs : 0xffffffffUL;
+    const uint32_t camAge = cameraData.received ? now - cameraData.receivedMs : 0xffffffffUL;
+    Serial.printf("[MAIN] fw=%s git=%s uptime_ms=%lu mode=%s state=%s reason=%s hold=%u\n",
+                  ROBOT_FW_VERSION, ROBOT_GIT_COMMIT, (unsigned long)now, brain::name(robot.heading.mode),
+                  brain::name(out.tactic), *out.reason ? out.reason : "NONE", unsigned(holdStop));
+    Serial.printf("[IR] valid=%u angle=%u strength=%u age_ms=%lu [CAMERA] valid=%u ready=%u slow=%u age_ms=%lu line=%u mask=%04x\n",
+                  unsigned(irValid), unsigned(irData.angle),
+                  unsigned(irData.strength), (unsigned long)irAge,
+                  unsigned(cameraData.received), unsigned(cameraData.ready), unsigned(cameraData.slow),
+                  (unsigned long)camAge, unsigned(cameraData.lineCount), unsigned(cameraData.mask));
+    Serial.printf("[MOTOR_TX] direction=%u power=%u turn=%d avoid=%u [HISTORY] count=%u overwritten=%lu\n",
+                  unsigned(out.direction), unsigned(holdStop ? 0 : out.power), int(holdStop ? 0 : out.turn),
+                  unsigned(out.avoid), unsigned(events.size()), (unsigned long)events.overwritten());
+    Serial.printf("[LINKS] ir_poll=%lu ir_reply=%lu ir_timeout=%lu ir_rtt_us=%lu camera_crc_err=%lu camera_gap_max_ms=%lu loop_max_us=%lu brain_max_us=%lu\n",
+                  (unsigned long)irPolls, (unsigned long)irReplies, (unsigned long)irTimeouts,
+                  (unsigned long)irRoundTripUs, (unsigned long)parser.errors, (unsigned long)cameraGapMaxMs,
+                  (unsigned long)loopMaxUs, (unsigned long)brainMaxUs);
+    const size_t first = events.size() > 6 ? events.size() - 6 : 0;
+    for (size_t i = first; i < events.size(); ++i) {
+      const robotdiag::Event &event = events.oldest(i);
+      if (event.kind == robotdiag::EventKind::STOP)
+        Serial.printf("[STOP_REASON] age_ms=%lu code=%u name=%s\n", (unsigned long)(now - event.atMs),
+                      unsigned(event.code), robotdiag::name(robotdiag::StopReason(event.code)));
+      else
+        Serial.printf("[EVENT] age_ms=%lu kind=%u code=%u value=%d\n",
+                      (unsigned long)(now - event.atMs), unsigned(event.kind), unsigned(event.code), int(event.value));
+    }
+    usbDiagnosticRequested = false;
   }
 
 }
@@ -822,6 +900,7 @@ void loop() {
     if (command == 'd' || command == 's') holdStop = true;
     if (command == 'g') holdStop = false;
     if (command == 'v') usbViewer = !usbViewer;
+    if (command == 'i') usbDiagnosticRequested = true;
   }
   if (ROBOT_ZIP_TRACK) {
     chaseLoop();

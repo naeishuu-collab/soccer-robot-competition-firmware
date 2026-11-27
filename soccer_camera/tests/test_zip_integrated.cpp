@@ -4,6 +4,7 @@
 #include <SerialPIO.h>
 #include <Wire.h>
 #include <stdio.h>
+#include <Diagnostics.h>
 #include "main_logic.h"
 #include "motor_logic.h"
 #include "verified_motors.h"

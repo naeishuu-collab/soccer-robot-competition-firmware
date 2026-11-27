@@ -3,6 +3,7 @@
 // MAINは定期ポーリングするため、この基板は要求を受けてから応答し、RS-485上の衝突を避ける。
 #include <Arduino.h>
 #include "ir_logic.h"
+#include <Diagnostics.h>
 
 // Keep the chase (3) per-poll sampling and raw sensor-index angle.
 constexpr uint8_t SENSOR_COUNT = 12;
@@ -19,6 +20,11 @@ uint16_t detectCount[SENSOR_COUNT];
 
 irx::Filter irFilter;
 bool verbose = false;  // USB 'v' toggles per-sensor output
+bool diagnosticRequested = false;
+uint32_t irRequests = 0, irReplies = 0, irRequestErrors = 0;
+uint32_t irLastSampleUs = 0, irMaxSampleUs = 0;
+irx::Result lastIrResult;
+uint16_t lastSensorRaw[SENSOR_COUNT] = {};
 
 enum RequestState { WAIT_POLL, READ_POLL_2, READ_POLL_CMD, READ_POLL_END };
 RequestState requestState = WAIT_POLL;
@@ -45,6 +51,9 @@ void sampleAndReply() {
       if (digitalRead(sensorPins[i]) == LOW) detectCount[i]++;
     }
   }
+  irLastSampleUs = micros() - startTime;
+  if (irLastSampleUs > irMaxSampleUs) irMaxSampleUs = irLastSampleUs;
+  for (uint8_t i = 0; i < SENSOR_COUNT; ++i) lastSensorRaw[i] = detectCount[i];
 
   // 12方向の検出数を単位ベクトルに掛けて足すと、受光が強い方向へ合成ベクトルが向く。
   int32_t vectorX = 0, vectorY = 0;
@@ -66,7 +75,11 @@ void sampleAndReply() {
     // Opposing detections can cancel out; there is then no usable direction.
     totalDetect = 0;
   }
+  lastIrResult.angle = direction;
+  lastIrResult.strength = uint16_t(totalDetect);
+  lastIrResult.confidence = totalDetect ? 100 : 0;
   sendIR(direction, (uint16_t)totalDetect);
+  ++irReplies;
   if (Serial && Serial.availableForWrite() >= 48) {
     Serial.printf("IR reply: direction=%u detect=%u\n", unsigned(direction), unsigned(totalDetect));
   }
@@ -84,7 +97,11 @@ void sampleFiltered(bool reply) {
     }
     ++samples;
   }
+  irLastSampleUs = micros() - startTime;
+  if (irLastSampleUs > irMaxSampleUs) irMaxSampleUs = irLastSampleUs;
   const irx::Result result = irFilter.update(detectCount, samples);
+  lastIrResult = result;
+  for (uint8_t i = 0; i < SENSOR_COUNT; ++i) lastSensorRaw[i] = irFilter.raw(i);
   if (reply) {
     uint8_t frame[irx::kReplySize];
     irx::encode(result, frame);
@@ -94,9 +111,10 @@ void sampleFiltered(bool reply) {
     Serial1.flush();
     delayMicroseconds(20);
     digitalWrite(RS485_DE_PIN, LOW);
+    ++irReplies;
   }
   static uint32_t lastPrintMs = 0;
-  if (verbose && millis() - lastPrintMs >= 200 && Serial && Serial.availableForWrite() >= 160) {
+  if (verbose && millis() - lastPrintMs >= 200 && Serial && Serial.availableForWrite() >= 240) {
     lastPrintMs = millis();
     // Unfiltered angle from this sample window, for comparison with the filtered one.
     int32_t x = 0, y = 0;
@@ -107,8 +125,11 @@ void sampleFiltered(bool reply) {
       y += int32_t(irFilter.raw(i)) * sinTable[i];
     }
     const int raw = x || y ? (int(lroundf(atan2f(float(y), float(x)) * 57.29578f)) + 360) % 360 : -1;
-    Serial.printf("\nraw=%d filtered=%u strength=%u confidence=%u faults=%03x\n", raw, result.angle,
-                  result.strength, result.confidence, result.faults);
+    Serial.printf("\n[IR] fw=%s git=%s uptime_ms=%lu raw_angle=%d angle=%u strength=%u confidence=%u valid=%u faults=%03x sample_us=%lu max_us=%lu req=%lu tx=%lu bad_request=%lu\n",
+                  ROBOT_FW_VERSION, ROBOT_GIT_COMMIT, (unsigned long)millis(), raw, result.angle,
+                  result.strength, result.confidence, unsigned(result.confidence != 0), result.faults,
+                  (unsigned long)irLastSampleUs, (unsigned long)irMaxSampleUs,
+                  (unsigned long)irRequests, (unsigned long)irReplies, (unsigned long)irRequestErrors);
   }
 }
 
@@ -126,8 +147,9 @@ void processRequestByte(uint8_t data) {
       break;
     case READ_POLL_END:
       requestState = WAIT_POLL;
-      if (command == 0x01 && data == 0xFE) sampleAndReply();
-      if (command == 0x02 && data == 0xFD) sampleFiltered(true);
+      if (command == 0x01 && data == 0xFE) { ++irRequests; sampleAndReply(); }
+      else if (command == 0x02 && data == 0xFD) { ++irRequests; sampleFiltered(true); }
+      else ++irRequestErrors;
       break;
   }
 }
@@ -150,7 +172,21 @@ void loop() {
     processRequestByte((uint8_t)Serial1.read());
     lastBusMs = millis();
   }
-  while (Serial.available()) if (Serial.read() == 'v') verbose = !verbose;
+  while (Serial.available()) {
+    const int command = Serial.read();
+    if (command == 'v') verbose = !verbose;
+    if (command == 'i') diagnosticRequested = true;
+  }
+  if (diagnosticRequested && Serial && Serial.availableForWrite() >= 180) {
+    Serial.printf("[IR] fw=%s git=%s uptime_ms=%lu angle=%u strength=%u confidence=%u valid=%u faults=%03x sample_us=%lu max_us=%lu req=%lu tx=%lu bad_request=%lu raw=",
+                  ROBOT_FW_VERSION, ROBOT_GIT_COMMIT, (unsigned long)millis(), lastIrResult.angle,
+                  lastIrResult.strength, lastIrResult.confidence, unsigned(lastIrResult.confidence != 0),
+                  lastIrResult.faults, (unsigned long)irLastSampleUs, (unsigned long)irMaxSampleUs,
+                  (unsigned long)irRequests, (unsigned long)irReplies, (unsigned long)irRequestErrors);
+    for (uint8_t i = 0; i < SENSOR_COUNT; ++i) Serial.printf("%s%u", i ? "," : "", lastSensorRaw[i]);
+    Serial.println("");
+    diagnosticRequested = false;
+  }
   // Bench diagnostics without MAIN: sample locally while the bus is quiet; nothing is transmitted.
   if (verbose && millis() - lastBusMs >= 500) sampleFiltered(false);
 }

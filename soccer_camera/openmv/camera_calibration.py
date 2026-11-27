@@ -3,6 +3,10 @@
 competition_vision.pyへ切り替える場合はPROTOCOLとMAIN側ROBOT_UPGRADE設定も対応させる。
 """
 
+# Update these identifiers when copying firmware to the OpenMV board. The camera cannot query Git.
+FIRMWARE_VERSION = "0.1.0"
+GIT_COMMIT = "unembedded"
+
 FRAME_SIZE = "QVGA"
 # Enter (image_width, image_height), (center_x, center_y), and (inner_px, outer_px).
 IMAGE_SIZE = (320, 240)
