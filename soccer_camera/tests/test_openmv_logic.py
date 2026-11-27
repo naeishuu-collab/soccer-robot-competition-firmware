@@ -476,7 +476,7 @@ class OpenMvNavigationTests(unittest.TestCase):
         self.assertFalse(any(nav.in_lab((21, 8, 0), threshold) for threshold in nav.cfg.BLUE))
 
     def test_orange_and_yellow_measured_colors_are_candidates(self):
-        for sample in ((75, 16, 47), (80, 26, 50), (72, 21, 45), (77, 24, 49)):
+        for sample in ((75, 16, 47), (80, 26, 50), (72, 21, 45), (77, 24, 49), (90, -5, 59)):
             self.assertTrue(any(nav.in_lab(sample, threshold) for threshold in nav.cfg.YELLOW))
 
     def test_wire_format_signed_motion_checksum_and_protocol_marker(self):

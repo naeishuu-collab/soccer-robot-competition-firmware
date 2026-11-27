@@ -48,7 +48,8 @@ RGB_GAIN_DB = None  # None freezes the white balance measured after warm-up.
 
 # Yellow sample at 45 ms: LAB (78–79, 24–26, 29–30).
 YELLOW = [(30, 62, 5, 24, 26, 64), (79, 86, -3, 7, 57, 70),
-          (69, 88, 18, 32, 22, 39), (62, 88, 14, 32, 40, 55)]
+          (69, 88, 18, 32, 22, 39), (62, 88, 14, 32, 40, 55),
+          (80, 100, -15, 5, 45, 75)]
 # Additional sample: LAB L=21..22, A=8..9, B=-34..-33.
 # Additional blue sample: L=43..45, A=10..11, B=-39..-38.
 # Mid-brightness blue sample: L=28..29, A=9..10, B=-35..-34.
