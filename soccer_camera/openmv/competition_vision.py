@@ -193,20 +193,29 @@ class Track:
         return self.bearing, self.distance, self.confidence, self.width, age
 
 
-def goal_candidate(blob, mirror, min_pixels, cfg, color_of=None):
+def goal_candidate(blob, mirror, min_pixels, cfg, color_of=None, report=None):
     """色領域をゴールとして評価する。不合格はNone、合格は(方位, 品質, 半径, 視角)。
 
     大きさだけでは選ばない: ミラー上の角度幅、弧と高さの比、密度、外側/内側の床との関係を見る。
     相手機体やボールのように床の上にある物は、中心から見て外側にも緑床が見えるので除外する。
     """
+    # report (diagnostics only) receives the measured values and the reason for rejection.
+    def reject(reason):
+        if report is not None:
+            report["reason"] = reason
+
     pixels = value(blob, "pixels")
     cx, cy = value(blob, "cx"), value(blob, "cy")
-    if pixels < min_pixels or (mirror.ring_ready and not mirror.pixels_on_ring(cx, cy)):
-        return None
     x, y, w, h = (value(blob, key) for key in ("x", "y", "w", "h"))
     radius = math.sqrt((cx - mirror.cx) ** 2 + (cy - mirror.cy) ** 2)
+    if report is not None:
+        report.update({"pixels": pixels, "cx": cx, "cy": cy, "box": (x, y, w, h), "radius": radius})
+    if pixels < min_pixels:
+        return reject("SMALL")
+    if mirror.ring_ready and not mirror.pixels_on_ring(cx, cy):
+        return reject("RING")
     if w <= 0 or h <= 0 or radius < 1:
-        return None
+        return reject("EMPTY")
     bearing = mirror.bearing(cx, cy)
     corners = ((x, y), (x + w, y), (x, y + h), (x + w, y + h))
     offsets = [wrap(mirror.bearing(px, py) - bearing) for px, py in corners]
@@ -215,10 +224,14 @@ def goal_candidate(blob, mirror, min_pixels, cfg, color_of=None):
     height = max(1.0, abs(w * ux) + abs(h * uy))  # radial extent: the goal's apparent height
     arc = math.radians(width) * radius
     density = pixels / (w * h)
-    min_density = getattr(cfg, "GOAL_MIN_DENSITY", 0.2)
-    if (not getattr(cfg, "GOAL_MIN_WIDTH_DEG", 6) <= width <= getattr(cfg, "GOAL_MAX_WIDTH_DEG", 150)
-            or arc / height < getattr(cfg, "GOAL_MIN_ASPECT", 0.8) or density < min_density):
-        return None
+    if report is not None:
+        report.update({"bearing": bearing, "width": width, "aspect": arc / height, "density": density})
+    if not getattr(cfg, "GOAL_MIN_WIDTH_DEG", 6) <= width <= getattr(cfg, "GOAL_MAX_WIDTH_DEG", 150):
+        return reject("WIDTH")
+    if arc / height < getattr(cfg, "GOAL_MIN_ASPECT", 0.8):
+        return reject("TALL")
+    if density < getattr(cfg, "GOAL_MIN_DENSITY", 0.2):
+        return reject("SPARSE")
     quality = min(1.0, pixels / (4.0 * min_pixels)) * min(1.0, 0.5 + density)
     if color_of is not None:
         def colors(distance):
@@ -234,10 +247,12 @@ def goal_candidate(blob, mirror, min_pixels, cfg, color_of=None):
 
         beyond = colors(radius + height / 2 + 3)
         if len(beyond) >= 2 and beyond.count("GREEN") * 3 >= len(beyond) * 2:
-            return None  # turf continues behind it: an object standing on the field
+            return reject("TURF")  # turf continues behind it: an object standing on the field
         before = colors(radius - height / 2 - 3)
         if len(before) >= 2 and "GREEN" not in before and "WHITE" not in before:
             quality *= 0.6  # no floor in front of it: weaker evidence (may be hidden by a robot)
+    if report is not None:
+        report.update({"reason": "OK", "quality": quality})
     # The goal's floor edge is its part nearest to the mirror axis.
     return bearing, quality, max(0.0, radius - height / 2), width
 

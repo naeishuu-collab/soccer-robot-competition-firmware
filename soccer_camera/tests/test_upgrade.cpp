@@ -4,6 +4,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <vector>
 #include "ir_logic.h"
 #include "main_logic.h"
 #include "world.h"
@@ -375,6 +376,36 @@ static void tactics() {
     assert(o.tactic == Tactic::SEARCH && o.power && fabsf(wrap(o.direction - 0.0f)) >= 45);
   }
 
+  // Telemetry: golden bytes shared with the camera, and a port that accepts one byte at a time.
+  Telemetry tm;
+  tm.sequence = 5; tm.upgrade = tm.irLink = tm.cameraLink = true;
+  tm.ball = 271; tm.ballConfidence = 88; tm.ballAgeMs = 25; tm.direction = 45; tm.power = 160; tm.turn = -9;
+  tm.tactic = uint8_t(Tactic::ATTACK); tm.mode = uint8_t(Mode::VISION_ONLY); tm.bno = 0;
+  struct Slow {
+    std::vector<uint8_t> out; int room = 0;
+    int availableForWrite() { return room; }
+    void write(uint8_t b) { out.push_back(b); --room; }
+  } slow;
+  TelemetrySender sender;
+  sender.load(tm);
+  sender.pump(slow);
+  assert(slow.out.empty() && sender.busy());  // full FIFO: nothing written, nothing blocks
+  Telemetry other = tm; other.ball = 10;
+  for (int i = 0; i < 30; ++i) { slow.room = 1; sender.pump(slow); sender.load(i < 5 ? other : tm); if (slow.out.size() >= 19) break; }
+  char path[512];
+  strncpy(path, __FILE__, sizeof(path) - 40);
+  path[sizeof(path) - 40] = 0;
+  char *end = path + strlen(path);
+  while (end > path && end[-1] != '/' && end[-1] != '\\') --end;
+  strcpy(end, "telemetry_golden.txt");
+  FILE *g = fopen(path, "r");
+  assert(g);
+  for (int i = 0; i < kTelemetrySize; ++i) {
+    unsigned value = 0;
+    const int read = fscanf(g, "%x", &value);
+    assert(read == 1 && slow.out[i] == value);
+  }
+  fclose(g);
   // millis wrap keeps working.
   World z;
   z.now = UINT32_MAX - 100;

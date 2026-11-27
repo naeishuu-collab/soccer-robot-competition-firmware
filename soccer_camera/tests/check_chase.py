@@ -37,6 +37,11 @@ class ChaseConfiguration(unittest.TestCase):
         self.assertRegex(source, r"constexpr\s+bool\s+BNO_ENABLED\s*=\s*false\s*;")
         self.assertRegex(source, r"if\s*\(BNO_ENABLED\)\s*\{\s*updateHeading\(now\);")
 
+    def test_visualization_is_off_for_matches_and_ball_stays_ir_only(self):
+        config = (ROOT / "openmv/camera_calibration.py").read_text(encoding="utf-8")
+        self.assertRegex(config, r"(?m)^VISUALIZE = False$")
+        self.assertRegex(config, r"(?m)^GOAL_DEBUG = False$")
+
     def test_default_build_selection(self):
         # Chosen by the owner on 2026-11-27: MAIN and camera use the extended path, MOTOR stays legacy.
         main = (ROOT / "main/main.ino").read_text(encoding="utf-8")

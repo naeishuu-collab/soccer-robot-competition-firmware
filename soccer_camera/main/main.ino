@@ -14,6 +14,11 @@
 #define ROBOT_UPGRADE 1
 #endif
 
+// Display telemetry to the camera on GP2 (0 = never transmit). USB 'v' toggles the PC viewer lines.
+#ifndef ROBOT_TELEMETRY
+#define ROBOT_TELEMETRY 1
+#endif
+
 struct CameraState;
 
 // BEGIN HOST-TESTED CAMERA LOGIC
@@ -282,6 +287,9 @@ IrReplyReceiver irReceiver;
 constexpr uint32_t CAMERA_BAUD = ROBOT_UPGRADE ? 115200 : 9600;
 SerialPIO cameraSerial(2, 3, 256);
 bool holdStop = false;  // USB 'd' / 's': diagnostics and soft stop, 'g' resumes
+bool usbViewer = false;  // USB 'v': print VIZ lines for tools/viewer.html
+brain::TelemetrySender telemetry;
+constexpr uint32_t TELEMETRY_INTERVAL_MS = 100;
 
 CameraState camera;
 uint8_t cameraFrame[8] = {};
@@ -416,6 +424,32 @@ void setup() {
 }
 
 // ============================================================
+// Visualization (display only: nothing here feeds back into control)
+// ============================================================
+
+bool telemetryDue(uint32_t now) {
+  static uint32_t lastMs = 0;
+  if (!(ROBOT_TELEMETRY || usbViewer) || now - lastMs < TELEMETRY_INTERVAL_MS) return false;
+  lastMs = now;
+  return true;
+}
+
+void publishTelemetry(brain::Telemetry &t, int yellow, int yellowConfidence, int blue, int blueConfidence,
+                      const char *tactic, const char *mode) {
+  static uint8_t sequence = 0;
+  t.sequence = sequence++;
+  t.hold = holdStop;
+  if (holdStop) t.direction = t.power = 0, t.turn = 0;
+  if (ROBOT_TELEMETRY) telemetry.load(t);
+  if (usbViewer && Serial && Serial.availableForWrite() >= 120) {
+    Serial.printf("VIZ,1,%d,%d,%d,%u,%lu,%d,%u,%d,%s,%s,%u,%d,%d,%d,%d,%d\n", int(t.irLink), int(t.cameraLink), t.ball,
+                  t.ball >= 0 ? t.ballConfidence : 0, static_cast<unsigned long>(t.ballAgeMs),
+                  t.power ? int(t.direction) : -1, t.power, t.turn, tactic, mode, t.bno, yellow, yellowConfidence, blue,
+                  blueConfidence, int(t.hold));
+  }
+}
+
+// ============================================================
 // Upgrade path (ROBOT_UPGRADE=1)
 // ============================================================
 
@@ -483,6 +517,7 @@ void upgradeLoop() {
   const uint32_t us = micros();
   if (lastUs && us - lastUs > loopMaxUs) loopMaxUs = us - lastUs;
   lastUs = us;
+  telemetry.pump(cameraSerial);
 
   while (cameraSerial.available()) {
     const uint32_t previous = cameraData.receivedMs;
@@ -521,6 +556,31 @@ void upgradeLoop() {
     sendDrive(sequence++, out.direction, out.power, out.avoid);
     lastDriveMs = now;
     urgent = false;
+  }
+  if (telemetryDue(now)) {
+    brain::Telemetry t;
+    t.upgrade = true;
+    t.irLink = irData.received && now - irData.stampMs <= robot.cfg.irTimeoutMs;
+    t.cameraLink = cameraData.received && now - cameraData.receivedMs <= robot.cfg.cameraTimeoutMs;
+    int faults = 0;
+    for (uint16_t f = irData.faults; f; f &= f - 1) ++faults;
+    // Only a current IR detection is shown; predictions and old bearings are not sent as the ball.
+    if (t.irLink && irData.strength && faults <= robot.cfg.irMaxFaults) {
+      t.ball = irData.angle;
+      t.ballConfidence = irData.confidence;
+      t.ballAgeMs = now - irData.stampMs;
+    }
+    t.direction = out.direction;
+    t.power = out.power;
+    t.turn = out.turn;
+    t.tactic = uint8_t(out.tactic);
+    t.mode = uint8_t(robot.heading.mode);
+    const bool gyro = robot.heading.mode == brain::Mode::FUSED || robot.heading.mode == brain::Mode::BNO_ONLY;
+    t.bno = !BNO_ENABLED ? 0 : (bno.ok && gyro ? 2 : 1);
+    const brain::Seen &y = cameraData.yellow, &bl = cameraData.blue;
+    publishTelemetry(t, t.cameraLink && y.seen ? int(y.bearing) : -1, y.confidence,
+                     t.cameraLink && bl.seen ? int(bl.bearing) : -1, bl.confidence, brain::name(out.tactic),
+                     brain::name(robot.heading.mode));
   }
   if (now - lastPollMs >= IR_POLL_INTERVAL_MS) {
     const uint8_t poll[] = {0xA5, 0x5A, 0x02, 0xFD};
@@ -568,6 +628,7 @@ void loop() {
     const int command = Serial.read();
     if (command == 'd' || command == 's') holdStop = true;
     if (command == 'g') holdStop = false;
+    if (command == 'v') usbViewer = !usbViewer;
   }
   if (ROBOT_UPGRADE) {
     upgradeLoop();
@@ -617,6 +678,21 @@ void loop() {
       Serial.write(reinterpret_cast<const uint8_t *>(line), size_t(length));
       lastLogMs = now;
     }
+  }
+
+  telemetry.pump(cameraSerial);
+  if (telemetryDue(now)) {
+    brain::Telemetry t;
+    t.irLink = irReplied && uint32_t(now - lastIrReplyMs) < IR_REPLY_TIMEOUT_MS;
+    t.cameraLink = cameraFresh(camera, now);
+    if (t.irLink && ballLock.active(now)) {
+      t.ball = ballLock.direction();  // the legacy reply carries no confidence
+      t.ballAgeMs = now - lastBallMs;
+    }
+    t.direction = lastDriveDirection;
+    t.power = lastDrivePower;
+    t.bno = BNO_ENABLED && isfinite(headingCurrent) ? 2 : (BNO_ENABLED ? 1 : 0);
+    publishTelemetry(t, -1, 0, -1, 0, "LEGACY", "LEGACY");
   }
 
   // Never transmit during the IR reply window. Send a pending stop before a new drive.

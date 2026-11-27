@@ -199,6 +199,41 @@ int main() {
   for (int i = 0; i < 500; ++i) { rig.tick(); moved = moved || !Rig::still(); }
   CHECK("USB resume", moved);
 
+  // Visualization: telemetry frames on the camera port, USB lines only after 'v', control unaffected.
+  auto latest = [&]() {
+    const auto &tx = mainboard::cameraSerial.tx;
+    for (int i = int(tx.size()) - brain::kTelemetrySize; i >= 0; --i)
+      if (tx[i] == 0xD7 && tx[i + 1] == 0x7D &&
+          brain::crc16(&tx[i], brain::kTelemetrySize - 2) == uint16_t(tx[i + 17] | tx[i + 18] << 8))
+        return std::vector<uint8_t>(tx.begin() + i, tx.begin() + i + brain::kTelemetrySize);
+    return std::vector<uint8_t>();
+  };
+  rig.camera = true; rig.ir = true; rig.mask = 0xFFFF; rig.ballAngle = 0;
+  mainboard::cameraSerial.tx.clear();
+  rig.run(1000);
+  std::vector<uint8_t> f = latest();
+  CHECK("telemetry about every 100 ms", mainboard::cameraSerial.tx.size() >= 8 * brain::kTelemetrySize &&
+        mainboard::cameraSerial.tx.size() <= 11 * brain::kTelemetrySize);
+  CHECK("telemetry carries the IR bearing, confidence and command", !f.empty() && (f[5] & 11) == 11 &&
+        f[6] == 0 && f[7] == 0 && f[8] == 90 && f[12] > 0 && f[16] == 0);
+  CHECK("USB lines are off by default", Serial.text.find("VIZ,") == std::string::npos);
+  Serial.type("v");
+  rig.run(400);
+  const size_t at = Serial.text.rfind("VIZ,1,");
+  CHECK("USB viewer line after v", at != std::string::npos &&
+        std::count(Serial.text.begin() + at, Serial.text.begin() + Serial.text.find('\n', at), ',') == 17);
+  Serial.type("v");
+  rig.noBall = true;
+  rig.run(300);
+  f = latest();
+  CHECK("no ball: no bearing is shown", !f.empty() && !(f[5] & 8) && f[6] == 0xFF && f[7] == 0xFF && f[9] == 255);
+  rig.noBall = false; rig.ir = false;
+  rig.run(400);
+  f = latest();
+  CHECK("IR link down: no stale bearing", !f.empty() && !(f[5] & 2) && !(f[5] & 8));
+  rig.ir = true;
+  rig.run(300);
+
   // MOTOR alone (MAIN silent): watchdog, strict avoid, zero power.
   rig.camera = false;
   Serial.rx.clear();

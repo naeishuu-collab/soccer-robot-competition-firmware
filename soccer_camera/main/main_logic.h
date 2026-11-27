@@ -182,6 +182,56 @@ private:
   uint8_t used_ = 0;
 };
 
+// ---------------- Telemetry to the camera / PC (display only, see openmv/visualize.py) ----------------
+constexpr uint8_t kTelemetrySize = 19;
+struct Telemetry {
+  uint8_t sequence = 0;
+  bool upgrade = false, irLink = false, cameraLink = false, hold = false;
+  int ball = -1;             // IR bearing, robot degrees; -1: no CURRENT detection
+  uint8_t ballConfidence = 255;  // 255: not available
+  uint32_t ballAgeMs = 0;
+  uint16_t direction = 0, power = 0;
+  int turn = 0;
+  uint8_t tactic = 255, mode = 255;  // enum values, 255: legacy control
+  uint8_t bno = 0;                   // 0 disabled, 1 no usable data, 2 in use
+};
+
+inline void encodeTelemetry(const Telemetry &t, uint8_t *f) {
+  f[0] = 0xD7; f[1] = 0x7D; f[2] = 1; f[3] = kTelemetrySize; f[4] = t.sequence;
+  const bool ball = t.ball >= 0;
+  f[5] = uint8_t((t.upgrade ? 1 : 0) | (t.irLink ? 2 : 0) | (t.cameraLink ? 4 : 0) | (ball ? 8 : 0) | (t.hold ? 16 : 0));
+  const uint16_t bearing = ball ? uint16_t(t.ball) : kUnknown;
+  const uint16_t direction = t.power ? t.direction : kUnknown;
+  f[6] = uint8_t(bearing); f[7] = uint8_t(bearing >> 8);
+  f[8] = ball ? t.ballConfidence : 0;
+  f[9] = ball ? uint8_t(t.ballAgeMs / 10 > 254 ? 254 : t.ballAgeMs / 10) : 255;
+  f[10] = uint8_t(direction); f[11] = uint8_t(direction >> 8);
+  f[12] = uint8_t(t.power > 255 ? 255 : t.power);
+  f[13] = uint8_t(t.turn + 128);
+  f[14] = t.tactic; f[15] = t.mode; f[16] = t.bno;
+  const uint16_t crc = crc16(f, kTelemetrySize - 2);
+  f[17] = uint8_t(crc); f[18] = uint8_t(crc >> 8);
+}
+
+// Never blocks the control loop: writes only what the transmit FIFO can take right now.
+class TelemetrySender {
+public:
+  bool busy() const { return used_ < size_; }
+  void load(const Telemetry &t) {
+    if (busy()) return;  // drop rather than queue stale data
+    encodeTelemetry(t, frame_);
+    used_ = 0;
+    size_ = kTelemetrySize;
+  }
+  template <class Port> void pump(Port &port) {
+    while (busy() && port.availableForWrite() > 0) port.write(frame_[used_++]);
+  }
+
+private:
+  uint8_t frame_[kTelemetrySize] = {};
+  uint8_t used_ = 0, size_ = 0;
+};
+
 // ---------------- BNO055 sample screening ----------------
 struct BnoSample {
   bool ok = false;           // connected, gyro calibrated, value in range

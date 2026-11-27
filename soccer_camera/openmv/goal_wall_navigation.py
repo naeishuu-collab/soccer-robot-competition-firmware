@@ -421,6 +421,11 @@ def main_loop(send_uart=True, display=False):
     if getattr(cfg, "PROTOCOL", 1) == 2:
         import competition_vision
         vision = competition_vision.Pipeline(cfg, mirror, LINE_CLEARANCE_CM, MAX_FRAME_AGE_MS)
+    overlay = None
+    debug_goals = getattr(cfg, "GOAL_DEBUG", False)
+    if vision is not None and (display or debug_goals):
+        import visualize  # loaded only when something is shown, so competition runs pay nothing
+        overlay = visualize.Overlay(cfg, mirror, show=display, debug_goals=debug_goals)
     uart = pyb.UART(3, 115200 if vision else 9600) if send_uart else None
     last_tx = time.ticks_ms()
     last_command = None
@@ -470,12 +475,15 @@ def main_loop(send_uart=True, display=False):
             shown_frames, last_report = frames, now
             if vision is not None:
                 print(vision.timing, vision.status())
-        if display and vision is not None:
-            draw_mirror(img, mirror)
-            draw_floor_scan(img, mirror)
-            for _, _, _, x, y in boundaries:
-                img.draw_cross((x, y), color=(255, 255, 255))
-        elif display:
+        if overlay is not None:
+            # After the packet has been sent: display work never delays this frame's line data.
+            if uart is not None:
+                waiting = uart.any()
+                if waiting:
+                    overlay.link.feed(uart.read(min(waiting, 128)), time.ticks_ms())
+            overlay.draw(img, time.ticks_ms(), vision, boundaries, time.ticks_diff,
+                         lambda x, y: ground_color(img, x, y))
+        elif display and vision is None:
             # Preview only (never sent to MAIN): one goal colour per frame, judged like protocol 3 does.
             name = ("BLUE", "YELLOW")[frames % 2]
             try:
@@ -532,4 +540,5 @@ def main_loop(send_uart=True, display=False):
 
 
 if __name__ == "__main__":
-    main_loop(send_uart=True, display=True)
+    # VISUALIZE = False draws nothing (competition). GOAL_DEBUG works with it either way.
+    main_loop(send_uart=True, display=getattr(cfg, "VISUALIZE", False))

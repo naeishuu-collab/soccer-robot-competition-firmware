@@ -122,6 +122,13 @@ int main() {
   Serial.type("g");
   rig.run(600);
 
+  rig.camera = true; rig.ir = true; rig.ball = true;
+  mainboard::cameraSerial.tx.clear();
+  rig.run(600);
+  const auto &tx = mainboard::cameraSerial.tx;
+  CHECK("legacy build also sends telemetry, confidence unknown", tx.size() >= 4 * brain::kTelemetrySize &&
+        tx[0] == 0xD7 && tx[1] == 0x7D && !(tx[5] & 1) && tx[8] == 255 && tx[14] == 255);
+
   // Bench-verified directions through the real MOTOR loop.
   rig.camera = false;
   Serial.rx.clear();

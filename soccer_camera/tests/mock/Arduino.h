@@ -8,6 +8,7 @@
 #include <string.h>
 #include <math.h>
 #include <deque>
+#include <string>
 #include <vector>
 #include <algorithm>
 
@@ -45,7 +46,15 @@ struct MockSerial {
   void flush() {}
   void print(const char *) {}
   void println(const char *) {}
-  void printf(const char *, ...) {}
+  void printf(const char *format, ...) {
+    char line[400];
+    va_list args;
+    va_start(args, format);
+    const int n = vsnprintf(line, sizeof(line), format, args);
+    va_end(args);
+    if (n > 0) text.append(line, std::min(n, int(sizeof(line)) - 1));
+  }
+  std::string text;
   void feed(const uint8_t *p, size_t n) { rx.insert(rx.end(), p, p + n); }
   void type(const char *s) { while (*s) rx.push_back(uint8_t(*s++)); }
   explicit operator bool() const { return true; }

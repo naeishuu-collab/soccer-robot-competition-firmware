@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>MAIN 可視化（USB）</title>
+<style>
+  body { background: #14181c; color: #eee; font-family: sans-serif; margin: 16px; display: flex; gap: 24px; flex-wrap: wrap; }
+  button { font-size: 16px; padding: 8px 16px; }
+  canvas { background: #1e252b; border-radius: 8px; }
+  td { padding: 2px 12px; font-size: 18px; }
+  #state { font-size: 18px; margin: 8px 0; }
+</style>
+</head>
+<body>
+<div>
+  <button id="connect">MAINに接続</button>
+  <div id="state" role="status">未接続（Chrome か Edge で開いてください）</div>
+  <canvas id="view" width="420" height="420" aria-label="機体を上から見た方向表示。上が機体の正面"></canvas>
+  <p>赤=正面　橙=IRボール方向（距離ではありません）　緑=移動指令　黄/青=ゴール方向</p>
+</div>
+<table id="values"></table>
+<script src="viewer.js"></script>
+<script>
+'use strict';
+let latest = null, receivedAt = 0;
+const view = document.getElementById('view').getContext('2d');
+const state = document.getElementById('state');
+
+function arrow(angle, length, color, width) {
+  if (angle === null) return;
+  const a = angle * Math.PI / 180, x = 210 + length * Math.sin(a), y = 210 - length * Math.cos(a);
+  view.strokeStyle = view.fillStyle = color;
+  view.lineWidth = width;
+  view.beginPath(); view.moveTo(210, 210); view.lineTo(x, y); view.stroke();
+  view.beginPath(); view.arc(x, y, 7, 0, 2 * Math.PI); view.fill();
+}
+
+function render() {
+  const d = current(latest, performance.now() - receivedAt);
+  view.clearRect(0, 0, 420, 420);
+  view.strokeStyle = '#888'; view.lineWidth = 1;
+  view.beginPath(); view.arc(210, 210, 60, 0, 2 * Math.PI); view.stroke();
+  arrow(0, 200, 'red', 2);
+  const rows = [];
+  if (d) {
+    arrow(d.yellow, 180, 'yellow', 4);
+    arrow(d.blue, 180, '#006eff', 4);
+    arrow(d.ball, 150, 'orange', 5);
+    arrow(d.power ? d.direction : null, 110, 'lime', 7);
+    const angle = (a) => (a === null ? '---' : a + '°');
+    rows.push(['ボール方向(IR)', angle(d.ball)], ['IR信頼度', d.ball === null || d.ballConfidence === 255 ? '-' : d.ballConfidence],
+      ['黄ゴール', d.yellow === null ? '未検出' : angle(d.yellow) + ' 信頼度' + d.yellowConfidence],
+      ['青ゴール', d.blue === null ? '未検出' : angle(d.blue) + ' 信頼度' + d.blueConfidence],
+      ['移動指令', angle(d.power ? d.direction : null)], ['指令出力', d.power], ['旋回', d.turn],
+      ['制御', d.tactic + (d.hold ? ' (HOLD)' : '')], ['姿勢モード', d.mode],
+      ['IR通信', d.irLink ? 'OK' : 'NG'], ['カメラ通信', d.cameraLink ? 'OK' : 'NG'], ['BNO055', d.bno]);
+  } else {
+    rows.push(['状態', latest ? 'データが古いため表示していません' : 'データなし（MAINに v を送っています）']);
+  }
+  const table = document.getElementById('values');
+  table.replaceChildren(...rows.map(([name, value]) => {
+    const tr = document.createElement('tr');
+    for (const text of [name, value]) { const td = document.createElement('td'); td.textContent = text; tr.append(td); }
+    return tr;
+  }));
+}
+setInterval(render, 100);
+
+document.getElementById('connect').addEventListener('click', async () => {
+  if (!navigator.serial) { state.textContent = 'このブラウザはWeb Serialに対応していません'; return; }
+  try {
+    const port = await navigator.serial.requestPort();
+    await port.open({ baudRate: 115200 });
+    state.textContent = '接続中';
+    const writer = port.writable.getWriter();
+    // 'v' toggles the VIZ lines: send it again only while nothing arrives.
+    const ask = setInterval(() => {
+      if (performance.now() - receivedAt > 1500) writer.write(new TextEncoder().encode('v'));
+    }, 2000);
+    const reader = port.readable.pipeThrough(new TextDecoderStream()).getReader();
+    let text = '';
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      text = (text + value).slice(-4000);
+      const lines = text.split('\n');
+      text = lines.pop();
+      for (const line of lines) {
+        const parsed = parseViz(line);
+        if (parsed) { latest = parsed; receivedAt = performance.now(); }
+      }
+    }
+    clearInterval(ask);
+  } catch (error) {
+    state.textContent = '接続エラー: ' + error.message;
+  }
+});
+</script>
+</body>
+</html>

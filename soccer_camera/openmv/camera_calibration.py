@@ -9,7 +9,9 @@ IMAGE_SIZE = (320, 240)
 MIRROR_CENTER = (171, 129)  # Approximate values measured from the supplied preview.
 MIRROR_RING = (29, 77)  # Inner and outer radii in QVGA pixels.
 MIRROR_AUTO_DETECT = False
-FRONT_DEG = 297.0  # Clockwise from image up to the robot's forward direction.
+# Clockwise from image up to the robot's forward direction. 86 was estimated from the camera image on
+# 2026-11-27 (previously 297) and is NOT verified: check that the red line points at the robot's front.
+FRONT_DEG = 86.0
 CLOCKWISE = False  # False if moving a target to the robot's right decreases its image angle.
 
 # (radius_px, floor_distance_cm), ordered by increasing distance, measured from mirror axis.
@@ -19,6 +21,11 @@ TARGET_GOAL = "YELLOW"  # Set to "YELLOW" or "BLUE" before each half.
 # 1 = legacy 8-byte UART at 9600 (default). 2 = extended packet (wire version 3) at 115200; needs MAIN
 # ROBOT_UPGRADE=1 from the same commit and competition_vision.py on the camera.
 PROTOCOL = 2
+# Overlay and text in the OpenMV IDE (needs visualize.py). Set True on the bench; keep False for matches
+# because the extra search and drawing lower the frame rate.
+VISUALIZE = False
+# Every goal colour candidate with its numbers and rejection reason (drawn and printed). Slow: bench only.
+GOAL_DEBUG = False
 LINE_BLOCK_CM = 35  # Protocol 2: headings toward a line closer than this are closed early. Unverified.
 # (radius_px, distance_cm) table measured for the goals. Empty = distance unknown.
 # Never copy GROUND_POINTS here without measuring. The camera does not detect the ball at all.

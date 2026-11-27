@@ -27,6 +27,8 @@ TB67H450、PWM 20kHz・8bit(0〜255)、PWM160で前・右・後・左に移動�
 >
 > **注意**：MAIN 1 と MOTOR 0 の組み合わせでは、旧ミキサーが旋回補正を小さなPWMのまま車輪に加えることがあり、回らない車輪が出る恐れがあります。MOTORを1にする（実測後）か、MAINを0に戻すまで床上で走らせないでください。
 
+認識結果の画面表示、MAIN→カメラの通信、ゴール診断、PCビューア、`FRONT_DEG`（86に変更・未検証）は [VISUALIZATION_JA.md](VISUALIZATION_JA.md) を参照してください。
+
 ## 1. 基準とロールバック
 
 - 基準コミット：`adaa755`（main「Show camera and IR link status on MAIN」）
