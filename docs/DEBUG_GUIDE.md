@@ -14,7 +14,8 @@
 | IR | `v` | filtered要求時の連続診断表示を切り替え。raw要求の通常構成では使わない |
 | MOTOR | `i` + Enter | RX/CRC/BAD/timeout/age/target/current/appliedを表示。appliedはHブリッジへのPWM指令で、車輪回転センサーの測定値ではない |
 | MOTOR | `diag` + Enter | 既存の車輪浮上用モーター診断に入る。詳細は`docs/UPGRADE_2026-11-26_JA.md`のモーター測定節 |
-| OpenMV | `camera_calibration.py`の`DEBUG_STATS = True` | OpenMV USBコンソールへ2秒周期でFPS、capture/line、段階別時間、白線/ゴール状態、校正識別子を表示 |
+| OpenMV | `camera_calibration.py`の`DEBUG_STATS = True` | OpenMV USBコンソールへ2秒周期でFPS、capture/line、段階別時間、白線/ゴール状態、UART成否、校正識別子を表示 |
+| OpenMV | `DEBUG_FORMAT = "CSV"` | `DEBUG_STATS`と併用すると、V2の診断行を2秒周期でヘッダー付きCSV出力（起動表示はテキスト） |
 
 MAIN/IRの`i`は行末不要です。MOTORの`i`は行末が必要です。USB未接続時に診断出力は保存されず、フラッシュへも書き込みません。`tests/compile_arduino.ps1`経由のArduinoビルドはHEAD SHAを埋め込みます。手動ビルドやOpenMVの表示が`git=unembedded`なら、SHA未設定です。OpenMVは`camera_calibration.py`で識別子を更新します。
 
@@ -70,10 +71,16 @@ MAIN/IRの`i`は行末不要です。MOTORの`i`は行末が必要です。USB�
 2. MAINの`LINKS`でIR要求/応答/timeout、RTT、カメラCRCエラー、最大受信間隔を見る。MOTORの`MD`行ではRX、CRC、BAD、timeout、ageを確認します。
 3. 半二重RS-485はMAINからのポーリングとIR応答の順で確認します。通信断を診断するために配線やGPIOを変更しないでください。
 
+部分UART送信ではOpenMVの`[UART_TX] partial`または`tx_partial`が増えます。`failed`はUART例外/進捗なし、`expired`は不完全フレームの期限切れです。MAINのカメラ受信age/CRCも合わせて確認します。CSV行はOpenMV実機の診断記録であり、PC上のFPS測定ではありません。
+
 ### 回り込みが動かない
 
 MAINの`state`と`reason`、カメラの黄/青bearing・confidence・鮮度、mask、IR角度を同時に記録します。ゴール情報欠落や安全maskで停止する場合があります。回り込みのUSB個別モード切替コマンドは現時点で実装されていません。
 
+### 競技用ビルドだけ動かない／黄色ゴールだけ見えない
+
+MAIN `i`の`config`とfeature bits、IRの`config`、MOTORの`config`、OpenMVの`CONFIG_ID`を照合します。続いてMAIN/MOTORの`ROBOT_UPGRADE`、MAINの`ROBOT_ZIP_TRACK`/`ROBOT_ZIP_COMPAT`、MAINの`ROBOT_RAW_IR`、OpenMVの`PROTOCOL`を各ソースで比較してください。これらの値は通信で自動交渉されません。黄色だけ見えない場合はOpenMVの黄色候補診断でROI、候補サイズ、形状棄却理由を確認し、記録画像なしにLAB閾値を変更しないでください。
+
 ## 現時点で未実装の診断
 
-このガイドでは存在しないシリアルコマンドを案内しません。独立テストモード選択、基板間プロトコル互換性の自動照合、MAINが受け取るMOTOR状態返信、全停止条件の同時ビットマスク、IR/OpenMVを含む全基板共通イベント履歴、診断ログのCSV/JSON Lines切替はまだありません。競技実機検証も未実施です。
+このガイドでは存在しないシリアルコマンドを案内しません。`RuntimeConfig.h`のモードenum/ゲートはホスト側だけで、MAIN USBモード選択は未実装です。基板間プロトコル互換性の自動照合、MAINが受け取るMOTOR状態返信、全基板共通イベント履歴、MAIN/IR/MOTORのCSV/JSON Lines切替も未実装です。競技実機検証も未実施です。
