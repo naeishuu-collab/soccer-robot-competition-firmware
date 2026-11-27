@@ -37,12 +37,14 @@ class ChaseConfiguration(unittest.TestCase):
         self.assertRegex(source, r"constexpr\s+bool\s+BNO_ENABLED\s*=\s*false\s*;")
         self.assertRegex(source, r"if\s*\(BNO_ENABLED\)\s*\{\s*updateHeading\(now\);")
 
-    def test_upgrade_is_off_by_default_on_every_board(self):
-        for sketch in ("main/main.ino", "motor/motor.ino"):
-            source = (ROOT / sketch).read_text(encoding="utf-8")
-            self.assertRegex(source, r"#define ROBOT_UPGRADE 0")
+    def test_default_build_selection(self):
+        # Chosen by the owner on 2026-11-27: MAIN and camera use the extended path, MOTOR stays legacy.
+        main = (ROOT / "main/main.ino").read_text(encoding="utf-8")
+        motor = (ROOT / "motor/motor.ino").read_text(encoding="utf-8")
         config = (ROOT / "openmv/camera_calibration.py").read_text(encoding="utf-8")
-        self.assertRegex(config, r"(?m)^PROTOCOL = 1$")
+        self.assertRegex(main, r"#define ROBOT_UPGRADE 1")
+        self.assertRegex(motor, r"#define ROBOT_UPGRADE 0")
+        self.assertRegex(config, r"(?m)^PROTOCOL = 2$")  # must match MAIN
 
 
 if __name__ == "__main__":

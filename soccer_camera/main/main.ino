@@ -11,7 +11,7 @@
 // 0 = field-tested chase (default). 1 = camera protocol 2, filtered IR, heading modes and tactics.
 // Build MAIN, MOTOR and IR together and set PROTOCOL = 2 on the camera. Not verified on hardware.
 #ifndef ROBOT_UPGRADE
-#define ROBOT_UPGRADE 0
+#define ROBOT_UPGRADE 1
 #endif
 
 struct CameraState;
@@ -406,12 +406,12 @@ void setup() {
     Wire.endTransmission();
     delay(30);
   }
-  if (ROBOT_UPGRADE) {
-    Wire.setSDA(4);
-    Wire.setSCL(5);
-    Wire.begin();
-    Wire.setClock(50000);
-    Wire.setTimeout(5, true);
+  if (ROBOT_UPGRADE && BNO_ENABLED) {
+  Wire.setSDA(4);
+  Wire.setSCL(5);
+  Wire.begin();
+  Wire.setClock(50000);
+  Wire.setTimeout(5, true);
   }
 }
 
@@ -508,7 +508,11 @@ void upgradeLoop() {
   if (waitingForIr && now - lastPollMs >= UPGRADE_IR_WAIT_MS) waitingForIr = false;
   if (waitingForIr) return;  // never transmit inside the IR reply window
 
+  if (BNO_ENABLED) {
   updateBno(now, bno);
+  } else {
+  bno.ok = false;
+  }
   if (urgent || now - lastDriveMs >= 20) {
     const uint32_t start = micros();
     out = robot.step(cameraData, irData, bno, millis());

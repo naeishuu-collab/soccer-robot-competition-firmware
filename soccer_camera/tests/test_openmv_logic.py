@@ -401,7 +401,7 @@ class OpenMvNavigationTests(unittest.TestCase):
 
         with patch.multiple(nav.cfg, IMAGE_SIZE=(320, 240), MIRROR_CENTER=(160, 120),
                             MIRROR_RING=(20, 100), GROUND_POINTS=((40, 10), (80, 55)),
-                            TARGET_GOAL="YELLOW"):
+                            TARGET_GOAL="YELLOW", PROTOCOL=1):  # this test covers the legacy packet
             with patch.multiple(nav, sensor=Sensor, time=Time, pyb=Board,
                                 image=type("Image", (), {"rgb_to_lab": staticmethod(lambda c: (0, 0, 0))}),
                                 init_camera=lambda: None,

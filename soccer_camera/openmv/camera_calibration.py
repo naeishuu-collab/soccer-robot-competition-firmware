@@ -18,7 +18,7 @@ TARGET_GOAL = "YELLOW"  # Set to "YELLOW" or "BLUE" before each half.
 
 # 1 = legacy 8-byte UART at 9600 (default). 2 = extended packet (wire version 3) at 115200; needs MAIN
 # ROBOT_UPGRADE=1 from the same commit and competition_vision.py on the camera.
-PROTOCOL = 1
+PROTOCOL = 2
 LINE_BLOCK_CM = 35  # Protocol 2: headings toward a line closer than this are closed early. Unverified.
 # (radius_px, distance_cm) table measured for the goals. Empty = distance unknown.
 # Never copy GROUND_POINTS here without measuring. The camera does not detect the ball at all.

@@ -23,6 +23,10 @@ TB67H450、PWM 20kHz・8bit(0〜255)、PWM160で前・右・後・左に移動�
 
 **未確認**：斜め・中間角度、旋回方向、始動・持続の最小PWM、ブレーキの電流・発熱・停止距離、このファームウェアでの4方向。
 
+> **2026-11-27 初期設定の変更（所有者の指定）**：`main/main.ino` は `ROBOT_UPGRADE 1`、`camera_calibration.py` は `PROTOCOL = 2` になりました。`motor/motor.ino` は `ROBOT_UPGRADE 0` のままです。以下の本文で「初期状態はOFF」「全OFF」とある箇所は、MAINを0、カメラを1に戻して行ってください。MAINは `BNO_ENABLED = false` の間、拡張経路でもBNOを初期化・読み取りしません。
+>
+> **注意**：MAIN 1 と MOTOR 0 の組み合わせでは、旧ミキサーが旋回補正を小さなPWMのまま車輪に加えることがあり、回らない車輪が出る恐れがあります。MOTORを1にする（実測後）か、MAINを0に戻すまで床上で走らせないでください。
+
 ## 1. 基準とロールバック
 
 - 基準コミット：`adaa755`（main「Show camera and IR link status on MAIN」）
@@ -37,13 +41,13 @@ git checkout adaa755 -- soccer_camera
 
 ## 2. 何が初期状態で変わるか
 
-### 新機能（初期状態はOFF）
+### 新機能の切替
 
 | 切替 | 場所 | 初期値 |
 |---|---|---|
 | 車輪モデル・始動補助 | `motor/motor.ino` の `ROBOT_UPGRADE` | 0 |
-| 通信v2・姿勢モード・センサー融合・戦術 | `main/main.ino` の `ROBOT_UPGRADE` | 0 |
-| 通信v2・認識パイプライン | `openmv/camera_calibration.py` の `PROTOCOL` | 1 |
+| 通信v2・姿勢モード・センサー融合・戦術 | `main/main.ino` の `ROBOT_UPGRADE` | 1（2026-11-27〜） |
+| 通信v2・認識パイプライン | `openmv/camera_calibration.py` の `PROTOCOL` | 2（2026-11-27〜） |
 
 ### 安全のため初期状態でも変わる動作
 
