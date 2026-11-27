@@ -6,6 +6,18 @@ int main() {
   using namespace robotcfg;
   assert(kBuildFeatures.valid());
   assert(!ENABLE_BNO055 && !ENABLE_LINE_BOARD);
+  FeatureSet noCamera = kBuildFeatures;
+  noCamera.camera = false;
+  assert(!noCamera.valid());
+  FeatureSet noLineGuard = kBuildFeatures;
+  noLineGuard.lineEscape = false;
+  assert(!noLineGuard.valid());
+  FeatureSet searchOnly = kBuildFeatures;
+  searchOnly.ballSearch = true;
+  assert(searchOnly.valid());
+  FeatureSet obstacle = kBuildFeatures;
+  obstacle.obstacleAvoid = true;
+  assert(!obstacle.valid());
 
   TestMode mode = TestMode::STOP;
   assert(parseMode("CHASE_ONLY", mode) && mode == TestMode::CHASE_ONLY);

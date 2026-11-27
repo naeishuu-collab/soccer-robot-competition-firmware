@@ -29,7 +29,7 @@ $motorConfig = foreach ($name in @('MOTOR_IN1', 'MOTOR_IN2', 'WHEEL_DEGREES', 'W
 ($motorConfig + $mixer) | Set-Content -Encoding UTF8 (Join-Path $build 'chase_mixer.h')
 "Host tests started at $([DateTime]::UtcNow.ToString('yyyy-MM-dd HH:mm:ss')) UTC" | Set-Content -Encoding Unicode $results
 
-$sources = @('test_diagnostics.cpp', 'test_runtime_config.cpp', 'test_zip_chase_pd.cpp', 'test_zip_integrated.cpp', 'test_core.cpp', 'test_integration.cpp', 'test_chase_camera.cpp', 'test_chase_motor.cpp', 'test_chase_mixer.cpp', 'test_motor_model.cpp', 'test_upgrade.cpp', 'test_review.cpp', 'test_loop.cpp', 'test_loop_legacy.cpp', 'test_continuity.cpp', 'test_zip_loop.cpp', 'test_default_omni.cpp', 'test_default_bno.cpp', 'test_no_camera_autostart.cpp')
+$sources = @('test_diagnostics.cpp', 'test_runtime_config.cpp', 'test_default_feature_profile.cpp', 'test_zip_chase_pd.cpp', 'test_zip_integrated.cpp', 'test_core.cpp', 'test_integration.cpp', 'test_chase_camera.cpp', 'test_chase_motor.cpp', 'test_chase_mixer.cpp', 'test_motor_model.cpp', 'test_upgrade.cpp', 'test_review.cpp', 'test_loop.cpp', 'test_loop_legacy.cpp', 'test_continuity.cpp', 'test_zip_loop.cpp', 'test_default_omni.cpp', 'test_default_bno.cpp', 'test_no_camera_autostart.cpp')
 $gpp = Get-Command g++ -ErrorAction SilentlyContinue
 $cl = Get-Command cl -ErrorAction SilentlyContinue
 
@@ -37,8 +37,9 @@ if ($gpp) {
     foreach ($source in $sources) {
         $name = [IO.Path]::GetFileNameWithoutExtension($source)
         $exe = Join-Path $build "$name.exe"
+        $featureFlags = if ($source -eq 'test_default_feature_profile.cpp') { @() } else { @('-DENABLE_BALL_SEARCH=1', '-DENABLE_ORBIT=1', '-DENABLE_ATTACK=1') }
         "=== BUILD $source ===" | Tee-Object -FilePath $results -Append
-        $output = & $gpp.Source -finput-charset=UTF-8 -std=c++17 -Wall -Wextra -I (Join-Path $root 'libraries/RobotDiagnostics/src') -I $common -I $build -I (Join-Path $root 'motor') -I (Join-Path $root 'main') -I (Join-Path $root 'ir') -I $PSScriptRoot -I (Join-Path $PSScriptRoot 'mock') (Join-Path $PSScriptRoot $source) -o $exe 2>&1
+        $output = & $gpp.Source -finput-charset=UTF-8 -std=c++17 -Wall -Wextra @featureFlags -I (Join-Path $root 'libraries/RobotDiagnostics/src') -I $common -I $build -I (Join-Path $root 'motor') -I (Join-Path $root 'main') -I (Join-Path $root 'ir') -I $PSScriptRoot -I (Join-Path $PSScriptRoot 'mock') (Join-Path $PSScriptRoot $source) -o $exe 2>&1
         $exitCode = $LASTEXITCODE
         $output | Tee-Object -FilePath $results -Append
         if ($exitCode -ne 0) { throw "Compile failed: $source" }
@@ -88,8 +89,9 @@ Push-Location $build
 try {
     foreach ($source in $sources) {
         $name = [IO.Path]::GetFileNameWithoutExtension($source)
+        $featureFlags = if ($source -eq 'test_default_feature_profile.cpp') { @() } else { @('/DENABLE_BALL_SEARCH=1', '/DENABLE_ORBIT=1', '/DENABLE_ATTACK=1') }
         "=== BUILD $source ===" | Tee-Object -FilePath $results -Append
-        $output = & $clPath /nologo /EHsc /utf-8 /std:c++17 /W4 "/I$(Join-Path $root 'libraries/RobotDiagnostics/src')" "/I$common" "/I$build" "/I$(Join-Path $root 'motor')" "/I$(Join-Path $root 'main')" "/I$(Join-Path $root 'ir')" "/I$PSScriptRoot" "/I$(Join-Path $PSScriptRoot 'mock')" (Join-Path $PSScriptRoot $source) "/Fe:$name.exe" 2>&1
+        $output = & $clPath /nologo /EHsc /utf-8 /std:c++17 /W4 @featureFlags "/I$(Join-Path $root 'libraries/RobotDiagnostics/src')" "/I$common" "/I$build" "/I$(Join-Path $root 'motor')" "/I$(Join-Path $root 'main')" "/I$(Join-Path $root 'ir')" "/I$PSScriptRoot" "/I$(Join-Path $PSScriptRoot 'mock')" (Join-Path $PSScriptRoot $source) "/Fe:$name.exe" 2>&1
         $exitCode = $LASTEXITCODE
         $output | Tee-Object -FilePath $results -Append
         if ($exitCode -ne 0) { throw "Compile failed: $source" }

@@ -16,7 +16,7 @@
 | 内容 | 結果 |
 |---|---|
 | Arduino CLI compile（MAIN RP2354B / IR RP2354A / LINE / MOTOR RP2354A） | VERIFIED: 4対象すべてコンパイル成功。アップロードなし。LINEは既存スクリプトがコンパイルするだけで、競技構成への接続・書き込みはしていない |
-| ホストC++ suite | VERIFIED:全19実行ファイル成功。ZIP PDは10,000比較一致、core 65ケース/5,165 checks、integration 14シナリオ/107 checks、loop/compatibility群失敗0 |
+| ホストC++ suite | VERIFIED:全21実行ファイル成功。ZIP PDは10,000比較一致、core 65ケース/5,165 checks、integration 14シナリオ/107 checks、loop/compatibility群失敗0 |
 | Python unit tests | VERIFIED: 109 tests成功（UART部分送信・期限切れ・失敗注入を追加） |
 | Python syntax (`compileall`) | VERIFIED |
 | 実機/USBログ/PWM/RS-485/OpenMV FPS | PENDING_HARDWARE: 今回は未実施 |
@@ -31,5 +31,5 @@ Arduinoコンパイルスクリプトは実行時のHEAD SHAを一時ヘッダ�
 
 - Phase 0: VERIFIED（ソース監査と復元SHA記録。実機状態ではない）
 - Phase 1: PARTIAL（ソフトウェアビルド・ホスト検証済み。診断項目の全網羅と実機確認は未完）
-- Phase 2: PARTIAL（依存関係付きビルド設定とホスト側モードゲートを追加。USBからのモード切替は未接続）。Phase 3以降: NOT_EXECUTED。
+- Phase 2: PARTIAL（依存関係付きビルド設定とホスト側モードゲートを追加。USBからのモード切替は未接続）。Phase 3: PARTIAL（基準PDを保持し、既定OFFのフィルター候補を分離。機体上の比較は未実施。拡張Brainでは検索・回り込み・攻撃を既定OFFに隔離）。Phase 4〜10: 現行実装監査と既存ホスト検証の範囲をFINAL_VERIFICATIONに記載。新機能の全要件完了とは扱わない。
 - 大会投入: **NO-GO**。現在標準の拡張経路はリポジトリ上でも実機未検証。診断変更も未実機。

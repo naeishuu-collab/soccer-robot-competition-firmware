@@ -848,7 +848,11 @@ void chaseLoop() {
   static brain::CameraParser parser;
   static brain::CameraData cam;
   static IrReplyReceiver receiver;
+#if ENABLE_EXPERIMENTAL_PD_FILTER
+  static FilteredZipChasePD pd;
+#else
   static ZipChasePD pd;
+#endif
   static uint32_t pollMs = 0, irMs = 0, txMs = 0;
   static bool waiting = false, haveIr = false, newReply = false;
   static uint16_t angle = 0, strength = 0;
@@ -910,8 +914,9 @@ void chaseLoop() {
     txMs = now;
   }
   if (usbDiagnosticRequested && Serial && Serial.availableForWrite() >= 200) {
-    Serial.printf("[PD] valid=%u angle=%u strength=%u P=%.1f D=%.1f turn=%d age_ms=%lu\n",
-                  unsigned(freshIr && strength), unsigned(angle), unsigned(strength), pd.proportional(),
+    Serial.printf("[PD] valid=%u controller=%s angle=%u strength=%u P=%.1f D=%.1f turn=%d age_ms=%lu\n",
+                  unsigned(freshIr && strength), ENABLE_EXPERIMENTAL_PD_FILTER ? "FILTERED_CANDIDATE" : "ZIP_REFERENCE",
+                  unsigned(angle), unsigned(strength), pd.proportional(),
                   pd.derivative(), pd.turn(), (unsigned long)(pdStampMs ? now - pdStampMs : 0xffffffffUL));
     Serial.printf("[PWM_CALC] %d,%d,%d,%d [PWM_SAFE] %d,%d,%d,%d [PWM_TX] %d,%d,%d,%d\n",
                   pdCalculated[0], pdCalculated[1], pdCalculated[2], pdCalculated[3],

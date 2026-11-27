@@ -41,19 +41,22 @@
 #ifndef ENABLE_DIAGNOSTICS
 #define ENABLE_DIAGNOSTICS 1
 #endif
+#ifndef ENABLE_EXPERIMENTAL_PD_FILTER
+#define ENABLE_EXPERIMENTAL_PD_FILTER 0
+#endif
 
 #define ROBOT_CONFIG_ID "RCJ-IR-SW-2026-11-27-A"
 
 namespace robotcfg {
 
 struct FeatureSet {
-  bool ir, motor, pd, camera, lineEscape, obstacleAvoid, ballSearch, goal, orbit, attack, diagnostics;
+  bool ir, motor, pd, camera, lineEscape, obstacleAvoid, ballSearch, goal, orbit, attack, diagnostics, filteredPd;
 
   constexpr bool valid() const {
-    if (!ir || !motor || !pd) return false;
-    if (lineEscape && !camera) return false;
+    if (!ir || !motor || !pd || !camera || !lineEscape) return false;
     if (goal && !camera) return false;
     if ((orbit || attack) && (!camera || !goal || !pd)) return false;
+    // Camera freshness and line escape are mandatory safety gates for competition motion.
     // This firmware has no independently validated obstacle sensor input.
     if (obstacleAvoid) return false;
     return true;
@@ -63,7 +66,8 @@ struct FeatureSet {
 constexpr FeatureSet kBuildFeatures = {
   ENABLE_IR != 0, ENABLE_MOTOR != 0, ENABLE_PD_CHASE != 0, ENABLE_CAMERA != 0,
   ENABLE_LINE_ESCAPE != 0, ENABLE_OBSTACLE_AVOID != 0, ENABLE_BALL_SEARCH != 0,
-  ENABLE_GOAL_DETECTION != 0, ENABLE_ORBIT != 0, ENABLE_ATTACK != 0, ENABLE_DIAGNOSTICS != 0
+  ENABLE_GOAL_DETECTION != 0, ENABLE_ORBIT != 0, ENABLE_ATTACK != 0, ENABLE_DIAGNOSTICS != 0,
+  ENABLE_EXPERIMENTAL_PD_FILTER != 0
 };
 
 enum class TestMode : uint8_t {

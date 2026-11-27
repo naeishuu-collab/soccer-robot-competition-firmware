@@ -1,5 +1,6 @@
 #include "../main/zip_chase_pd.h"
 #include <assert.h>
+#include <stdlib.h>
 #include <stdint.h>
 #include <stdio.h>
 
@@ -47,5 +48,19 @@ int main() {
     for (int j = 0; j < 4; ++j) assert(actual[j] == expected[j]);
   }
   puts("ZIP PD and four signed PWM outputs: 10000 comparisons passed");
+
+  FilteredZipChasePD improved;
+  int16_t candidate[4] = {};
+  improved.update(359, 200, 1000, candidate);
+  improved.update(1, 200, 1020, candidate);
+  assert(improved.turn() >= -15 && improved.turn() <= 15); // 359 -> 1 is a 2-degree change.
+  assert(candidate[0] == candidate[1] && candidate[2] == candidate[3]);
+  assert(abs(candidate[0]) <= 210 && abs(candidate[2]) <= 210);
+  improved.update(40, 200, 5000, candidate); // a long gap contributes no derivative kick
+  assert(improved.derivative() == 0.0f);
+  improved.update(50, 200, 5020, candidate);
+  assert(improved.update(50, 0, 5040, candidate) == false);
+  for (int i = 0; i < 4; ++i) assert(candidate[i] == 0);
+  puts("filtered PD candidate: wrap, irregular dt, and loss reset passed");
 }
 
