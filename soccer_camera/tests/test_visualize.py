@@ -131,6 +131,15 @@ class OverlayTests(unittest.TestCase):
         lines = [c for name, _, c in stale.calls if name == "draw_line"]
         self.assertNotIn(viz.ORANGE, lines)
 
+    def test_forced_floor_is_labelled(self):
+        for forced, label in ((True, "FLOOR OK (FORCED)"), (False, "FLOOR OK")):
+            image = Image()
+            overlay = viz.Overlay(nav.cfg, mirror())
+            p = self.pipeline(image)
+            p.forced = forced
+            overlay.draw(image, 10, p, [], diff, None)
+            self.assertIn(label, self.texts(image))
+
     def test_rejection_reason_is_shown(self):
         image = Image(yellow=[Blob(156, 25, 8, 40)])
         self.draw(image, debug_goals=True)

@@ -404,6 +404,7 @@ class Pipeline:
         self.ran_ms = {"YELLOW": None, "BLUE": None}
         self.keep_reports = False  # the overlay shows what this search saw instead of searching again
         self.reports = {"YELLOW": [], "BLUE": []}
+        self.forced = bool(getattr(cfg, "FORCE_FLOOR_OK", False))  # shown on screen and in the log
         self.heading = (None, 0)
         self.last = None
 
@@ -507,5 +508,5 @@ class Pipeline:
             return "V3 no frame yet"
         ready, floor_ok, mask, escape, nearest, yellow, blue = self.last
         return "V3 {} mask={:04x} esc={} line={} Y={}/{} B={}/{} head={}/{}".format(
-            "OK" if ready else "SLOW" if floor_ok else "NOFLOOR", mask, escape, nearest,
+            ("OK (FORCED)" if self.forced else "OK") if ready else "SLOW" if floor_ok else "NOFLOOR", mask, escape, nearest,
             yellow[0], yellow[2], blue[0], blue[2], *self.heading)

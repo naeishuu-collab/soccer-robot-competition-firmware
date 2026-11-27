@@ -244,6 +244,8 @@ class MainLoopTests(unittest.TestCase):
                 self.assertIn(stage, output)
             self.assertEqual("show=" in output, display or debug)
             self.assertIn("near-samples green=", output)
+            self.assertIn("actual=", output)
+            self.assertIn("forced=", output)
             self.assertTrue(sent and all(len(p) == v.PACKET_SIZE for p in sent))
 
     def test_fast_and_reference_paths_send_identical_packets(self):
@@ -252,6 +254,80 @@ class MainLoopTests(unittest.TestCase):
         self.assertNotIn("fast scan ON", output)
         # The fast path uses three extra frames for its self-check; the packets themselves match.
         self.assertEqual(fast, slow[:len(fast)])
+
+
+class ForcedFloorTests(unittest.TestCase):
+    """FORCE_FLOOR_OK lifts only the overall floor count; unknown directions stay closed."""
+
+    EVERY = set(range(0, 360, 15))
+    FEW = {150, 165, 180, 195, 210}  # five rays: far below the traditional minimum of 12
+
+    def packet(self, forced, visible, boundaries=(), setup=None, frame_ms=30):
+        class Empty:
+            def find_blobs(self, *args, **kwargs):
+                return []
+
+        with patch.multiple(nav.cfg, IMAGE_SIZE=(320, 240), MIRROR_CENTER=(160, 120), MIRROR_RING=(20, 100),
+                            FORCE_FLOOR_OK=forced, create=True):
+            pipe = v.Pipeline(nav.cfg, nav.Mirror(320, 240), 25, 100)
+            observed = v.observed_rays(visible, list(boundaries))
+            ready = setup is None and (observed >= nav.MIN_FLOOR_RAYS or nav.floor_forced())
+            packet = pipe.step(Empty(), 0, ready, frame_ms, visible, list(boundaries))
+            return packet, packet[6] | packet[7] << 8, pipe
+
+    def test_false_keeps_the_traditional_stop(self):
+        packet, mask, pipe = self.packet(False, self.FEW)
+        self.assertFalse(packet[5] & v.FLAG_READY)
+        self.assertEqual(mask, 0)
+        self.assertIn("NOFLOOR", pipe.status())
+
+    def test_forced_opens_only_the_directions_with_seen_floor(self):
+        packet, mask, pipe = self.packet(True, self.FEW)
+        self.assertTrue(packet[5] & v.FLAG_READY)
+        self.assertEqual(mask, 1 << 8)  # only 180 degrees has its whole +-30 window seen
+        self.assertIn("OK (FORCED)", pipe.status())
+
+    def test_forced_with_no_seen_floor_still_allows_nothing(self):
+        packet, mask, _ = self.packet(True, set())
+        self.assertTrue(packet[5] & v.FLAG_READY)
+        self.assertEqual(mask, 0)  # MAIN stops with "no safe direction"
+
+    def test_forced_keeps_setup_and_slow_stops(self):
+        packet, mask, _ = self.packet(True, self.EVERY, setup="CHECK GROUND_POINTS")
+        self.assertFalse(packet[5] & v.FLAG_READY)
+        self.assertEqual(mask, 0)
+        packet, mask, _ = self.packet(True, self.EVERY, frame_ms=101)
+        self.assertFalse(packet[5] & v.FLAG_READY)
+        self.assertTrue(packet[5] & v.FLAG_SLOW)
+        self.assertEqual(mask, 0)
+
+    def test_forced_keeps_white_line_escape_and_closed_headings(self):
+        wall = [(b, "WHITE", 15, 0, 0) for b in (345, 0, 15)]
+        packet, mask, _ = self.packet(True, self.EVERY, wall)
+        self.assertTrue(packet[5] & v.FLAG_ESCAPE)
+        self.assertEqual(packet[8] | packet[9] << 8, 180)
+        self.assertFalse(mask & 1)
+
+    def test_traditional_protocol_follows_the_same_switch(self):
+        with patch.object(nav.cfg, "FORCE_FLOOR_OK", True, create=True):
+            self.assertEqual(nav.decide_navigation(True, self.FEW, [])[3], nav.MODE_TRACK_IR)
+            self.assertEqual(nav.decide_navigation(True, set(), []), (0, 0, 0, nav.MODE_WAIT))
+            self.assertEqual(nav.decide_navigation(False, self.EVERY, []), (0, 0, 0, nav.MODE_WAIT))
+        with patch.object(nav.cfg, "FORCE_FLOOR_OK", False, create=True):
+            self.assertEqual(nav.decide_navigation(True, self.FEW, []), (0, 0, 0, nav.MODE_WAIT))
+
+    def test_missing_setting_means_traditional(self):
+        saved = nav.cfg.__dict__.pop("FORCE_FLOOR_OK", None)
+        try:
+            self.assertFalse(nav.floor_forced())
+        finally:
+            if saved is not None:
+                nav.cfg.FORCE_FLOOR_OK = saved
+
+    def test_log_keeps_the_real_result(self):
+        with patch.object(nav.cfg, "FORCE_FLOOR_OK", True, create=True):
+            line = nav.floor_report(None, nav.Mirror(320, 240), lambda *a: None, self.FEW, [], None, 5, 0x100)
+        self.assertIn("actual=NOFLOOR observed=5/24 forced=1 mask=0100", line)
 
 
 class TimingAndReleaseTests(unittest.TestCase):

@@ -187,7 +187,7 @@ class Overlay:
         ready, floor_ok, mask, _, _, yellow, blue = vision.last
         self.draw_map(img, data, ball, mask, boundaries)
         self.draw_goals(img, yellow, blue)
-        self.draw_panel(img, data, ball, ready, floor_ok)
+        self.draw_panel(img, data, ball, ready, floor_ok, vision.forced)
 
     def draw_map(self, img, data, ball, mask, boundaries):
         mirror = self.mirror
@@ -225,10 +225,10 @@ class Overlay:
             status = self.goal_status(name)
             self.text(img, RIGHT_X, row + 24, status, GREEN if status == "SEEN" else BAD)
 
-    def draw_panel(self, img, data, ball, ready, floor_ok):
+    def draw_panel(self, img, data, ball, ready, floor_ok, forced):
         # Left column: the numbers that matter while testing.
         self.text(img, LEFT_X, 0, "FPS {:.1f}".format(self.fps))
-        floor = "FLOOR OK" if ready else "SLOW" if floor_ok else "NO FLOOR"
+        floor = ("FLOOR OK (FORCED)" if forced else "FLOOR OK") if ready else "SLOW" if floor_ok else "NO FLOOR"
         self.text(img, LEFT_X, 12, floor, GREEN if ready else BAD)
         self.text(img, LEFT_X, 30, "BALL(IR)", ORANGE)
         self.text(img, LEFT_X, 42, "---" if ball is None else "{} deg".format(ball), ORANGE)

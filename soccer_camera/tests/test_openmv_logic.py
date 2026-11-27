@@ -18,6 +18,12 @@ VISIBLE = set(range(0, 360, 15))
 
 
 class OpenMvNavigationTests(unittest.TestCase):
+    def setUp(self):
+        # These tests describe the traditional floor condition; the forced one is in test_fast_scan.py.
+        forced = patch.object(nav.cfg, "FORCE_FLOOR_OK", False, create=True)
+        forced.start()
+        self.addCleanup(forced.stop)
+
     def test_startup_detects_matching_circles_and_rechecks_ground_calibration(self):
         class Circle:
             def __init__(self, x, y, r):

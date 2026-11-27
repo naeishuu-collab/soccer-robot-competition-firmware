@@ -42,6 +42,10 @@ class ChaseConfiguration(unittest.TestCase):
         self.assertRegex(config, r"(?m)^VISUALIZE = False$")
         self.assertRegex(config, r"(?m)^GOAL_DEBUG = False$")
 
+    def test_floor_override_setting_exists(self):
+        config = (ROOT / "openmv/camera_calibration.py").read_text(encoding="utf-8")
+        self.assertRegex(config, r"(?m)^FORCE_FLOOR_OK = (True|False)")
+
     def test_default_build_selection(self):
         # Chosen by the owner on 2026-11-27: MAIN, MOTOR and camera all use the extended path.
         main = (ROOT / "main/main.ino").read_text(encoding="utf-8")

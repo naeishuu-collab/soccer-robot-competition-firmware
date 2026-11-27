@@ -367,14 +367,25 @@ def prepare_fast_scan(mirror, frames=3):
         return None
 
 
-def floor_report(img, mirror, classify, visible, boundaries, setup_reason):
+def floor_forced():
+    """FORCE_FLOOR_OK: 「緑床か白線が一定数以上見える」という全体条件だけを成立扱いにする。
+
+    方向ごとの確認は変わらず、床が見えない方向は閉じたまま。設定の異常と処理遅延の停止も変わらない。
+    """
+    return bool(getattr(cfg, "FORCE_FLOOR_OK", False))
+
+
+def floor_report(img, mirror, classify, visible, boundaries, setup_reason, observed=0, mask=0):
     """NOFLOORの原因調べ: 各方位の最初の2点（床が見えるかを決める点）の色を数える。"""
     counts = {"GREEN": 0, "WHITE": 0, "BLACK": 0, None: 0}
     for _, samples in mirror.rays:
         for x, y, _ in samples[:2]:
             counts[classify(img, x, y)] += 1
-    return "floor {} visible={} lines={} near-samples green={} white={} black={} other={}".format(
-        setup_reason or "setup-ok", len(visible), len(boundaries), counts["GREEN"], counts["WHITE"],
+    # The real result is logged even when FORCE_FLOOR_OK overrides it.
+    return ("floor {} actual={} observed={}/{} forced={} mask={:04x} visible={} lines={} "
+            "near-samples green={} white={} black={} other={}").format(
+        setup_reason or "setup-ok", "OK" if observed >= MIN_FLOOR_RAYS else "NOFLOOR", observed, RAY_COUNT,
+        int(floor_forced()), mask, len(visible), len(boundaries), counts["GREEN"], counts["WHITE"],
         counts["BLACK"], counts[None])
 
 
@@ -441,7 +452,7 @@ def decide_navigation(ready, visible, boundaries):
                 best_score = score
         return stop if best is None else (best[0], best[1], retreat_mask, MODE_AVOID)
 
-    if len(visible) < MIN_FLOOR_RAYS or not mask:
+    if (len(visible) < MIN_FLOOR_RAYS and not floor_forced()) or not mask:
         return stop
     return 0, 0, mask, MODE_TRACK_IR
 
@@ -547,8 +558,8 @@ def main_loop(send_uart=True, display=False):
             scanned = time.ticks_us()
             stats.add("scan", time.ticks_diff(scanned, shot))
             # Frame age is judged inside the pipeline, which also counts the detection time.
-            ready = (setup_reason is None
-                     and competition_vision.observed_rays(visible, boundaries) >= MIN_FLOOR_RAYS)
+            observed = competition_vision.observed_rays(visible, boundaries)
+            ready = setup_reason is None and (observed >= MIN_FLOOR_RAYS or floor_forced())
             packet = vision.step(img, now, ready, frame_ms, visible, boundaries, time.ticks_ms, thin,
                                  lambda x, y: colors(img, x, y))
             stepped = time.ticks_us()
@@ -576,7 +587,8 @@ def main_loop(send_uart=True, display=False):
                 print("ms avg/max/p95", stats.report())
                 print(vision.timing, vision.status())
                 if mirror.rays:
-                    print(floor_report(img, mirror, colors, visible, boundaries, setup_reason))
+                    print(floor_report(img, mirror, colors, visible, boundaries, setup_reason,
+                                       observed, vision.last[2]))
         if overlay is not None:
             show_start = time.ticks_us()
             # After the packet has been sent: display work never delays this frame's line data.
