@@ -23,9 +23,9 @@ TARGET_GOAL = "YELLOW"  # Set to "YELLOW" or "BLUE" before each half.
 PROTOCOL = 2
 # Overlay and text in the OpenMV IDE (needs visualize.py). Set True on the bench; keep False for matches
 # because the extra search and drawing lower the frame rate.
-VISUALIZE = False
+VISUALIZE = True
 # Every goal colour candidate with its numbers and rejection reason (drawn and printed). Slow: bench only.
-GOAL_DEBUG = False
+GOAL_DEBUG = True
 LINE_BLOCK_CM = 35  # Protocol 2: headings toward a line closer than this are closed early. Unverified.
 # (radius_px, distance_cm) table measured for the goals. Empty = distance unknown.
 # Never copy GROUND_POINTS here without measuring. The camera does not detect the ball at all.

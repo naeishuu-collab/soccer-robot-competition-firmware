@@ -6,9 +6,10 @@
 #include <string.h>
 #include "motor_logic.h"
 
-// 0 = field-tested legacy mixer (default). 1 = wheel model with start boost (verify on hardware first).
+// 0 = legacy mixer. 1 = wheel model with start ramp and boost (default since 2026-11-27 to match MAIN;
+// not yet verified on hardware).
 #ifndef ROBOT_UPGRADE
-#define ROBOT_UPGRADE 0
+#define ROBOT_UPGRADE 1
 #endif
 
 // ============================================================

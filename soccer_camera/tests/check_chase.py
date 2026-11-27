@@ -43,12 +43,12 @@ class ChaseConfiguration(unittest.TestCase):
         self.assertRegex(config, r"(?m)^GOAL_DEBUG = False$")
 
     def test_default_build_selection(self):
-        # Chosen by the owner on 2026-11-27: MAIN and camera use the extended path, MOTOR stays legacy.
+        # Chosen by the owner on 2026-11-27: MAIN, MOTOR and camera all use the extended path.
         main = (ROOT / "main/main.ino").read_text(encoding="utf-8")
         motor = (ROOT / "motor/motor.ino").read_text(encoding="utf-8")
         config = (ROOT / "openmv/camera_calibration.py").read_text(encoding="utf-8")
         self.assertRegex(main, r"#define ROBOT_UPGRADE 1")
-        self.assertRegex(motor, r"#define ROBOT_UPGRADE 0")
+        self.assertRegex(motor, r"#define ROBOT_UPGRADE 1")
         self.assertRegex(config, r"(?m)^PROTOCOL = 2$")  # must match MAIN
 
 

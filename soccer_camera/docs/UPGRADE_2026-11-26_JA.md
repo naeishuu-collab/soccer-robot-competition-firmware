@@ -23,9 +23,9 @@ TB67H450、PWM 20kHz・8bit(0〜255)、PWM160で前・右・後・左に移動�
 
 **未確認**：斜め・中間角度、旋回方向、始動・持続の最小PWM、ブレーキの電流・発熱・停止距離、このファームウェアでの4方向。
 
-> **2026-11-27 初期設定の変更（所有者の指定）**：`main/main.ino` は `ROBOT_UPGRADE 1`、`camera_calibration.py` は `PROTOCOL = 2` になりました。`motor/motor.ino` は `ROBOT_UPGRADE 0` のままです。以下の本文で「初期状態はOFF」「全OFF」とある箇所は、MAINを0、カメラを1に戻して行ってください。MAINは `BNO_ENABLED = false` の間、拡張経路でもBNOを初期化・読み取りしません。
+> **2026-11-27 初期設定の変更（所有者の指定）**：`main/main.ino` と `motor/motor.ino` は `ROBOT_UPGRADE 1`、`camera_calibration.py` は `PROTOCOL = 2` です。以下の本文で「初期状態はOFF」「全OFF」とある箇所は、MAINとMOTORを0、カメラを1に戻して行ってください。MAINは `BNO_ENABLED = false` の間、拡張経路でもBNOを初期化・読み取りしません。
 >
-> **注意**：MAIN 1 と MOTOR 0 の組み合わせでは、旧ミキサーが旋回補正を小さなPWMのまま車輪に加えることがあり、回らない車輪が出る恐れがあります。MOTORを1にする（実測後）か、MAINを0に戻すまで床上で走らせないでください。
+> **注意**：3つとも新しい経路で、どれも実機未確認です。MOTORの新モデルは、実機で確認した160より高い始動補助180を一時的に出し、`kWheels` の値は仮値です。MAINとMOTORは必ず両方を書き込み、車輪を浮かせた確認（15章）が済むまで床で走らせないでください。
 
 認識結果の画面表示、MAIN→カメラの通信、ゴール診断、PCビューア、`FRONT_DEG`（86に変更・未検証）は [VISUALIZATION_JA.md](VISUALIZATION_JA.md) を参照してください。
 
@@ -47,7 +47,7 @@ git checkout adaa755 -- soccer_camera
 
 | 切替 | 場所 | 初期値 |
 |---|---|---|
-| 車輪モデル・始動補助 | `motor/motor.ino` の `ROBOT_UPGRADE` | 0 |
+| 車輪モデル・始動補助 | `motor/motor.ino` の `ROBOT_UPGRADE` | 1（2026-11-27〜） |
 | 通信v2・姿勢モード・センサー融合・戦術 | `main/main.ino` の `ROBOT_UPGRADE` | 1（2026-11-27〜） |
 | 通信v2・認識パイプライン | `openmv/camera_calibration.py` の `PROTOCOL` | 2（2026-11-27〜） |
 
