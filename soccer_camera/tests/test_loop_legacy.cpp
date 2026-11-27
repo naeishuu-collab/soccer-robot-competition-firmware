@@ -1,3 +1,4 @@
+#define ROBOT_ZIP_TRACK 0
 // The default build (ROBOT_UPGRADE=0): real MAIN and MOTOR loops wired together on the host.
 #define ROBOT_UPGRADE 0
 #define ROBOT_ZIP_COMPAT 0

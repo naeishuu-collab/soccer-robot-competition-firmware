@@ -168,10 +168,129 @@ class FastScanTests(unittest.TestCase):
             fast_scan.FastScanner([(0, [(320, 0, 20)])], 320, 240, self.table, 25, nav.line_is_thin)
 
 
+class NonblockingUARTTests(unittest.TestCase):
+    def test_telemetry_flood_has_a_fixed_per_frame_budget(self):
+        class UART:
+            def any(self): return 4096
+            def read(self, n):
+                self.count = n
+                return b"x" * n
+        class Link:
+            def feed(self, data, now): self.data = data
+        uart, link = UART(), Link()
+        nav.read_telemetry(uart, link, 0)
+        self.assertEqual(uart.count, 32)
+        self.assertEqual(len(link.data), 32)
+
+    def test_partial_writes_are_bounded_and_do_not_accumulate(self):
+        class UART:
+            def __init__(self):
+                self.written = bytearray()
+                self.calls = 0
+            def write(self, data):
+                self.calls += 1
+                self.written.extend(data[:2])
+                return min(2, len(data))
+        uart = UART()
+        tx = nav.LatestPacketTx(uart, lambda a, b: a-b, max_age_ms=10)
+        tx.send(b"abcdef", 0)
+        tx.send(b"latest", 1)
+        tx.send(b"latest", 2)
+        self.assertEqual(uart.written, b"abcdef")
+        self.assertEqual(uart.calls, 3)
+        tx.send(b"old-frame", 3)
+        tx.send(b"new", 20)
+        tx.send(b"new", 21)
+        self.assertTrue(uart.written.endswith(b"olnew"))
+        self.assertIsNone(tx.packet)
+
+
+class CompetitionScanTests(unittest.TestCase):
+    def test_non_green_scene_and_bad_exposure(self):
+        mirror = nav.Mirror(320, 240)
+        frame = Frame()
+        table = bytearray([fast_scan.OTHER]) * 65536
+        table[0xffff] = fast_scan.WHITE
+        scanner = fast_scan.CompetitionScanner(mirror.rays, 320, 240, table, 25, nav.line_is_thin)
+        for _, samples in mirror.rays:
+            for i, (x, y, _) in enumerate(samples):
+                frame.pixels[y * frame.w + x] = 0x4208 if i % 2 else 0x528a
+        visible, boundaries = scanner.scan(frame)
+        self.assertEqual(len(visible), 24)
+        self.assertFalse(boundaries)
+        mask, _, _, _ = v.LineGuard(25, 35).update(True, visible, boundaries, None, 0)
+        self.assertEqual(mask, 0xffff)
+        for raw in (0, 0xffff):
+            for i in range(len(frame.pixels)): frame.pixels[i] = raw
+            visible, boundaries = scanner.scan(frame)
+            self.assertFalse(visible)
+            mask, _, _, _ = v.LineGuard(25, 35).update(True, visible, boundaries, None, 0)
+            self.assertEqual(mask, 0)
+
+    def test_white_line_detected_without_green(self):
+        mirror = nav.Mirror(320, 240)
+        frame = Frame()
+        table = bytearray([fast_scan.OTHER]) * 65536
+        table[0xffff] = fast_scan.WHITE
+        scanner = fast_scan.CompetitionScanner(mirror.rays, 320, 240, table, 25, nav.line_is_thin)
+        for _, samples in mirror.rays:
+            for i, (x, y, _) in enumerate(samples):
+                frame.pixels[y * frame.w + x] = 0x4208 if i % 2 else 0x528a
+        for x, y, _ in mirror.rays[0][1][3:6]:
+            frame.pixels[y * frame.w + x] = 0xffff
+        visible, boundaries = scanner.scan(frame)
+        self.assertTrue(any(b[0] == 0 and b[1] == "WHITE" for b in boundaries))
+        mask, _, _, _ = v.LineGuard(25, 35).update(True, visible, boundaries, None, 0)
+        self.assertFalse(mask & 1)
+
+
+class HazardScanTests(unittest.TestCase):
+    def test_native_and_reference_detect_white_and_black_without_green(self):
+        mirror = nav.Mirror(320, 240)
+        def hazard(rgb):
+            color = classify(rgb)
+            return color
+        table = fast_scan.build_table(Frame(), hazard)
+        scanner = fast_scan.HazardScanner(mirror.rays, 320, 240, table, 25, nav.line_is_thin)
+        frame = Frame()
+        rng = random.Random(123)
+        cache = nav.HazardColorCache()
+        with patch.object(nav, "classify_hazard", hazard):
+            for _ in range(80):
+                paint(frame, mirror.rays, rng)
+                self.assertEqual(scanner.scan(frame), nav.scan_hazards(frame, mirror, cache))
+
+    def test_unclassified_or_saturated_samples_never_open_every_direction(self):
+        mirror = nav.Mirror(320, 240)
+        frame = Frame()
+        table = fast_scan.build_table(Frame(), classify)
+        scanner = fast_scan.HazardScanner(mirror.rays, 320, 240, table, 25, nav.line_is_thin)
+        for color in (None, "WHITE", "BLACK"):
+            raw = SHADE[color][0]
+            for i in range(len(frame.pixels)):
+                frame.pixels[i] = raw
+            visible, boundaries = scanner.scan(frame)
+            guard = v.LineGuard(25, 35)
+            mask, _, _, _ = guard.update(True, visible, boundaries, None, 0)
+            self.assertEqual(mask, 0, color)
+
+    def test_visible_rays_open_without_green_but_lines_and_walls_block(self):
+        guard = v.LineGuard(25, 35)
+        visible = set(range(0, 360, 15))
+        mask, escape, _, _ = guard.update(True, visible, [], None, 1)
+        self.assertEqual(mask, 0xffff)
+        self.assertIsNone(escape)
+        for color in ("WHITE", "BLACK"):
+            guard = v.LineGuard(25, 35)
+            mask, escape, _, _ = guard.update(True, visible, [(0, color, 20, 1, 1)], None, 1)
+            self.assertFalse(mask & 1)
+            self.assertIsNotNone(escape)
+
+
 class MainLoopTests(unittest.TestCase):
     """The protocol 2 camera loop end to end, with and without the fast scan and the overlay."""
 
-    def run_loop(self, display, fast, debug=False, frames=60):
+    def run_loop(self, display, fast, debug=False, frames=60, stats=False):
         mirror = nav.Mirror(320, 240)
         painted = Frame()
         paint(painted, mirror.rays, random.Random(7))
@@ -229,7 +348,7 @@ class MainLoopTests(unittest.TestCase):
 
         with patch.multiple(nav, sensor=Sensor, time=Time, pyb=Board, image=Lab, classify_rgb=classify,
                             init_camera=lambda: None), \
-                patch.multiple(nav.cfg, PROTOCOL=2, GOAL_DEBUG=debug, FAST_SCAN=fast, create=True), \
+                patch.multiple(nav.cfg, PROTOCOL=2, GOAL_DEBUG=debug, FAST_SCAN=fast, DEBUG_STATS=stats, FORCE_FLOOR_OK=False, create=True), \
                 patch("builtins.print") as log:
             with self.assertRaises(StopIteration):
                 nav.main_loop(display=display)
@@ -237,7 +356,7 @@ class MainLoopTests(unittest.TestCase):
 
     def test_every_configuration_runs_and_reports_timing(self):
         for display, debug in ((False, False), (True, False), (True, True), (False, True)):
-            sent, output = self.run_loop(display, True, debug)
+            sent, output = self.run_loop(display, True, debug, stats=True)
             self.assertIn("fast scan ON", output)
             self.assertIn("ms avg/max/p95", output)
             for stage in ("capture=", "scan=", "vision=", "uart=", "total="):
@@ -247,6 +366,12 @@ class MainLoopTests(unittest.TestCase):
             self.assertIn("actual=", output)
             self.assertIn("forced=", output)
             self.assertTrue(sent and all(len(p) == v.PACKET_SIZE for p in sent))
+
+    def test_competition_mode_suppresses_expensive_reports(self):
+        sent, output = self.run_loop(False, True)
+        self.assertTrue(sent)
+        self.assertNotIn("ms avg/max/p95", output)
+        self.assertNotIn("near-samples green=", output)
 
     def test_report_names_the_running_configuration_and_stages(self):
         for fast, scan in ((True, "fast"), (False, "reference")):

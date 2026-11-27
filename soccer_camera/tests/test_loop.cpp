@@ -1,3 +1,4 @@
+#define ROBOT_ZIP_TRACK 0
 // Runs the real MAIN, MOTOR and IR sketches (setup/loop, ROBOT_UPGRADE=1) wired together on the host.
 #define ROBOT_UPGRADE 1
 #define ROBOT_ZIP_COMPAT 0

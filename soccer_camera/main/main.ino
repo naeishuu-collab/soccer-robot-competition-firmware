@@ -7,6 +7,15 @@
 #include <Wire.h>
 #include <SerialPIO.h>
 #include "main_logic.h"
+#include "zip_chase_pd.h"
+
+#ifndef ROBOT_ZIP_TRACK
+#define ROBOT_ZIP_TRACK 0
+#endif
+#ifndef ROBOT_TEST_MAX_PWM
+#define ROBOT_TEST_MAX_PWM 210
+#endif
+static_assert(ROBOT_TEST_MAX_PWM >= 140 && ROBOT_TEST_MAX_PWM <= 210, "Invalid test PWM limit");
 
 // 0 = field-tested chase (default). 1 = camera protocol 2, filtered IR, heading modes and tactics.
 // Build MAIN, MOTOR and IR together and set PROTOCOL = 2 on the camera. Not verified on hardware.
@@ -711,6 +720,85 @@ void zipLoop() {
   }
 }
 
+// Direct PWM protocol: type 4, four signed duties encoded as 7-bit pairs with offset 210.
+// Old MOTOR ignores type 4; the matching MOTOR firmware is required.
+void sendPwm(uint8_t sequence, const int16_t pwm[4]) {
+  uint8_t frame[FRAME_SIZE] = {};
+  frame[0] = FRAME_START; frame[1] = 4; frame[2] = sequence & 0x7f;
+  for (int i = 0; i < 4; ++i) encodeValue(&frame[3 + 2 * i], uint16_t(pwm[i] + 210));
+  frame[11] = calculateCRC(frame);
+  sendRs485(frame, sizeof(frame));
+}
+
+// The ZIP mapping drives channels 0/1 together and 2/3 together. With no
+// footprint calibration, a turn needs all sectors; straight travel needs its sector.
+bool zipPathClear(uint16_t mask, const int16_t pwm[4]) {
+  if (pwm[0] != pwm[1] || pwm[2] != pwm[3]) return false;
+  if (pwm[0] == pwm[2]) {
+    if (pwm[0] > 0) return brain::sectorOpen(mask, 0);
+    if (pwm[0] < 0) return brain::sectorOpen(mask, 8);
+    return true;
+  }
+  return mask == 0xffff;
+}
+
+void chaseLoop() {
+  static brain::CameraParser parser;
+  static brain::CameraData cam;
+  static IrReplyReceiver receiver;
+  static ZipChasePD pd;
+  static uint32_t pollMs = 0, irMs = 0, txMs = 0;
+  static bool waiting = false, haveIr = false, newReply = false;
+  static uint16_t angle = 0, strength = 0;
+  static int16_t pwm[4] = {};
+  static uint8_t sequence = 0;
+  telemetry.pump(cameraSerial);
+  while (cameraSerial.available()) parser.push(uint8_t(cameraSerial.read()), millis(), cam);
+  uint32_t now = millis();
+  while (Serial1.available()) {
+    const uint8_t byte = uint8_t(Serial1.read());
+    if (waiting && uint32_t(now - pollMs) < UPGRADE_IR_WAIT_MS && receiver.push(byte, angle, strength)) {
+      waiting = false; haveIr = true; irMs = now; newReply = true;
+      delayMicroseconds(50);
+    }
+  }
+  if (waiting && uint32_t(now - pollMs) >= UPGRADE_IR_WAIT_MS) waiting = false;
+  if (waiting) return;
+  const bool freshCam = cam.received && uint32_t(now - cam.receivedMs) <= 200 && cam.ready && !cam.slow;
+  const bool freshIr = haveIr && uint32_t(now - irMs) <= IR_REPLY_TIMEOUT_MS;
+  const bool allowed = !holdStop && freshCam && freshIr && strength && !cam.escaping;
+  if (!allowed) {
+    pd.reset();
+    for (int i = 0; i < 4; ++i) pwm[i] = 0;
+    newReply = false;
+  } else if (newReply) {
+    pd.update(angle, strength, now, pwm);
+    newReply = false;
+  }
+  if (allowed && !zipPathClear(cam.mask, pwm)) {
+    pd.reset();
+    for (int i = 0; i < 4; ++i) pwm[i] = 0;
+  }
+  if (uint32_t(now - txMs) >= 20) {
+    int16_t output[4] = {pwm[0], pwm[1], pwm[2], pwm[3]};
+    if (!holdStop && freshCam && freshIr && cam.escaping &&
+        (cam.escape == 0 || cam.escape == 180) &&
+        brain::sectorOpen(cam.mask, brain::sectorOf(cam.escape))) {
+      const int16_t escapeDuty = cam.escape == 0 ? 175 : -175;
+      for (int i = 0; i < 4; ++i) output[i] = escapeDuty;
+    }
+    for (int i = 0; i < 4; ++i)
+      output[i] = int16_t(constrain(int(output[i]), -ROBOT_TEST_MAX_PWM, ROBOT_TEST_MAX_PWM));
+    sendPwm(sequence++, output);
+    txMs = now;
+  }
+  if (uint32_t(now - pollMs) >= IR_POLL_INTERVAL_MS) {
+    const uint8_t poll[] = {0xA5, 0x5A, 0x01, 0xFE};
+    receiver.reset(); sendRs485(poll, sizeof(poll));
+    pollMs = millis(); waiting = true;
+  }
+}
+
 // ============================================================
 // Main loop
 // ============================================================
@@ -734,6 +822,10 @@ void loop() {
     if (command == 'd' || command == 's') holdStop = true;
     if (command == 'g') holdStop = false;
     if (command == 'v') usbViewer = !usbViewer;
+  }
+  if (ROBOT_ZIP_TRACK) {
+    chaseLoop();
+    return;
   }
   if (ROBOT_ZIP_COMPAT) {
     zipLoop();

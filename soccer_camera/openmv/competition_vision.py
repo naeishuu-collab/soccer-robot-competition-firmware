@@ -75,7 +75,7 @@ class LineGuard:
             return 0, None, None, 0
         lines = {}
         for bearing, color, cm, _, _ in boundaries:
-            if color == "WHITE":
+            if color == "WHITE" or color == "BLACK":
                 lines[bearing] = min(cm, lines.get(bearing, cm))
         limit = self.clearance + (RELEASE_MARGIN_CM if self.escaping else 0)
         # Confirmed line: thin white with turf beyond it, or seen on neighbouring bearings in consecutive
@@ -480,7 +480,8 @@ class Pipeline:
         floor_ok = ready
         ready = floor_ok and age_ms <= self.max_frame_ms
         stage = self.mark("goal", stage)
-        visible = self.fill_gap(visible, boundaries)
+        if not (getattr(cfg, "EXPERIMENTAL_HAZARD_SCAN", False) or getattr(cfg, "COMPETITION_TEST", False)):
+            visible = self.fill_gap(visible, boundaries)
         stage = self.mark("gap", stage)
         # ライン情報を確定してから、追跡値と姿勢値を同じ連番の送信データにまとめる。
         mask, escape, nearest, count = self.guard.update(ready, visible, boundaries, thin, now)

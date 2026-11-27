@@ -29,7 +29,7 @@ $motorConfig = foreach ($name in @('MOTOR_IN1', 'MOTOR_IN2', 'WHEEL_DEGREES', 'W
 ($motorConfig + $mixer) | Set-Content -Encoding UTF8 (Join-Path $build 'chase_mixer.h')
 "Host tests started at $([DateTime]::UtcNow.ToString('yyyy-MM-dd HH:mm:ss')) UTC" | Set-Content -Encoding Unicode $results
 
-$sources = @('test_core.cpp', 'test_integration.cpp', 'test_chase_camera.cpp', 'test_chase_motor.cpp', 'test_chase_mixer.cpp', 'test_motor_model.cpp', 'test_upgrade.cpp', 'test_review.cpp', 'test_loop.cpp', 'test_loop_legacy.cpp', 'test_continuity.cpp', 'test_zip_loop.cpp', 'test_default_omni.cpp', 'test_default_bno.cpp', 'test_no_camera_autostart.cpp')
+$sources = @('test_zip_chase_pd.cpp', 'test_zip_integrated.cpp', 'test_core.cpp', 'test_integration.cpp', 'test_chase_camera.cpp', 'test_chase_motor.cpp', 'test_chase_mixer.cpp', 'test_motor_model.cpp', 'test_upgrade.cpp', 'test_review.cpp', 'test_loop.cpp', 'test_loop_legacy.cpp', 'test_continuity.cpp', 'test_zip_loop.cpp', 'test_default_omni.cpp', 'test_default_bno.cpp', 'test_no_camera_autostart.cpp')
 $gpp = Get-Command g++ -ErrorAction SilentlyContinue
 $cl = Get-Command cl -ErrorAction SilentlyContinue
 

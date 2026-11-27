@@ -572,12 +572,30 @@ void runDiag(uint32_t now) {
 }
 
 void runModel(uint32_t now) {
+  static bool direct = false;
   uint8_t frame[FRAME_SIZE];
   if (receiver.receive(frame)) {
+    if (frame[1] == 4) {
+      int16_t duty[4];
+      bool valid = true;
+      for (int i = 0; i < 4; ++i) {
+        const uint16_t value = unpackValue(&frame[3 + i * 2]);
+        if (value > 420) valid = false;
+        duty[i] = int16_t(int(value) - 210);
+        if (duty[i] && abs(duty[i]) < OUTPUT_MIN_DUTY) valid = false;
+      }
+      if (valid) {
+        if (!direct) modelDrive.stop(now);
+        direct = true;
+        for (int i = 0; i < 4; ++i) targetPWM[i] = currentPWM[i] = duty[i];
+        acceptCommand(frame[2], 0, uint16_t(abs(duty[0]) + abs(duty[1]) + abs(duty[2]) + abs(duty[3]) > 0), now);
+      } else ++invalidFrames;
+    } else {
     uint16_t direction = 0, power = 0;
     int turn = 0;
     bool avoid = false;
     if (parseDrive(frame, direction, power, turn, avoid)) {
+      if (direct) { direct = false; modelDrive.stop(now); }
       const bool wasStill = !(currentPWM[0] || currentPWM[1] || currentPWM[2] || currentPWM[3]);
       if (power) {  // power 0 always means stop
         if (wasStill && !startRequestUs) startRequestUs = micros();
@@ -590,6 +608,15 @@ void runModel(uint32_t now) {
       }
       acceptCommand(frame[2], direction, power, now);
     }
+    }
+  }
+  if (direct) {
+    if (commandReceived && !timedOut && now - lastCommandMs >= COMMAND_TIMEOUT_MS) {
+      timedOut = true; ++timeoutEvents; receivedPower = 0;
+      for (int i = 0; i < 4; ++i) targetPWM[i] = currentPWM[i] = 0;
+    }
+    applyAllMotors();
+    return;
   }
   if (commandReceived && !timedOut && now - lastCommandMs >= COMMAND_TIMEOUT_MS) {
     timedOut = true;

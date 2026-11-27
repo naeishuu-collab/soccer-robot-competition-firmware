@@ -26,9 +26,16 @@ PROTOCOL = 2
 VISUALIZE = False
 # Every goal colour candidate with its numbers and rejection reason (drawn and printed). Slow: bench only.
 GOAL_DEBUG = False
+DEBUG_STATS = False  # Enable stage timing and floor diagnostics only when measuring.
 # True: the overall "enough floor seen" condition is treated as met (screen: FLOOR OK (FORCED)). Directions
 # whose floor is not seen stay closed, and setup errors and late frames still stop. False: traditional.
 FORCE_FLOOR_OK = True
+# Experimental visibility model remains dependent on known floor colors; keep disabled.
+EXPERIMENTAL_HAZARD_SCAN = False
+# Test-only competition pipeline; exposure and physical safety are uncalibrated.
+COMPETITION_TEST = False
+# Requires on-device UART partial-write and timing verification.
+EXPERIMENTAL_NONBLOCKING_UART = False
 LINE_BLOCK_CM = 35  # Protocol 2: headings toward a line closer than this are closed early. Unverified.
 # (radius_px, distance_cm) table measured for the goals. Empty = distance unknown.
 # Never copy GROUND_POINTS here without measuring. The camera does not detect the ball at all.

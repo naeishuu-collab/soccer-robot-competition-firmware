@@ -280,6 +280,40 @@ def classify_rgb(rgb):
     return None
 
 
+
+def classify_hazard(rgb):
+    # Hazard and known visibility are separate: unclassified pixels stay unknown.
+    lab = image.rgb_to_lab(rgb)
+    if in_lab(lab, cfg.WHITE):
+        return "WHITE"
+    if in_lab(lab, cfg.BLACK):
+        return "BLACK"
+    low_saturation = getattr(cfg, "GREEN_LOW_SATURATION", None)
+    if in_lab(lab, cfg.GREEN) or (low_saturation and in_lab(lab, low_saturation)):
+        return "GREEN"
+    return None
+
+
+def scan_hazards(img, mirror, cache):
+    # Only calibrated rays are observable. Two adjoining samples confirm a boundary.
+    visible, boundaries = set(), []
+    for bearing, samples in mirror.rays:
+        if len(samples) < 2:
+            continue
+        previous = None
+        observable = True
+        for x, y, cm in samples:
+            color = cache(img, x, y)
+            if color is None:
+                observable = False
+            if color in ("WHITE", "BLACK") and previous is not None and previous[0] == color:
+                boundaries.append((bearing,) + previous)
+                break
+            previous = (color, cm, x, y) if color in ("WHITE", "BLACK") else None
+        if observable:
+            visible.add(bearing)
+    return visible, boundaries
+
 def ground_color(img, x, y):
     return classify_rgb(img.get_pixel((x, y), rgbtuple=True))
 
@@ -302,6 +336,15 @@ class ColorCache:
         color = classify_rgb(rgb)
         if len(self.known) >= COLOR_CACHE_LIMIT:
             self.known.clear()  # the same dict object stays in use
+        self.known[rgb] = color
+        return color
+
+
+class HazardColorCache(ColorCache):
+    def learn(self, rgb):
+        color = classify_hazard(rgb)
+        if len(self.known) >= COLOR_CACHE_LIMIT:
+            self.known.clear()
         self.known[rgb] = color
         return color
 
@@ -365,6 +408,43 @@ def prepare_fast_scan(mirror, frames=3):
     except Exception as error:  # any problem keeps the proven path
         print("fast scan OFF: {!r}".format(error))
         return None
+
+
+def prepare_hazard_scan(mirror, cache):
+    try:
+        import fast_scan
+        frame = sensor.snapshot()
+        table = fast_scan.build_table(frame, classify_hazard)
+        scanner = fast_scan.HazardScanner(mirror.rays, mirror.width, mirror.height, table,
+                                         LINE_CLEARANCE_CM, line_is_thin)
+        frame = sensor.snapshot()
+        if scanner.scan(frame) != scan_hazards(frame, mirror, cache):
+            return None
+        return scanner
+    except Exception as error:
+        print("hazard fast scan OFF: {!r}".format(error))
+        return None
+
+
+def classify_white(rgb):
+    return "WHITE" if in_lab(image.rgb_to_lab(rgb), cfg.WHITE) else None
+
+
+def prepare_competition_scan(mirror):
+    try:
+        import fast_scan
+        frame = sensor.snapshot()
+        table = fast_scan.build_table(frame, classify_white)
+        return fast_scan.CompetitionScanner(mirror.rays, mirror.width, mirror.height, table,
+                                             LINE_CLEARANCE_CM, line_is_thin)
+    except Exception as error:
+        print("competition scan unavailable: {!r}".format(error))
+        return None  # fail closed if the native path cannot start
+
+
+def experimental_hazard_scan():
+    # No colour-only method can establish visibility of arbitrary occluders.
+    return bool(getattr(cfg, "EXPERIMENTAL_HAZARD_SCAN", False))
 
 
 def floor_forced():
@@ -491,6 +571,34 @@ def draw_goal(img, blob, name):
     img.draw_edges(blob_value(blob, "corners"), color=GOAL_COLORS[name], thickness=3)
 
 
+def read_telemetry(uart, link, now):
+    # The overlay never consumes more than 32 bytes in one camera iteration.
+    waiting = uart.any()
+    if waiting:
+        link.feed(uart.read(min(waiting, 32)) or b"", now)
+
+
+class LatestPacketTx:
+    """Bounded nonblocking writer: one in-flight frame, never a telemetry queue."""
+    def __init__(self, uart, ticks_diff, max_age_ms=100):
+        self.uart, self.ticks_diff, self.max_age_ms = uart, ticks_diff, max_age_ms
+        self.packet, self.offset, self.started = None, 0, 0
+
+    def send(self, packet, now):
+        if self.packet is not None and self.ticks_diff(now, self.started) > self.max_age_ms:
+            self.packet = None  # receiver must resynchronise after a partial expired frame
+        if self.packet is None:
+            self.packet, self.offset, self.started = packet, 0, now
+        try:
+            count = self.uart.write(memoryview(self.packet)[self.offset:])
+        except OSError:
+            count = None
+        if count:
+            self.offset += count
+            if self.offset >= len(self.packet):
+                self.packet = None
+
+
 def main_loop(send_uart=True, display=False):
     """撮影→検出→安全方向決定→必要ならMAINへ送信、をフレームごとに繰り返す。"""
     # 初期化後、各フレームで「撮影→床/境界走査→ゴール検出→判断→UART/表示」を実行。
@@ -506,6 +614,7 @@ def main_loop(send_uart=True, display=False):
         import competition_vision
         vision = competition_vision.Pipeline(cfg, mirror, LINE_CLEARANCE_CM, MAX_FRAME_AGE_MS)
     colors = ColorCache()
+    hazard_colors = HazardColorCache()
     scanner = None
     stats = None
     if vision is not None:
@@ -520,14 +629,19 @@ def main_loop(send_uart=True, display=False):
 
         vision.mark = mark
         if mirror.rays and getattr(cfg, "FAST_SCAN", True):
-            scanner = prepare_fast_scan(mirror)
+            scanner = (prepare_competition_scan(mirror) if getattr(cfg, "COMPETITION_TEST", False)
+                       else prepare_hazard_scan(mirror, hazard_colors) if experimental_hazard_scan()
+                       else prepare_fast_scan(mirror))
     overlay = None
     debug_goals = getattr(cfg, "GOAL_DEBUG", False)
     if vision is not None and (display or debug_goals):
         import visualize  # loaded only when something is shown, so competition runs pay nothing
         overlay = visualize.Overlay(cfg, mirror, show=display, debug_goals=debug_goals)
         overlay.mark = mark
-    uart = pyb.UART(3, 115200 if vision else 9600) if send_uart else None
+    nonblocking = bool(getattr(cfg, "EXPERIMENTAL_NONBLOCKING_UART", False))
+    uart = (pyb.UART(3, 115200 if vision else 9600, timeout=0, timeout_char=0)
+            if send_uart and nonblocking else pyb.UART(3, 115200 if vision else 9600) if send_uart else None)
+    writer = LatestPacketTx(uart, time.ticks_diff) if uart is not None and nonblocking else None
     last_tx = time.ticks_ms()
     last_command = None
     last_report = last_tx
@@ -552,6 +666,13 @@ def main_loop(send_uart=True, display=False):
         thin = set()
         if not mirror.rays:
             visible, boundaries = (), []
+        elif vision is not None and getattr(cfg, "COMPETITION_TEST", False):
+            visible, boundaries = scanner.scan(img) if scanner is not None else ((), [])
+            thin = None
+        elif vision is not None and experimental_hazard_scan():
+            visible, boundaries = (scanner.scan(img) if scanner is not None
+                                   else scan_hazards(img, mirror, hazard_colors))
+            thin = None  # confirmation uses adjacent rays and successive frames
         elif scanner is not None:
             visible, boundaries = scanner.scan(img, thin)
         elif vision is not None:
@@ -575,18 +696,25 @@ def main_loop(send_uart=True, display=False):
             stepped = time.ticks_us()
             stats.add("vision", time.ticks_diff(stepped, scanned))
             if uart is not None:
-                uart.write(packet)
+                if writer is None:
+                    uart.write(packet)
+                else:
+                    writer.send(packet, now)
                 stats.add("uart", time.ticks_diff(time.ticks_us(), stepped))
         elif uart is not None and (command != last_command
                                  or time.ticks_diff(now, last_tx) >= STREAM_INTERVAL_MS):
             # 旧8-byte系は状態変化時または定期送信。新しい拡張系はPipelineが毎フレーム送る。
             vx, vy, sectors, _ = command
-            uart.write(make_nav_packet(vx, vy, sectors, mode, sequence))
+            packet = make_nav_packet(vx, vy, sectors, mode, sequence)
+            if writer is None:
+                uart.write(packet)
+            else:
+                writer.send(packet, now)
             sequence = (sequence + 1) & 0xff
             last_tx = now
             last_command = command
         frames += 1
-        if time.ticks_diff(now, last_report) >= 2000:
+        if (display or debug_goals or getattr(cfg, "DEBUG_STATS", False)) and time.ticks_diff(now, last_report) >= 2000:
             # FPS and stage times, to compare versions on the camera itself.
             # capture includes waiting for the exposure (EXPOSURE_US limits the frame rate).
             print("fps={:.1f} capture_ms={} line_ms={}".format(
@@ -607,9 +735,7 @@ def main_loop(send_uart=True, display=False):
             show_start = time.ticks_us()
             # After the packet has been sent: display work never delays this frame's line data.
             if uart is not None:
-                waiting = uart.any()
-                if waiting:
-                    overlay.link.feed(uart.read(min(waiting, 128)), time.ticks_ms())
+                read_telemetry(uart, overlay.link, time.ticks_ms())
             overlay.draw(img, time.ticks_ms(), vision, boundaries, time.ticks_diff,
                          lambda x, y: colors(img, x, y))
             stats.add("show", time.ticks_diff(time.ticks_us(), show_start))
