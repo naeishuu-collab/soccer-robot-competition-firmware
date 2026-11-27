@@ -57,7 +57,8 @@ int main() {
   line = false; run(100); assert(lastAngle == 270 && lastCount == 500);
   Serial.type("s"); run(50); assert(lastCount == 0 && Serial.text.find("manual stop") != std::string::npos);
   Serial.type("g"); run(100); assert(lastCount == 500);
-  irOn = false; run(100);
+  irOn = false; run(40); assert(lastCount == 500);
+  run(100);
   assert(lastCount == 0 && Serial.text.find("IR link lost") != std::string::npos);
   irOn = true; run(100); assert(lastCount == 500);
   cameraOn = false; run(300);

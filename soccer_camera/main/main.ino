@@ -615,6 +615,8 @@ void zipLoop() {
   static brain::CameraData cam;
   static IrReplyReceiver receiver;
   static uint32_t pollMs = 0, irMs = 0, logMs = 0;
+  static uint32_t polls = 0, replies = 0, missed = 0, motorFrames = 0;
+  static uint16_t sentAngle = 0, sentCount = 0;
   static uint16_t angle = 0, strength = 0;
   static bool waiting = false, haveIr = false, moving = false;
   static const char *lastReason = "";
@@ -630,13 +632,15 @@ void zipLoop() {
       haveIr = true;
       irMs = now;
       reply = true;
+      ++replies;
       delayMicroseconds(50);
     }
   }
   if (waiting && uint32_t(now - pollMs) >= UPGRADE_IR_WAIT_MS) {
     waiting = false;
-    haveIr = false;
-    strength = 0;
+    ++missed;
+    // Keep the last valid reply only until IR_REPLY_TIMEOUT_MS. A valid zero count
+    // still immediately means no ball.
   }
   const char *reason = "";
   if (holdStop) reason = "manual stop";
@@ -653,12 +657,24 @@ void zipLoop() {
     frame[6] = frame[2] ^ frame[3] ^ frame[4] ^ frame[5];
     sendRs485(frame, sizeof(frame));
     moving = count != 0;
+    sentAngle = d; sentCount = count; ++motorFrames;
   }
-  if (Serial && (*reason || *lastReason) &&
-      (strcmp(reason, lastReason) != 0 || uint32_t(now - logMs) >= 500) && Serial.availableForWrite() >= 80) {
-    Serial.printf("%s reason=%s\n", *reason ? "SAFE_STOP" : "TRACK", *reason ? reason : "clear");
+  if (Serial && (strcmp(reason, lastReason) != 0 || uint32_t(now - logMs) >= 1000) && Serial.availableForWrite() >= 64) {
+    Serial.printf("ZIP c2be6ff+fix reason=%s hold=%u\n", *reason ? reason : "clear", unsigned(holdStop));
     logMs = now;
     lastReason = reason;
+  }
+  // One short line per iteration; never wait for a USB reader.
+  static uint32_t detailMs = 0;
+  static uint8_t detailPage = 0;
+  if (Serial && uint32_t(now - detailMs) >= 250 && Serial.availableForWrite() >= 64) {
+    switch (detailPage++ % 4) {
+      case 0: Serial.printf("cam ready=%u slow=%u escape=%u mask=%04x\n", unsigned(cam.ready), unsigned(cam.slow), unsigned(cam.escaping), unsigned(cam.mask)); break;
+      case 1: Serial.printf("line=%u count=%u age=%lu err=%lu\n", unsigned(cam.line), unsigned(cam.lineCount), (unsigned long)(cam.received ? now-cam.receivedMs : 0xffffffffUL), (unsigned long)parser.errors); break;
+      case 2: Serial.printf("ir=%u/%u age=%lu bno=off\n", unsigned(angle), unsigned(strength), (unsigned long)(haveIr ? now-irMs : 0xffffffffUL)); break;
+      default: Serial.printf("sent=%u/%u poll=%lu rx=%lu miss=%lu tx=%lu\n", unsigned(sentAngle), unsigned(sentCount), (unsigned long)polls, (unsigned long)replies, (unsigned long)missed, (unsigned long)motorFrames); break;
+    }
+    detailMs = now;
   }
   if (telemetryDue(now)) {
     brain::Telemetry t;
@@ -679,6 +695,7 @@ void zipLoop() {
     const uint8_t poll[] = {0xA5, 0x5A, 0x01, 0xFE};
     receiver.reset();
     sendRs485(poll, sizeof(poll));
+    ++polls;
     pollMs = millis();
     waiting = true;
   }
