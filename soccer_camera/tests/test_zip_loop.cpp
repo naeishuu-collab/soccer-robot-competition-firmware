@@ -1,3 +1,4 @@
+#define ROBOT_ZIP_TRACK 0
 #define ROBOT_ZIP_COMPAT 1
 #include <Arduino.h>
 #include <SerialPIO.h>

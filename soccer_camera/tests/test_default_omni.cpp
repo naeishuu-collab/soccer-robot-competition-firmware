@@ -1,3 +1,4 @@
+#define ROBOT_ZIP_TRACK 0
 // Runs the real MAIN, MOTOR and IR sketches (setup/loop, ROBOT_UPGRADE=1) wired together on the host.
 #include <Arduino.h>
 #include <SerialPIO.h>

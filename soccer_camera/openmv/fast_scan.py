@@ -166,3 +166,87 @@ class FastScanner:
                     return False
         fast_thin, slow_thin = set(), set()
         return self.scan(img, fast_thin) == reference(img, slow_thin) and fast_thin == slow_thin
+
+
+@micropython.viper
+def hazard_kernel(frame, packed, lut, span: int) -> int:
+    pixels = ptr16(frame)
+    samples = ptr32(packed)
+    table = ptr8(lut)
+    start = span & 0xffff
+    end = span >> 16
+    previous = 0
+    observable = 1
+    i = start
+    while i < end:
+        color = int(table[pixels[samples[i] >> 1]])
+        if color == 4:
+            observable = 0
+        if (color == 2 or color == 3) and color == previous:
+            return ((i - start) << 4) | (color << 1) | observable
+        previous = color
+        i += 1
+    return observable
+
+
+class HazardScanner(FastScanner):
+    def scan(self, img, thin=None):
+        buffer = self.buffer = img.bytearray()
+        visible, boundaries = set(), []
+        for bearing, samples, span in self.spans:
+            if len(samples) < 2:
+                continue
+            result = hazard_kernel(buffer, self.packed, self.table, span)
+            if result & 1:
+                visible.add(bearing)
+            if result >> 4:
+                x, y, cm = samples[(result >> 4) - 1]
+                boundaries.append((bearing, NAMES[(result >> 1) & 7], cm, x, y))
+        return visible, boundaries
+
+
+@micropython.viper
+def competition_kernel(frame, packed, lut, span: int) -> int:
+    pixels = ptr16(frame)
+    samples = ptr32(packed)
+    table = ptr8(lut)
+    start = span & 0xffff
+    end = span >> 16
+    i = start
+    low = 255
+    high = 0
+    total = 0
+    prev = 0
+    edge = 0
+    while i < end:
+        raw = int(pixels[samples[i] >> 1])
+        red = ((raw >> 11) & 31) << 3
+        green = ((raw >> 5) & 63) << 2
+        blue = (raw & 31) << 3
+        light = (red + 2 * green + blue) >> 2
+        if light < low: low = light
+        if light > high: high = light
+        total += light
+        white = int(table[raw]) == 2
+        if white and prev and not edge:
+            edge = i - start
+        prev = int(white)
+        i += 1
+    n = end - start
+    # Broad exposure/flat-image checks; not a general occlusion detector.
+    visible = int(n >= 2 and total >= n * 8 and total <= n * 242 and high - low >= 3)
+    return (edge << 1) | visible
+
+
+class CompetitionScanner(FastScanner):
+    def scan(self, img, thin=None):
+        buffer = self.buffer = img.bytearray()
+        visible, boundaries = set(), []
+        for bearing, samples, span in self.spans:
+            result = competition_kernel(buffer, self.packed, self.table, span)
+            if result & 1:
+                visible.add(bearing)
+            if result >> 1:
+                x, y, cm = samples[(result >> 1) - 1]
+                boundaries.append((bearing, "WHITE", cm, x, y))
+        return visible, boundaries
