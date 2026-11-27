@@ -583,20 +583,50 @@ class LatestPacketTx:
     def __init__(self, uart, ticks_diff, max_age_ms=100):
         self.uart, self.ticks_diff, self.max_age_ms = uart, ticks_diff, max_age_ms
         self.packet, self.offset, self.started = None, 0, 0
+        self.attempts = self.completed = self.partial = self.failed = self.expired = 0
+        self.bytes_written = 0
+        self.last_error = "NONE"
 
     def send(self, packet, now):
+        self.attempts += 1
         if self.packet is not None and self.ticks_diff(now, self.started) > self.max_age_ms:
+            self.expired += 1
+            self.last_error = "PARTIAL_EXPIRED"
             self.packet = None  # receiver must resynchronise after a partial expired frame
+            self.offset = 0
         if self.packet is None:
             self.packet, self.offset, self.started = packet, 0, now
         try:
             count = self.uart.write(memoryview(self.packet)[self.offset:])
         except OSError:
-            count = None
+            self.failed += 1
+            self.last_error = "UART_OSERROR"
+            return False
+        if count is None or count < 0:
+            self.failed += 1
+            self.last_error = "UART_NO_PROGRESS"
+            return False
+        if count == 0:
+            self.failed += 1
+            self.last_error = "UART_NO_PROGRESS"
+            return False
         if count:
             self.offset += count
+            self.bytes_written += count
             if self.offset >= len(self.packet):
                 self.packet = None
+                self.offset = 0
+                self.completed += 1
+                self.last_error = "NONE"
+                return True
+            self.partial += 1
+            self.last_error = "PARTIAL_WRITE"
+        return False
+
+    def status(self):
+        return "attempts={} complete={} partial={} failed={} expired={} bytes={} pending={} offset={} last={}".format(
+            self.attempts, self.completed, self.partial, self.failed, self.expired,
+            self.bytes_written, int(self.packet is not None), self.offset, self.last_error)
 
 
 def main_loop(send_uart=True, display=False):
@@ -647,9 +677,42 @@ def main_loop(send_uart=True, display=False):
     uart = (pyb.UART(3, 115200 if vision else 9600, timeout=0, timeout_char=0)
             if send_uart and nonblocking else pyb.UART(3, 115200 if vision else 9600) if send_uart else None)
     writer = LatestPacketTx(uart, time.ticks_diff) if uart is not None and nonblocking else None
+    uart_tx_attempts = uart_tx_complete = uart_tx_partial = uart_tx_failed = uart_tx_bytes = 0
+    uart_tx_last = "NONE"
+
+    def transmit(packet, now):
+        nonlocal uart_tx_attempts, uart_tx_complete, uart_tx_partial, uart_tx_failed, uart_tx_bytes, uart_tx_last
+        if writer is not None:
+            done = writer.send(packet, now)
+            return done
+        uart_tx_attempts += 1
+        try:
+            count = uart.write(packet)
+        except OSError:
+            uart_tx_failed += 1
+            uart_tx_last = "UART_OSERROR"
+            return False
+        if count is None:
+            # Some blocking UART implementations do not report a byte count.
+            uart_tx_complete += 1
+            uart_tx_last = "COUNT_UNAVAILABLE"
+            return True
+        uart_tx_bytes += count
+        if count >= len(packet):
+            uart_tx_complete += 1
+            uart_tx_last = "NONE"
+            return True
+        if count > 0:
+            uart_tx_partial += 1
+            uart_tx_last = "PARTIAL_WRITE"
+        else:
+            uart_tx_failed += 1
+            uart_tx_last = "UART_NO_PROGRESS"
+        return False
     last_tx = time.ticks_ms()
     last_command = None
     last_report = last_tx
+    csv_header_sent = False
     sequence = 0
     frames = shown_frames = 0
     last_capture_error_report = last_tx
@@ -711,20 +774,14 @@ def main_loop(send_uart=True, display=False):
             stepped = time.ticks_us()
             stats.add("vision", time.ticks_diff(stepped, scanned))
             if uart is not None:
-                if writer is None:
-                    uart.write(packet)
-                else:
-                    writer.send(packet, now)
+                transmit(packet, now)
                 stats.add("uart", time.ticks_diff(time.ticks_us(), stepped))
         elif uart is not None and (command != last_command
                                  or time.ticks_diff(now, last_tx) >= STREAM_INTERVAL_MS):
             # 旧8-byte系は状態変化時または定期送信。新しい拡張系はPipelineが毎フレーム送る。
             vx, vy, sectors, _ = command
             packet = make_nav_packet(vx, vy, sectors, mode, sequence)
-            if writer is None:
-                uart.write(packet)
-            else:
-                writer.send(packet, now)
+            transmit(packet, now)
             sequence = (sequence + 1) & 0xff
             last_tx = now
             last_command = command
@@ -732,15 +789,32 @@ def main_loop(send_uart=True, display=False):
         if (display or debug_goals or getattr(cfg, "DEBUG_STATS", False)) and time.ticks_diff(now, last_report) >= 2000:
             # FPS and stage times, to compare versions on the camera itself.
             # capture includes waiting for the exposure (EXPOSURE_US limits the frame rate).
-            print("fps={:.1f} capture_ms={} line_ms={}".format(
-                (frames - shown_frames) * 1000 / time.ticks_diff(now, last_report),
-                time.ticks_diff(captured, started), time.ticks_diff(now, captured)))
+            fps = (frames - shown_frames) * 1000 / time.ticks_diff(now, last_report)
+            capture_ms, line_ms = time.ticks_diff(captured, started), time.ticks_diff(now, captured)
             shown_frames, last_report = frames, now
+            if getattr(cfg, "DEBUG_FORMAT", "TEXT") == "CSV" and vision is not None:
+                ready, floor_ok, mask, escape, nearest, yellow, blue = vision.last or (False, False, 0, None, None, (None, None, 0, 0, 255), (None, None, 0, 0, 255))
+                if writer is not None:
+                    tx_values = (writer.attempts, writer.completed, writer.partial, writer.failed,
+                                 writer.expired, writer.bytes_written, int(writer.packet is not None),
+                                 writer.offset, writer.last_error)
+                else:
+                    tx_values = (uart_tx_attempts, uart_tx_complete, uart_tx_partial, uart_tx_failed,
+                                 0, uart_tx_bytes, 0, 0, uart_tx_last)
+                if not csv_header_sent:
+                    print("record,uptime_ms,fps,capture_ms,line_ms,ready,floor_ok,mask,escape_deg,yellow_deg,yellow_conf,blue_deg,blue_conf,capture_errors,tx_attempts,tx_complete,tx_partial,tx_failed,tx_expired,tx_bytes,tx_pending,tx_offset,tx_last")
+                    csv_header_sent = True
+                print("CAMERA,{},{:.1f},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}".format(
+                    now, fps, capture_ms, line_ms, int(ready), int(floor_ok), mask,
+                    -1 if escape is None else int(escape), -1 if yellow[0] is None else int(yellow[0]),
+                    yellow[2], -1 if blue[0] is None else int(blue[0]), blue[2], capture_errors, *tx_values))
+            else:
+                print("fps={:.1f} capture_ms={} line_ms={}".format(fps, capture_ms, line_ms))
             if vision is not None:
                 # Repeated, because the startup lines scroll away: what is actually running on the camera.
-                print("[CAMERA] fw={} git={} ready={} setup={} protocol={} target={} exposure_us={} gain_db={} capture_errors={}".format(
+                print("[CAMERA] fw={} git={} config={} ready={} setup={} protocol={} target={} exposure_us={} gain_db={} capture_errors={}".format(
                     getattr(cfg, "FIRMWARE_VERSION", "unknown"), getattr(cfg, "GIT_COMMIT", "unembedded"),
-                    int(setup_reason is None and mirror.ring_ready), setup_reason, getattr(cfg, "PROTOCOL", 1),
+                    getattr(cfg, "CONFIG_ID", "unknown"), int(setup_reason is None and mirror.ring_ready), setup_reason, getattr(cfg, "PROTOCOL", 1),
                     getattr(cfg, "TARGET_GOAL", "unset"), getattr(cfg, "EXPOSURE_US", "auto"),
                     getattr(cfg, "GAIN_DB", "auto"), capture_errors))
                 print("cfg scan={} VISUALIZE={} GOAL_DEBUG={} DEBUG_STATS={} FORCE_FLOOR_OK={} features={}".format(
@@ -749,6 +823,12 @@ def main_loop(send_uart=True, display=False):
                     "LINE+GOAL" if vision is not None else "LINE"))
                 print("ms avg/max/p95", stats.report())
                 print(vision.timing, vision.status())
+                if writer is not None:
+                    print("[UART_TX]", writer.status())
+                else:
+                    print("[UART_TX] attempts={} complete={} partial={} failed={} bytes={} last={}".format(
+                        uart_tx_attempts, uart_tx_complete, uart_tx_partial, uart_tx_failed,
+                        uart_tx_bytes, uart_tx_last))
                 if mirror.rays:
                     print(floor_report(img, mirror, colors, visible, boundaries, setup_reason,
                                        observed, vision.last[2]))

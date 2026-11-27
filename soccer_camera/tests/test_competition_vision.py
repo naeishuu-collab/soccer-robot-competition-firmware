@@ -83,6 +83,47 @@ class LineGuardTests(unittest.TestCase):
         self.assertIsNone(guard.update(True, ALL, [])[1])
 
 
+class PacketWriterTests(unittest.TestCase):
+    class FakeUart:
+        def __init__(self, results):
+            self.results = list(results)
+            self.writes = []
+
+        def write(self, data):
+            self.writes.append(bytes(data))
+            result = self.results.pop(0)
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+    def test_partial_write_resumes_same_packet_then_completes(self):
+        uart = self.FakeUart((2, 3))
+        tx = nav.LatestPacketTx(uart, lambda now, before: now - before)
+        self.assertFalse(tx.send(b"abcde", 0))
+        self.assertEqual(tx.offset, 2)
+        self.assertTrue(tx.send(b"newer", 1))
+        self.assertEqual(uart.writes, [b"abcde", b"cde"])
+        self.assertEqual((tx.completed, tx.partial, tx.bytes_written), (1, 1, 5))
+
+    def test_expired_partial_packet_is_dropped_before_latest_packet(self):
+        uart = self.FakeUart((2, 5))
+        tx = nav.LatestPacketTx(uart, lambda now, before: now - before, max_age_ms=10)
+        self.assertFalse(tx.send(b"old-frame", 0))
+        self.assertTrue(tx.send(b"newer", 11))
+        self.assertEqual(uart.writes[-1], b"newer")
+        self.assertEqual(tx.expired, 1)
+        self.assertEqual(tx.last_error, "NONE")
+
+    def test_uart_errors_and_no_progress_are_counted(self):
+        uart = self.FakeUart((OSError("bus"), 0))
+        tx = nav.LatestPacketTx(uart, lambda now, before: now - before)
+        self.assertFalse(tx.send(b"packet", 0))
+        self.assertEqual(tx.last_error, "UART_OSERROR")
+        self.assertFalse(tx.send(b"packet", 1))
+        self.assertEqual(tx.last_error, "UART_NO_PROGRESS")
+        self.assertEqual(tx.failed, 2)
+
+
 class RecognitionTests(unittest.TestCase):
     def test_distance_table_never_extrapolates(self):
         table = ((30, 20), (60, 100))

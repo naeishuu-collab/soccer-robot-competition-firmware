@@ -6,6 +6,7 @@ competition_vision.pyへ切り替える場合はPROTOCOLとMAIN側ROBOT_UPGRADE�
 # Update these identifiers when copying firmware to the OpenMV board. The camera cannot query Git.
 FIRMWARE_VERSION = "0.1.0"
 GIT_COMMIT = "unembedded"
+CONFIG_ID = "RCJ-IR-SW-2026-11-27-A"
 
 FRAME_SIZE = "QVGA"
 # Enter (image_width, image_height), (center_x, center_y), and (inner_px, outer_px).
@@ -31,6 +32,7 @@ VISUALIZE = False
 # Every goal colour candidate with its numbers and rejection reason (drawn and printed). Slow: bench only.
 GOAL_DEBUG = False
 DEBUG_STATS = False  # Enable stage timing and floor diagnostics only when measuring.
+DEBUG_FORMAT = "TEXT"  # TEXT or CSV; periodic, rate-limited diagnostics only.
 # True: the overall "enough floor seen" condition is treated as met (screen: FLOOR OK (FORCED)). Directions
 # whose floor is not seen stay closed, and setup errors and late frames still stop. False: traditional.
 FORCE_FLOOR_OK = True
