@@ -9,6 +9,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "openmv"))
 import competition_vision as v
 import goal_wall_navigation as nav
 
+# Keep the broader recognition regressions explicit; the deployed calibration enables chase-only.
+nav.cfg.CHASE_ONLY = False
+
 ALL = set(range(0, 360, 15))
 
 
@@ -189,6 +192,19 @@ class RecognitionTests(unittest.TestCase):
         self.assertFalse(packet[5] & v.FLAG_READY)
         self.assertEqual(packet[6] | packet[7], 0)
         self.assertEqual(v.crc16(packet[:-2]), packet[-2] | packet[-1] << 8)
+
+    def test_chase_only_skips_goal_image_processing(self):
+        class Frame:
+            def find_blobs(self, *args, **kwargs):
+                raise AssertionError("goal colour search ran in chase-only mode")
+
+        with patch.object(nav.cfg, "CHASE_ONLY", True, create=True):
+            pipe = v.Pipeline(nav.cfg, nav.Mirror(320, 240), 25, 100)
+            packet = pipe.step(Frame(), 0, True, 30, ALL, [])
+        self.assertTrue(packet[5] & v.FLAG_READY)
+        self.assertEqual(pipe.timing["YELLOW"], 0)
+        self.assertEqual(pipe.timing["BLUE"], 0)
+        self.assertEqual(packet[26] | packet[27] << 8, v.UNKNOWN_ANGLE)
 
     def blobs(self, yellow=None, blue=None):
         class Blob:

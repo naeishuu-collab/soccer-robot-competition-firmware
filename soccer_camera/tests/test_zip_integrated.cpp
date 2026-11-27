@@ -151,8 +151,9 @@ int main() {
   rig.mask = 1; rig.run(150); CHECK("unrelated closed sectors allow straight motion", !Rig::still());
   rig.mask = 0; rig.run(150); CHECK("unsafe mask stops", Rig::still());
   rig.mask = 0xffff; rig.run(200); CHECK("mask returns", !Rig::still());
-  rig.mask = uint16_t(1u << 8); rig.escape = 180; rig.run(600);
+  rig.ir = false; rig.mask = uint16_t(1u << 8); rig.escape = 180; rig.run(600);
   CHECK("line escape moves away", mockPwm[7] && mockPwm[13] && mockPwm[10] && mockPwm[8]);
+  rig.ir = true;
   rig.escape = 0xffff; rig.mask = 0xffff; rig.run(600);
   CHECK("tracking resumes after escape", mockPwm[6] && mockPwm[12] && mockPwm[11] && mockPwm[9]);
   Serial.type("d"); rig.run(100); CHECK("manual stop", Rig::still());

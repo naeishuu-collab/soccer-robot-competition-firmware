@@ -1,6 +1,5 @@
-// MAIN基板: IRのボール方位とOpenMVの走行可能方向を統合し、MOTOR基板へ移動指令を送る。
-// 関連: main_logic.h は拡張制御用の純粋ロジック、ir/ir.ino はIR応答、
-// openmv/goal_wall_navigation.py は床・白線の判定を担当する。通常設定は実機確認済み系統。
+// MAIN基板: ZIP PDでIRのボール方位を4輪PWMへ変換し、白線退避を優先してMOTORへ送る。
+// ir/ir.ino の応答とOpenMVの床・白線情報を使う。ZIP追尾候補は実機未確認。
 #include <Arduino.h>
 #include <string.h>
 #include <math.h>
@@ -12,15 +11,15 @@
 #include <Diagnostics.h>
 
 #ifndef ROBOT_ZIP_TRACK
-#define ROBOT_ZIP_TRACK 0
+#define ROBOT_ZIP_TRACK 1
 #endif
 #ifndef ROBOT_TEST_MAX_PWM
 #define ROBOT_TEST_MAX_PWM 210
 #endif
 static_assert(ROBOT_TEST_MAX_PWM >= 140 && ROBOT_TEST_MAX_PWM <= 210, "Invalid test PWM limit");
 
-// 0 = field-tested chase (default). 1 = camera protocol 2, filtered IR, heading modes and tactics.
-// Build MAIN, MOTOR and IR together and set PROTOCOL = 2 on the camera. Not verified on hardware.
+// Compatibility selector for the extended route. ZIP chase is selected first by ROBOT_ZIP_TRACK.
+// Build matching MAIN/MOTOR/IR firmware and OpenMV PROTOCOL=2 together; hardware pending.
 #ifndef ROBOT_UPGRADE
 #define ROBOT_UPGRADE 1
 #endif
@@ -855,6 +854,7 @@ void chaseLoop() {
 #endif
   static uint32_t pollMs = 0, irMs = 0, txMs = 0;
   static bool waiting = false, haveIr = false, newReply = false;
+  static bool wasEscaping = false;
   static uint16_t angle = 0, strength = 0;
   static int16_t pwm[4] = {};
   static int16_t pdCalculated[4] = {}, safetyPWM[4] = {}, sentPWM[4] = {};
@@ -874,39 +874,55 @@ void chaseLoop() {
   if (waiting) return;
   const bool freshCam = cam.received && uint32_t(now - cam.receivedMs) <= 200 && cam.ready && !cam.slow;
   const bool freshIr = haveIr && uint32_t(now - irMs) <= IR_REPLY_TIMEOUT_MS;
-  const bool allowed = !holdStop && freshCam && freshIr && strength && !cam.escaping;
+  const bool cameraMotionAllowed = !holdStop && freshCam;
+  const bool escapeAllowed = cameraMotionAllowed && cam.escaping &&
+      (cam.escape == 0 || cam.escape == 180) &&
+      brain::sectorOpen(cam.mask, brain::sectorOf(cam.escape));
+  const bool chaseAllowed = cameraMotionAllowed && !cam.escaping && freshIr && strength;
+  if (cam.escaping != wasEscaping) {
+    pd.reset();
+    for (int i = 0; i < 4; ++i) pwm[i] = 0;
+    newReply = false;
+    wasEscaping = cam.escaping;
+  }
   const char *stopReason = "NONE";
+  const char *mode = "STOP";
   if (holdStop) stopReason = "MANUAL_STOP";
   else if (!freshCam) stopReason = "CAMERA_TIMEOUT";
   else if (!cam.ready) stopReason = "CAMERA_NOT_READY";
   else if (cam.slow) stopReason = "CAMERA_SLOW";
-  else if (cam.escaping) stopReason = "LINE_DETECTED";
-  else if (!freshIr) stopReason = "IR_TIMEOUT";
-  else if (!strength) stopReason = "BALL_LOST";
-  if (!allowed) {
+  else if (cam.escaping && !escapeAllowed) stopReason = "LINE_BLOCKED";
+  else if (!cam.escaping && !freshIr) stopReason = "IR_TIMEOUT";
+  else if (!cam.escaping && !strength) stopReason = "BALL_LOST";
+  if (escapeAllowed) {
+    mode = "ESCAPE";
+    stopReason = "NONE";
     pd.reset();
-    for (int i = 0; i < 4; ++i) pwm[i] = 0;
+    const int16_t escapeDuty = cam.escape == 0 ? 175 : -175;
+    for (int i = 0; i < 4; ++i) pwm[i] = escapeDuty;
     newReply = false;
-  } else if (newReply) {
+  } else if (chaseAllowed && newReply) {
+    mode = "CHASE";
     pd.update(angle, strength, now, pwm);
     for (int i = 0; i < 4; ++i) pdCalculated[i] = pwm[i];
     pdStampMs = now;
     newReply = false;
+  } else if (chaseAllowed) {
+    mode = "CHASE";
+  } else {
+    pd.reset();
+    for (int i = 0; i < 4; ++i) pwm[i] = 0;
+    newReply = false;
   }
-  if (allowed && !zipPathClear(cam.mask, pwm)) {
+  if (chaseAllowed && !zipPathClear(cam.mask, pwm)) {
     stopReason = "NO_SAFE_DIRECTION";
+    mode = "STOP";
     pd.reset();
     for (int i = 0; i < 4; ++i) pwm[i] = 0;
   }
   for (int i = 0; i < 4; ++i) safetyPWM[i] = pwm[i];
   if (uint32_t(now - txMs) >= 20) {
     int16_t output[4] = {pwm[0], pwm[1], pwm[2], pwm[3]};
-    if (!holdStop && freshCam && freshIr && cam.escaping &&
-        (cam.escape == 0 || cam.escape == 180) &&
-        brain::sectorOpen(cam.mask, brain::sectorOf(cam.escape))) {
-      const int16_t escapeDuty = cam.escape == 0 ? 175 : -175;
-      for (int i = 0; i < 4; ++i) output[i] = escapeDuty;
-    }
     for (int i = 0; i < 4; ++i)
       output[i] = int16_t(constrain(int(output[i]), -ROBOT_TEST_MAX_PWM, ROBOT_TEST_MAX_PWM));
     sendPwm(sequence++, output);
@@ -924,6 +940,7 @@ void chaseLoop() {
                   pdCalculated[0], pdCalculated[1], pdCalculated[2], pdCalculated[3],
                   safetyPWM[0], safetyPWM[1], safetyPWM[2], safetyPWM[3],
                   sentPWM[0], sentPWM[1], sentPWM[2], sentPWM[3]);
+    Serial.printf("[MOTION] state=%s\n", mode);
     Serial.printf("[STOP_REASON] %s camera_age_ms=%lu ir_age_ms=%lu mask=%04x line=%u\n", stopReason,
                   (unsigned long)(cam.received ? now - cam.receivedMs : 0xffffffffUL),
                   (unsigned long)(haveIr ? now - irMs : 0xffffffffUL), unsigned(cam.mask), unsigned(cam.lineCount));

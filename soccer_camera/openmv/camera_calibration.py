@@ -26,6 +26,8 @@ TARGET_GOAL = "YELLOW"  # Set to "YELLOW" or "BLUE" before each half.
 # 1 = legacy 8-byte UART at 9600 (default). 2 = extended packet (wire version 3) at 115200; needs MAIN
 # ROBOT_UPGRADE=1 from the same commit and competition_vision.py on the camera.
 PROTOCOL = 2
+# Competition mode needs only floor/line safety; leave goal colour searches out of the frame loop.
+CHASE_ONLY = True
 # Overlay and text in the OpenMV IDE (needs visualize.py). Set True on the bench; keep False for matches
 # because the extra search and drawing lower the frame rate.
 VISUALIZE = False

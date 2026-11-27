@@ -34,7 +34,8 @@ class ChaseConfiguration(unittest.TestCase):
 
     def test_bno_is_temporarily_disabled(self):
         source = (ROOT / "main/main.ino").read_text(encoding="utf-8")
-        self.assertRegex(source, r"constexpr\s+bool\s+BNO_ENABLED\s*=\s*false\s*;")
+        self.assertRegex(source, r"#define ROBOT_BNO_ENABLED 0")
+        self.assertRegex(source, r"constexpr\s+bool\s+BNO_ENABLED\s*=\s*ROBOT_BNO_ENABLED\s*;")
         self.assertRegex(source, r"if\s*\(BNO_ENABLED\)\s*\{\s*updateHeading\(now\);")
 
     def test_visualization_is_off_for_matches_and_ball_stays_ir_only(self):
