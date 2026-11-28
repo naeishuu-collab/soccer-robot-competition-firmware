@@ -5,9 +5,9 @@
 enum class State { Stop, Chase, Escape };
 enum class StopReason {
   None, Manual, CameraTimeout, CameraNotReady, CameraSlow, IrTimeout, IrInvalid,
-  BallLost, NoEscape, PathBlocked, IrNoReply, Count
+  BallLost, NoEscape, PathBlocked, IrNoReply, DiagnosticIdle, Count
 };
-enum class PathMode { Stop, Original, Sweep, ReducedTurn, Straight, Escape };
+enum class PathMode { Stop, Original, Sweep, ReducedTurn, Straight, Escape, Diagnostic };
 enum class Fallback { None, Mask, Unmeasured, Range };
 struct Decision {
   State state = State::Stop;
@@ -45,14 +45,12 @@ inline Decision decide(bool manual, bool cameraFresh, const robot::Camera& cam,
     } else out.reason = StopReason::NoEscape;
   } else if (!tracking) out.reason = StopReason::BallLost;
   else {
-    out.required = legacyRequired(pwm);
-    out.blocked = out.required & ~cam.safe;
     if (pwm[0] != pwm[1] || pwm[2] != pwm[3]) {
       out.reason = StopReason::PathBlocked;
       return out;
     }
     const bool commissioned = config.halfWidthCm > 0;
-    const bool frontClear = (cam.safe & FrontWedge) == FrontWedge;
+    const bool frontClear = cam.safe & robot::Front;
     const bool forwardBall = error >= -45 && error <= 45 && pwm[0] + pwm[2] > 0;
     const robot::Pwm straight{robot::BridgePwm, robot::BridgePwm, robot::BridgePwm, robot::BridgePwm};
     if (commissioned) {
@@ -80,19 +78,29 @@ inline Decision decide(bool manual, bool cameraFresh, const robot::Camera& cam,
           memcpy(out.pwm, reduced, sizeof(out.pwm));
         }
       }
-    } else if (!out.blocked) out.path = PathMode::Original;
+    } else if (pwm[0] == pwm[2]) {
+      out.required = pwm[0] > 0 ? robot::Front : pwm[0] < 0 ? robot::Rear : 0;
+      if (!(out.required & ~cam.safe)) out.path = PathMode::Original;
+    } else if (cam.safe == 0xffff) {
+      // Allow the original yaw only in fully clear space until its sweep is measured.
+      out.required = cam.safe;
+      out.path = PathMode::Original;
+    } else {
+      out.required = robot::Front;
+    }
     if (out.path == PathMode::Stop) {
       if (out.fallback == Fallback::None) out.fallback = Fallback::Unmeasured;
-      // Bench-observed forward polarity and duty, with five clear headings.
+      // The camera front bit already checks the five forward rays.
       if (frontClear && forwardBall && pwm[0] > 0 && pwm[2] > 0) {
-        const auto sweep = commissioned ? candidateRequired(straight, config) : Sweep{FrontWedge, true};
+        const auto sweep = commissioned ? candidateRequired(straight, config) : Sweep{robot::Front, true};
         if (permitsSweep(sweep, cam.safe)) {
           out.path = PathMode::Straight;
-          out.required = sweep.required | FrontWedge;
+          out.required = sweep.required | robot::Front;
           memcpy(out.pwm, straight, sizeof(out.pwm));
         }
       }
     }
+    out.blocked = out.required & ~cam.safe;
     if (out.path == PathMode::Stop) {
       out.reason = StopReason::PathBlocked;
       return out;
@@ -103,12 +111,42 @@ inline Decision decide(bool manual, bool cameraFresh, const robot::Camera& cam,
       const auto sweep = candidateRequired(straight, config);
       if (permitsSweep(sweep, cam.safe)) {
         out.alternate = robot::BridgePwm;
-        out.required |= sweep.required | FrontWedge;
+        out.required |= sweep.required | robot::Front;
       }
     }
     out.blocked = out.required & ~cam.safe;
     out.state = State::Chase;
     out.reason = StopReason::None;
   }
+  return out;
+}
+
+// Disabled in field builds. A bench build still requires explicit mode and a USB dead man.
+#ifndef RCJ_WHEELS_LIFTED_DIAGNOSTICS
+#define RCJ_WHEELS_LIFTED_DIAGNOSTICS 0
+#endif
+enum class RunMode { Competition, MotorTest, IrPdTest };
+
+inline Decision benchDecision(RunMode mode, bool armed, int wheel, bool tracking,
+                              const robot::Pwm& pwm, bool manual, bool cameraFresh, bool irFresh,
+                              bool irInvalid, bool missedIr) {
+  // Reuse link/manual stops. Diagnostic motion bypasses image-based direction checks only.
+  robot::Camera link;
+  link.flags = robot::Ready;
+  Decision out = decide(manual, cameraFresh, link, irFresh, irInvalid, missedIr, false, pwm);
+  if (out.reason != StopReason::BallLost) return out;
+  if (!armed || (mode == RunMode::MotorTest && (wheel < 0 || wheel >= 4))) {
+    out.reason = StopReason::DiagnosticIdle;
+    return out;
+  }
+  if (mode == RunMode::IrPdTest) {
+    if (!tracking) return out;
+    for (int i = 0; i < 4; ++i)
+      out.pwm[i] = pwm[i] > 160 ? 160 : pwm[i] < -160 ? -160 : pwm[i];
+  } else if (mode == RunMode::MotorTest) out.pwm[wheel] = 160;
+  else return out;
+  out.state = State::Chase;
+  out.reason = StopReason::None;
+  out.path = PathMode::Diagnostic;
   return out;
 }

@@ -310,6 +310,50 @@ class VisionTests(unittest.TestCase):
         self.assertEqual(len(guard.regions), 1)
         self.assertFalse(guard.regions[0][1])
 
+    def test_front_line_and_side_reflections_leave_observed_reverse(self):
+        # The confirmed front line closes the front. Two short side reflections
+        # previously added 105-degree cones and closed the remaining headings.
+        lines = {0: 18, 15: 19, 105: 18, 255: 18}
+        wide = {0: (0, 1), 15: (0, 1), 105: (0, 0), 255: (0, 0)}
+        safe, escape, _ = self.guard.update(self.rays, lines, 0, wide, self.mirror.rays)
+        old_extra = vision.CLOSE_BLOCKS[105 // 15] | vision.CLOSE_BLOCKS[255 // 15]
+        self.assertEqual(safe & ~old_extra, 0)  # Replay the prior ambiguous-candidate veto.
+        self.assertFalse(safe & (1 | (1 << 5) | (1 << 11)))
+        self.assertEqual(escape, 256)
+        self.assertTrue(safe & 256)
+        safe, escape, _ = self.guard.update(self.rays - {180}, lines, 1, wide, self.mirror.rays)
+        self.assertFalse(safe & 256)
+        self.assertEqual(escape, 0)
+
+    def test_censored_distance_uses_wire_unknown_without_clearing_heading(self):
+        lines = {0: 18}
+        safe, escape, nearest = self.guard.update(self.rays, lines, 0, {0: (0, 2)}, self.mirror.rays, {0})
+        self.assertFalse(safe & 1)
+        self.assertEqual(escape, 0)
+        self.assertEqual(self.guard.line_angle, 0)
+        self.assertIsNotNone(self.guard.line_xy)
+        self.assertIsNone(nearest)
+        miss = ((65535, 0, 255),) * 2
+        packet = vision.packet(0, True, False, safe, escape, nearest, miss, 41)
+        self.assertEqual(bytes(packet[8:11]), b"\xff\xff\xff")
+
+    def test_distance_calibration_reports_target_and_interval_without_clamping(self):
+        self.assertEqual(self.mirror.distance_at_radius(50), (18, (50, 18, 74, 50)))
+        self.assertEqual(self.mirror.distance_at_radius(49.9), (None, None))
+        self.assertEqual(self.mirror.distance_at_radius(74.1), (None, None))
+        self.assertEqual(self.mirror.distance_at_radius(70.25)[0], 45)
+        x, y = round(self.mirror.cx) + 49, round(self.mirror.cy)
+        class Target:
+            rect, cx, cy, pixels = (x-2, y-1, 4, 3), x, y, 8
+        class Frame:
+            def find_blobs(self, limits, **kwargs):
+                self.limits = limits
+                return [Target()]
+        frame = Frame()
+        self.assertEqual(vision.calibration_targets(frame, self.mirror),
+                         [(8, Target.rect, (x, y), 49, None, None)])
+        self.assertEqual(frame.limits, [vision.cfg.WHITE])
+
     def test_dynamic_line_limits_immediately_and_holds_through_blur(self):
         guard = vision.LineGuard(lambda a,b: a-b)
         for now, distance in ((0, 38), (32, 33), (64, 28), (96, 23)):
@@ -391,7 +435,8 @@ class VisionTests(unittest.TestCase):
         mask, escape, _ = revised.update(visible, lines, 0, scanner.runs, self.mirror.rays, scanner.censored)
         self.assertEqual(revised.confirmed, {0, 15})
         self.assertEqual([confirmed for _, confirmed in revised.regions], [True, False])
-        self.assertEqual((old_mask, old_escape, mask, escape), (0, 0, 0, 0))
+        self.assertEqual((old_mask, old_escape, escape), (0, 0, 0))
+        self.assertFalse(mask & (1 | 256))
         self.assertTrue(revised.ambiguous_blocked & 256)
 
     def test_polygon_mask_and_exposure_reasons(self):

@@ -1,6 +1,6 @@
 """Calibration retained from 968bc52. Verify mirror orientation, LAB and ground distances on hardware."""
 
-PRODUCTION_API = 4
+PRODUCTION_API = 5
 
 FRAME_SIZE = "QVGA"
 
@@ -38,6 +38,9 @@ GOAL_X_STRIDE = 1  # Try 2 on the bench, especially with small distant goals.
 VISUALIZATION_MODE = "LIGHT"
 # Full-frame reference reported by the operator. UART READY stays clear.
 BENCH_BASELINE = False
+# Place a single known-distance white target ahead. UART READY remains clear.
+BENCH_DISTANCE_CM = None  # None, 20, 30 or 45.
+AUTO_REPORT_MS = 1000  # 0 disables periodic USB output. The i command still works.
 
 GAIN_DB = 6.0
 

@@ -25,6 +25,12 @@ class CameraLoopTests(unittest.TestCase):
                     runpy.run_path(boot)
 
     def test_white_line_transmits_before_optional_goal_work(self):
+        self.exercise_loop(None)
+
+    def test_distance_calibration_clears_ready_and_sends_before_target_search(self):
+        self.exercise_loop(45)
+
+    def exercise_loop(self, calibration_cm):
         entries = []
         logs = []
         commands = iter((b"b", b"l", b"i", b"g", b"i"))
@@ -49,6 +55,10 @@ class CameraLoopTests(unittest.TestCase):
 
             def find_blobs(self, thresholds, **kwargs):
                 self.assert_pristine()
+                if calibration_cm is not None:
+                    assert thresholds == [vision.cfg.WHITE]
+                    entries.append("calibration")
+                    return [SimpleNamespace(rect=(220, 128, 4, 8), cx=222, cy=132, pixels=18)]
                 entries.append("yellow" if thresholds == vision.cfg.YELLOW else "both" if thresholds == vision.GOAL_THRESHOLDS else "blue")
                 if len(packets) == 1 and thresholds == vision.GOAL_THRESHOLDS:
                     raise TypeError("simulated optional goal API error")
@@ -90,9 +100,15 @@ class CameraLoopTests(unittest.TestCase):
             "time": SimpleNamespace(ticks_us=lambda: clock, ticks_ms=lambda: clock // 1000,
                                     ticks_diff=lambda a, b: a-b, ticks_add=lambda a, b: a+b),
         }
-        with patch.dict(sys.modules, modules):
+        with patch.dict(sys.modules, modules), patch.object(vision.cfg, "BENCH_DISTANCE_CM", calibration_cm):
             with self.assertRaises(EndFrames):
                 runpy.run_path(str(Path(vision.__file__).with_name("main.py")))
+        if calibration_cm is not None:
+            self.assertEqual(entries, ["uart", "calibration"] * 5)
+            self.assertTrue(all(p[3] == 0 and p[4:8] == bytes(4) for p in packets))
+            self.assertTrue(any("CALIBRATION_CM=45" in line for line in logs))
+            self.assertTrue(any("TARGET_XY=(222, 132)" in line and "SEGMENT=" in line for line in logs))
+            return
         self.assertEqual(entries, ["uart", "both", "uart", "yellow", "blue", "uart", "uart", "uart", "both"])
         self.assertTrue(all(p[3] == 1 and p[4:6] == b"\xff\xff" for p in packets))
         self.assertEqual([p[2] for p in packets], list(range(5)))

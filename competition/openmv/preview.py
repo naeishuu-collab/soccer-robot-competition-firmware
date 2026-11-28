@@ -3,7 +3,7 @@ import math
 from array import array
 import camera_calibration as cfg
 
-PRODUCTION_API = 4
+PRODUCTION_API = 5
 WHITE, RED, GREEN = (255, 255, 255), (255, 48, 48), (0, 255, 96)
 GRAY, CYAN = (144, 144, 144), (0, 220, 255)
 PURPLE = (185, 90, 255)
@@ -80,6 +80,19 @@ class Overlay:
             self.last_error = "%s/%s:%s" % (name, type(exc).__name__, str(exc)[:80])
             self.disabled.add(name)
 
+    def calibration(self, image, actual_cm, targets):
+        if not self.mirror.roi:
+            return
+        center = (round(self.mirror.cx), round(self.mirror.cy))
+        self.primitive(image, "draw_cross", center, WHITE)
+        self.primitive(image, "draw_string", (2, 23), CYAN, "CAL %dcm C=%d,%d" % (actual_cm, center[0], center[1]))
+        for i, (_, box, xy, radius, estimated, segment) in enumerate(targets):
+            self.primitive(image, "draw_rectangle", box, CYAN)
+            self.primitive(image, "draw_cross", xy, CYAN)
+            estimate = "OUT" if segment is None else "%.1fcm" % estimated
+            self.primitive(image, "draw_string", (2, 34 + i * 10), CYAN,
+                           "XY=%d,%d R=%.1fpx %s" % (xy[0], xy[1], radius, estimate))
+
     def draw(self, image, mode, now, ticks_diff, fps, frame_ms, guard, lines, mask, escape,
              nearest, current, goal_fields, visible=(), line_us=None, gap_us=None):
         if mode == "OFF":
@@ -110,8 +123,9 @@ class Overlay:
             return
         self.last_ms = now
         draw(image, "draw_string", (2, 2), WHITE, "FPS %.1f  FRAME %dms" % (fps, frame_ms))
-        if nearest:
-            draw(image, "draw_string", (2, 12), RED, "LINE %ddeg %dcm" % (nearest[0], round(nearest[1])))
+        if guard.line_angle is not None:
+            distance = "?" if nearest is None else "%dcm" % round(nearest[1])
+            draw(image, "draw_string", (2, 12), RED, "LINE %ddeg %s" % (guard.line_angle, distance))
         if full and line_us is not None:
             draw(image, "draw_string", (2, 54), WHITE, "SCAN %dus / GAP %dus" % (line_us, gap_us or 0))
             if guard.closing_cm_s is not None:

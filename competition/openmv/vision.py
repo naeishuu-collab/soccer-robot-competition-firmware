@@ -19,7 +19,7 @@ except ImportError:
         return buffer
 
 
-PRODUCTION_API = 4
+PRODUCTION_API = 5
 CLEARANCE_CM = 25
 RELEASE_CM = 30
 ESCAPE_MEMORY_MS = 200
@@ -73,6 +73,7 @@ class Mirror:
         self.inner_context = []
         self.self_outlines = []
         self.horizon = LOOKAHEAD_CM
+        self.distance_segments = ()
         radii = tuple((r * scale, cm) for r, cm in cfg.GROUND_POINTS)
         if not cfg.MIRROR_CENTER or not cfg.MIRROR_RING or not radii or cfg.FRONT_DEG is None:
             return
@@ -83,7 +84,8 @@ class Mirror:
             ox, oy, expected_w, expected_h = window
         self.cx, self.cy = cfg.MIRROR_CENTER[0] * scale - ox, cfg.MIRROR_CENTER[1] * scale - oy
         self.inner, self.outer = (r * scale for r in cfg.MIRROR_RING)
-        pairs = tuple(zip(radii, radii[1:]))
+        self.distance_segments = tuple(zip(radii, radii[1:]))
+        pairs = self.distance_segments
         if (width, height) != (expected_w, expected_h) or not (0 <= self.inner < self.outer <=
                                                     min(self.cx, self.cy, width - 1 - self.cx, height - 1 - self.cy)):
             return
@@ -140,9 +142,38 @@ class Mirror:
                 if is_blind(x, y):
                     self.blind_pixels.add(x + y * width)
 
+    def pixel_radius(self, x, y):
+        return math.sqrt((x - self.cx) ** 2 + (y - self.cy) ** 2)
+
+    def distance_at_radius(self, radius):
+        for (r0, cm0), (r1, cm1) in self.distance_segments:
+            if min(r0, r1) <= radius <= max(r0, r1) and r0 != r1:
+                return (cm0 + (radius - r0) * (cm1 - cm0) / (r1 - r0), (r0, cm0, r1, cm1))
+        return None, None
+
     def bearing(self, x, y):
         raw = math.degrees(math.atan2(x - self.cx, self.cy - y))
         return ((raw - cfg.FRONT_DEG) * (1 if cfg.CLOCKWISE else -1)) % 360
+
+
+def calibration_targets(image, mirror):
+    """Bench only. Use one known-distance target at a time, within 30 degrees of the front."""
+    if not mirror.roi:
+        return ()
+    candidates = []
+    for blob in image.find_blobs([cfg.WHITE], roi=mirror.roi, pixels_threshold=4, area_threshold=4,
+                                 x_stride=1, y_stride=1, merge=False):
+        rect = blob.rect
+        if callable(rect):
+            box, x, y, pixels = rect(), blob.cx(), blob.cy(), blob.pixels()
+        else:
+            box, x, y, pixels = rect, blob.cx, blob.cy, blob.pixels
+        radius = mirror.pixel_radius(x, y)
+        if mirror.inner <= radius <= mirror.outer and difference(mirror.bearing(x, y), 0) <= 30:
+            distance, segment = mirror.distance_at_radius(radius)
+            candidates.append((pixels, box, (x, y), radius, distance, segment))
+    candidates.sort(reverse=True)
+    return candidates[:3]
 
 
 def in_lab(lab, limits):
@@ -391,6 +422,7 @@ class LineGuard:
         self.escape_requested = False
         self.regions = []
         self.tracks = []
+        self.line_angle = self.line_distance = self.line_xy = None
         self.closing_cm_s = self.ttc_ms = None
 
     def update(self, visible, lines, now, runs=None, rays=None, censored=()):
@@ -399,7 +431,14 @@ class LineGuard:
         self.regions.clear()
         tracks = []
         self.closing_cm_s = self.ttc_ms = None
+        self.line_angle = self.line_distance = self.line_xy = None
         nearest = min(lines.items(), key=lambda item: item[1]) if lines else None
+        if nearest:
+            self.line_angle, cm = nearest
+            if self.line_angle not in censored:
+                self.line_distance = cm
+            if runs is not None:
+                self.line_xy = rays[self.line_angle // 15][1][runs[self.line_angle][0]][:2]
         eligible = lines
         if runs is not None:
             eligible = {}
@@ -473,11 +512,12 @@ class LineGuard:
         self.ambiguous_blocked = self.held_blocked = 0
         for b in raw_close:
             if b not in close:
-                self.ambiguous_blocked |= CLOSE_BLOCKS[b // 15]
+                self.ambiguous_blocked |= LINE_BLOCKS[b // 15]
         for b in self.near:
             self.held_blocked |= CLOSE_BLOCKS[b // 15]
         self.near_blocked = self.ambiguous_blocked | self.held_blocked
-        self.blocked = self.present_blocked | self.near_blocked
+        # The ambiguous approach cone is already included in present_blocked.
+        self.blocked = self.present_blocked | self.held_blocked
         self.unknown = 0xffff & ~self.coverage
         mask = self.coverage & ~self.blocked
         self.escape_away = 0
@@ -487,7 +527,9 @@ class LineGuard:
             for bit, bearing in ((1, 0), (256, 180)):
                 if all(difference(bearing, b) >= 105 for b in self.near):
                     self.escape_away |= bit
-        return mask, self.escape_away & mask, nearest
+        # A clipped run still blocks its approach cone, but its distance is not known.
+        wire_nearest = None if self.line_distance is None else (self.line_angle, self.line_distance)
+        return mask, self.escape_away & mask, wire_nearest
 
 
 def find_goal(image, mirror, thresholds, minimum, color_at=None, roi=None, stride=1, report=None, probe=False, blobs=None):

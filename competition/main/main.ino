@@ -14,13 +14,21 @@ Decision decision;
 UsbReport<1536> report;
 Pwm transmitted{};
 uint8_t alternateSent = 0;
+RunMode runMode = RunMode::Competition;
+#if RCJ_WHEELS_LIFTED_DIAGNOSTICS
+constexpr uint32_t BenchLeaseMs = 200;
+uint32_t benchMs = 0;
+bool benchArmed = false;
+int benchWheel = -1;
+#endif
 uint32_t pollInterval = 0, pollMax = 0;
 bool sentAheadOfPoll = false, lastTxWasEscape = false;
 uint32_t cameraMs = 0, irMs = 0, ballMs = 0, pollMs = 0, pollUs = 0, releaseUs = 0;
 uint32_t cameraUs = 0, escapeRxToTxUs = 0, escapeRxToTxMaxUs = 0;
 uint32_t motorMs = 0, motorTxCount = 0, cameraBad = 0, irBad = 0, reportMs = 0;
 uint16_t irAngle = Unknown, irStrength = 0;
-bool manual = false, haveCamera = false, cameraLive = false, haveIr = false, irInvalid = false, haveBall = false;
+bool manual = RCJ_WHEELS_LIFTED_DIAGNOSTICS;
+bool haveCamera = false, cameraLive = false, haveIr = false, irInvalid = false, haveBall = false;
 bool missedIr = false, slotMalformed = false;
 bool waiting = false, irStarted = false, requestedReport = false;
 uint8_t irBytes[6]{}, irLength = 0;
@@ -99,9 +107,26 @@ void loop() {
     if (command == 's' || command == 'g') {
       manual = command == 's';
       if (manual) { pd.reset(); haveBall = false; }
+#if RCJ_WHEELS_LIFTED_DIAGNOSTICS
+      benchArmed = false;
+#endif
       break;  // Apply a stop before consuming another operator command.
     }
     if (command == 'i') requestedReport = true;
+#if RCJ_WHEELS_LIFTED_DIAGNOSTICS
+    if (manual && (command == 'M' || command == 'P' || command == 'C')) {
+      runMode = command == 'M' ? RunMode::MotorTest : command == 'P' ? RunMode::IrPdTest : RunMode::Competition;
+      benchWheel = -1;
+      requestedReport = true;
+      break;
+    }
+    if (manual && runMode == RunMode::MotorTest && command >= '1' && command <= '4')
+      benchWheel = command - '1';
+    if (!manual && runMode != RunMode::Competition && command == 'R') {
+      benchMs = millis();
+      benchArmed = true;
+    }
+#endif
   }
   readSensors();
   const uint32_t now = millis();
@@ -112,6 +137,15 @@ void loop() {
     pd.reset();
   }
   decision = decide(manual, cameraLive, camera, irFresh, irInvalid, missedIr, haveBall, pd.pwm, pd.error);
+
+#if RCJ_WHEELS_LIFTED_DIAGNOSTICS
+  if (runMode != RunMode::Competition) {
+    if (now - benchMs >= BenchLeaseMs || !cameraLive || !irFresh || irInvalid || missedIr)
+      benchArmed = false;
+    decision = benchDecision(runMode, benchArmed, benchWheel, haveBall, pd.pwm,
+                             manual, cameraLive, irFresh, irInvalid, missedIr);
+  }
+#endif
 
   if (!waiting && micros() - releaseUs >= BusGuardUs) {
     const bool duePoll = !irStarted || now - pollMs >= PollMs;

@@ -2,11 +2,6 @@
 #include <math.h>
 #include <RobotCommon.h>
 
-inline uint16_t legacyRequired(const robot::Pwm& pwm) {
-  if (pwm[0] != pwm[1] || pwm[2] != pwm[3] || pwm[0] != pwm[2]) return 0xffff;
-  return pwm[0] > 0 ? robot::Front : pwm[0] < 0 ? robot::Rear : 0;
-}
-
 // Commissioned sweep. Fields describe worst-case travel, including latency and coast,
 // over the complete stopping interval. Zero commissioning values deny motion.
 struct SweepConfig {
@@ -18,7 +13,6 @@ struct Sweep {
 };
 constexpr SweepConfig CompetitionSweep{};
 constexpr bool EnableReverseBridge = false;
-constexpr uint16_t FrontWedge = 0xc007;
 inline bool permitsSweep(const Sweep& sweep, uint16_t safe) {
   return sweep.withinRange && !(sweep.required & ~safe);
 }

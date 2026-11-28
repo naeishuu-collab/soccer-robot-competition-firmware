@@ -144,6 +144,8 @@ void irFrame(uint16_t angle, uint16_t strength) {
   Serial1.inject(data, sizeof(data));
 }
 
+uint8_t transmittedChasePacket[MotorSize]{};
+
 void mainLoop() {
   using namespace main_board;
   Serial1 = FakeSerial{};
@@ -208,7 +210,19 @@ void mainLoop() {
   assert(decision.reason == StopReason::CameraNotReady);
   at(172); cameraFrame(6, Ready, Front); loop();
   assert(decision.state == State::Chase);  // No goals and only the intended heading observed.
-  at(190); cameraFrame(6, Ready, Front); loop();
+  const uint32_t oldPoll = pollMs;
+  for (uint32_t t = 173; t <= 194 && pollMs == oldPoll; ++t) { at(t); loop(); }
+  assert(waiting);
+  const uint32_t freshPoll = pollMs;
+  at(freshPoll + 5); irFrame(5, 6909); loop();
+  assert(pd.pwm[0] != pd.pwm[2] && decision.path == PathMode::Straight && decision.required == Front);
+  equal(decision.pwm, 160, 160, 160, 160);
+  at(freshPoll + 6); loop();
+  equal(transmitted, 160, 160, 160, 160);
+  assert(Serial1.tx.size() >= sizeof(transmittedChasePacket));
+  memcpy(transmittedChasePacket, Serial1.tx.data() + Serial1.tx.size() - sizeof(transmittedChasePacket),
+         sizeof(transmittedChasePacket));
+  at(freshPoll + 7); cameraFrame(6, Ready, Front); loop();
   assert(cameraMs == 172);  // Duplicates don't extend freshness.
   at(372); loop();
   assert(decision.reason == StopReason::CameraTimeout);
@@ -233,6 +247,12 @@ void motorLoop() {
   Serial1 = FakeSerial{};
   at(1); setup(); loop();
   equal(written, 0, 0, 0, 0);
+  Serial1.inject(transmittedChasePacket, sizeof(transmittedChasePacket));
+  at(2); loop();
+  equal(written, 160, 160, 160, 160);
+  assert(rxCount == 1 && levels[6] == 160 && levels[11] == 160);
+  std::cout << "MAIN to MOTOR: partial observation, PD, UART/RS485 and nonzero applied PWM OK\n";
+  rxCount = 0;
   Pwm command{175, 175, 210, 140};
   uint8_t bytes[MotorSize];
   encodeMotor(command, bytes);
@@ -274,6 +294,23 @@ void motorLoop() {
   const std::string log(Serial.tx.begin(), Serial.tx.end());
   assert(log.find("STOP_REASON=WATCHDOG") != std::string::npos);
   std::cout << "MOTOR loop: CRC, range, truncation, startup, reversal and watchdog OK\n";
+}
+
+void benchPolicy() {
+  const Pwm pwm{210, 210, 140, 140};
+  auto decision = benchDecision(RunMode::MotorTest, false, 0, true, pwm, false, true, true, false, false);
+  assert(decision.reason == StopReason::DiagnosticIdle);
+  equal(decision.pwm, 0, 0, 0, 0);
+  decision = benchDecision(RunMode::MotorTest, true, 2, false, pwm, false, true, true, false, false);
+  equal(decision.pwm, 0, 0, 160, 0);
+  decision = benchDecision(RunMode::IrPdTest, true, -1, true, pwm, false, true, true, false, false);
+  equal(decision.pwm, 160, 160, 140, 140);
+  assert(benchDecision(RunMode::IrPdTest, true, -1, true, pwm, false, false, true, false, false)
+      .reason == StopReason::CameraTimeout);
+  assert(benchDecision(RunMode::IrPdTest, true, -1, true, pwm, false, true, false, false, true)
+      .reason == StopReason::IrTimeout);
+  assert(benchDecision(RunMode::MotorTest, true, 0, true, pwm, true, true, true, false, false)
+      .reason == StopReason::Manual);
 }
 
 void reverseBridge() {
@@ -361,5 +398,6 @@ int main() {
   mainLoop();
   motorLoop();
   reverseBridge();
+  benchPolicy();
   pollFairness();
 }

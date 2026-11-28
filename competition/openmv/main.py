@@ -14,8 +14,8 @@ try:
 except ImportError:
     disable_preview = None
 
-PRODUCTION_API = 4
-BUILD = "rcj-openmv-competition-4"
+PRODUCTION_API = 5
+BUILD = "rcj-openmv-competition-5"
 CAPTURE_ERRORS = (AttributeError, TypeError, ValueError, MemoryError, OSError, RuntimeError)
 BASELINE = ((30, 100, -30, 30, 30, 127), (10, 80, -30, 50, -128, -20))
 
@@ -150,10 +150,14 @@ def main():
         mode = "LIGHT"
     if disable_preview:
         disable_preview(mode == "OFF")
-    bench = (cfg.BENCH_BASELINE or cfg.BENCH_EXPOSURE_US is not None or cfg.BENCH_GAIN_DB is not None
+    calibration_cm = cfg.BENCH_DISTANCE_CM
+    if calibration_cm not in (None, 20, 30, 45):
+        raise ValueError("BENCH_DISTANCE_CM must be None, 20, 30 or 45")
+    bench = (calibration_cm is not None or cfg.BENCH_BASELINE or cfg.BENCH_EXPOSURE_US is not None or cfg.BENCH_GAIN_DB is not None
              or cfg.BENCH_RGB_GAIN_DB is not None or window is not None or cfg.BENCH_FRAME_SIZE is not None or cfg.BENCH_WHITE_CANDIDATE
              or cfg.BENCH_WHITE_BACKEND is not None)
     comparison = None
+    targets = ()
     empty_visible, empty_lines = set(), {}
     sequence = sent = partial = late = frames = interval_late = goal_skips = goal_passes = 0
     goal_errors = 0
@@ -208,6 +212,13 @@ def main():
         sequence = (sequence + 1) & 255
         timings.add(12, time.ticks_diff(uart_end, scanned))
 
+        if calibration_cm is not None:
+            try:
+                targets = vision.calibration_targets(frame, mirror)
+            except CAPTURE_ERRORS as exc:
+                targets = ()
+                comparison = "calibration_targets/%s:%s" % (type(exc).__name__, str(exc)[:80])
+
         if ready and cfg.BENCH_WHITE_BACKEND:
             started = time.ticks_us()
             try:
@@ -220,7 +231,9 @@ def main():
         skip = frame_ms >= 75 or gap >= 85000
         due = last_goal_ms is None or time.ticks_diff(now, last_goal_ms) >= goal_interval_ms
         probing = ready and not skip and yellow_probe
-        if cfg.BENCH_BASELINE and mode != "OFF" and goal_mode != b"l":
+        if calibration_cm is not None:
+            pass  # Show white targets and production scan from the same frame.
+        elif cfg.BENCH_BASELINE and mode != "OFF" and goal_mode != b"l":
             try:
                 reference_goals(frame, overlay)
             except CAPTURE_ERRORS as exc:
@@ -276,6 +289,8 @@ def main():
         before_draw = time.ticks_us()
         if mode != "OFF":
             try:
+                if calibration_cm is not None:
+                    overlay.calibration(frame, calibration_cm, targets)
                 overlay.draw(frame, mode, now, time.ticks_diff, fps, frame_ms, guard, lines,
                              mask if ready and not slow else 0, escape if ready and not slow else 0,
                              nearest, current, fields, visible,
@@ -303,7 +318,7 @@ def main():
             if goal_mode == b"l":
                 goals[0] = goals[1] = None
         elapsed = time.ticks_diff(now, last_report)
-        if elapsed >= 2000 or command == b"i" or probing:
+        if (cfg.AUTO_REPORT_MS and elapsed >= cfg.AUTO_REPORT_MS) or command == b"i" or probing:
             fps = frames * 1000 / max(1, elapsed)
             ide = ide_connected() if ide_connected else None
             summary = ("BUILD=%s FPS=%.1f MODE=%s IDE=%s EXPOSURE_US=%d ACTUAL_EXPOSURE_US=%d BENCH=%d "
@@ -317,17 +332,24 @@ def main():
                            nearest, sent, partial, len(lines), scanner.strict_hits, guard.closing_cm_s, guard.ttc_ms,
                            (clearance, block), comparison, late, interval_late, goal_skips, goal_errors, goal_error,
                            overlay.errors, overlay.last_error)
-            output = [timings.report()]
+            radius = "-" if guard.line_xy is None else "%.1f" % mirror.pixel_radius(*guard.line_xy)
+            output = ["LINE_ANGLE=%s LINE_DISTANCE=%s LINE_PIXEL_RADIUS=%s DISTANCE_VALID=%d" %
+                      (guard.line_angle, guard.line_distance, radius, nearest is not None)]
+            dark, clipped, self_mask = vision.observation_reasons(scanner.reasons if ready else {})
+            output.append("DARK_MASK=%04x CLIPPED_MASK=%04x SELF_MASK=%04x PRESENT_BLOCK=%04x "
+                          "AMBIGUOUS_BLOCK=%04x HELD_BLOCK=%04x ESC_UNKNOWN=%04x ESC_LINE=%04x" %
+                          (dark, clipped, self_mask, guard.present_blocked, guard.ambiguous_blocked,
+                           guard.held_blocked, guard.escape_away & guard.unknown, guard.escape_away & guard.blocked))
+            if calibration_cm is not None:
+                center = (mirror.cx, mirror.cy) if mirror.roi else None
+                output.append("CALIBRATION_CM=%d MIRROR_CENTER=%s TARGETS=%d" % (calibration_cm, center, len(targets)))
+                for _, _, xy, r, estimated, segment in targets:
+                    output.append("TARGET_XY=%s PIXEL_RADIUS=%.2f ESTIMATED_CM=%s SEGMENT=%s DISTANCE_VALID=%d" %
+                                  (xy, r, estimated, segment, segment is not None))
+            output.append(timings.report())
             if command == b"i" or probing:
-                dark, clipped, self_mask = vision.observation_reasons(scanner.reasons if ready else {})
-                output.append(
-                    "DARK_MASK=%04x CLIPPED_MASK=%04x SELF_MASK=%04x GEOMETRY_READY=%d "
-                    "PRESENT_BLOCK=%04x AMBIGUOUS_BLOCK=%04x HELD_BLOCK=%04x "
-                    "ESC_UNKNOWN=%04x ESC_LINE=%04x CENSORED=%s HELD=%s" %
-                    (dark, clipped, self_mask, ready, guard.present_blocked, guard.ambiguous_blocked,
-                     guard.held_blocked, guard.escape_away & guard.unknown,
-                     guard.escape_away & guard.blocked, sorted(scanner.censored) if ready else [],
-                     sorted(guard.near_history)))
+                output.append("GEOMETRY_READY=%d CENSORED=%s HELD=%s" %
+                              (ready, sorted(scanner.censored) if ready else [], sorted(guard.near_history)))
                 rays = "".join("W" if b in guard.confirmed else "w" if b in lines else "O" if b in visible else "?"
                                for b in range(0, 360, 15))
                 output.append("RAYS=%s WHITE_CM=%s ROI=%s GOALS=%s COUNTS(raw,small,clip,ring,shape,turf,accepted)=%s" %
