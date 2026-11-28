@@ -1,6 +1,6 @@
 """Calibration retained from 968bc52. Verify mirror orientation, LAB and ground distances on hardware."""
 
-PRODUCTION_API = 8
+PRODUCTION_API = 9
 
 FRAME_SIZE = "QVGA"
 

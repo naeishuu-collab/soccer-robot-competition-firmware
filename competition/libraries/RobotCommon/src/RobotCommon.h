@@ -72,8 +72,8 @@ inline Decode decodeCamera(const uint8_t* bytes, Camera& camera) {
   const uint16_t safe = read16(bytes + 4), escape = read16(bytes + 6);
   const uint16_t line = read16(bytes + 8), yellow = read16(bytes + 12), blue = read16(bytes + 16);
   const uint8_t version = bytes[20];
-  if ((version != 1 && version != 2) || (flags & (version == 1 ? 0xf0 : 0xe0)) || !bearing(line) || !bearing(yellow) || !bearing(blue) ||
-      (line == Unknown) != (bytes[10] == 255) ||
+  if ((version != 1 && version != 2 && version != 3) || (flags & (version == 1 ? 0xf0 : 0xe0)) || !bearing(line) || !bearing(yellow) || !bearing(blue) ||
+      (version < 3 ? (line == Unknown) != (bytes[10] == 255) : (line == Unknown && bytes[10] != 255)) ||
       bool(flags & Slow) != (bytes[11] > 100) || bytes[14] > 100 || bytes[18] > 100 ||
       (yellow == Unknown ? bytes[14] != 0 || bytes[15] != 255 : bytes[15] > 30) ||
       (blue == Unknown ? bytes[18] != 0 || bytes[19] != 255 : bytes[19] > 30) ||

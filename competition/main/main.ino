@@ -5,6 +5,10 @@
 using namespace robot;
 constexpr uint8_t BusEnable = 8;
 constexpr uint32_t MotorRefreshMs = 30;
+#ifndef RCJ_STARTUP_DELAY_MS
+#define RCJ_STARTUP_DELAY_MS 3000
+#endif
+uint32_t bootMs = 0;
 
 SerialPIO cameraSerial(2, 3, 256);
 Receiver<CameraSize, 0xc6, 0x6c> cameraRx;
@@ -34,7 +38,7 @@ uint32_t cameraMs = 0, irMs = 0, pollMs = 0, pollUs = 0, releaseUs = 0;
 uint32_t cameraUs = 0, escapeRxToTxUs = 0, escapeRxToTxMaxUs = 0;
 uint32_t motorMs = 0, motorTxCount = 0, cameraBad = 0, irBad = 0, reportMs = 0;
 uint16_t irAngle = Unknown, irStrength = 0;
-bool manual = RCJ_WHEELS_LIFTED_DIAGNOSTICS || RCJ_BASIC_CHASE || RCJ_MANAGED_COMPETITION;
+bool manual = RCJ_WHEELS_LIFTED_DIAGNOSTICS || RCJ_BASIC_CHASE;
 bool haveCamera = false, cameraLive = false, haveIr = false, irInvalid = false, haveBall = false;
 bool missedIr = false, slotMalformed = false;
 bool waiting = false, irStarted = false, requestedReport = false;
@@ -96,6 +100,7 @@ void readSensors() {
 }
 
 void setup() {
+  bootMs = millis();
   digitalWrite(11, LOW);
   pinMode(11, OUTPUT);  // Existing kicker output stays low.
   rs485Begin(BusEnable);
@@ -192,6 +197,13 @@ void loop() {
       benchArmed = false;
     decision = benchDecision(runMode, benchArmed, benchWheel, haveBall, pd.pwm,
                              manual, cameraLive, irFresh, irInvalid, missedIr);
+  }
+#endif
+
+#if !RCJ_BASIC_CHASE && !RCJ_WHEELS_LIFTED_DIAGNOSTICS
+  if (!manual && now - bootMs < RCJ_STARTUP_DELAY_MS) {
+    decision = Decision{};
+    decision.reason = StopReason::Startup;
   }
 #endif
 

@@ -2,10 +2,10 @@
 
 const char* const states[] = {"STOP", "CHASE", "ESCAPE"};
 const char* const reasons[] = {"NONE", "MANUAL_STOP", "CAMERA_TIMEOUT", "CAMERA_NOT_READY",
-  "CAMERA_SLOW", "IR_TIMEOUT", "IR_INVALID", "BALL_LOST", "NO_SAFE_ESCAPE", "PATH_BLOCKED", "IR_NO_REPLY", "DIAGNOSTIC_IDLE"};
+  "CAMERA_SLOW", "IR_TIMEOUT", "IR_INVALID", "BALL_LOST", "NO_SAFE_ESCAPE", "PATH_BLOCKED", "IR_NO_REPLY", "DIAGNOSTIC_IDLE", "STARTUP_WAIT"};
 const char* const details[] = {"active", "usb_s", "no_fresh_crc_frame", "camera_ready_flag_clear",
   "capture_and_safety_over_100ms", "no_valid_reply_in_100ms", "malformed_ir_response",
-  "no_fresh_ball_bearing", "neither_forward_nor_reverse_clear", "pwm_trajectory_mask_closed", "no_reply_in_reserved_bus_slot", "wheel_unselected_or_usb_lease_inactive"};
+  "no_fresh_ball_bearing", "neither_forward_nor_reverse_clear", "pwm_trajectory_mask_closed", "no_reply_in_reserved_bus_slot", "wheel_unselected_or_usb_lease_inactive", "startup_delay"};
 
 struct Event { uint32_t ms; State state; StopReason reason; };
 Event events[8]{};
@@ -70,8 +70,8 @@ void diagnose(uint32_t now, bool cameraFresh, bool irFresh) {
             : decision.reason == StopReason::NoEscape && !camera.safe
                 ? "camera_reports_no_safe_sector"
                 : decision.reason == StopReason::PathBlocked &&
-                    (runMode == RunMode::BasicChase || runMode == RunMode::ManagedCompetition) && camera.version != 2
-                    ? "camera_protocol_v2_required"
+                    (runMode == RunMode::BasicChase || runMode == RunMode::ManagedCompetition) && camera.version < 2
+                    ? "camera_protocol_v2_or_later_required"
                 : decision.reason == StopReason::PathBlocked &&
                     (runMode == RunMode::BasicChase || runMode == RunMode::ManagedCompetition) && (camera.flags & LineHazard)
                     ? "current_or_held_white_line_hazard"

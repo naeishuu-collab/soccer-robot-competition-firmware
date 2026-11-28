@@ -412,10 +412,13 @@ class VisionTests(unittest.TestCase):
         self.assertEqual(escape, 0)
         self.assertEqual(self.guard.line_angle, 0)
         self.assertIsNotNone(self.guard.line_xy)
-        self.assertIsNone(nearest)
+        self.assertEqual(nearest, (0, None))
         miss = ((65535, 0, 255),) * 2
         packet = vision.packet(0, True, False, safe, escape, nearest, miss, 41)
         self.assertEqual(bytes(packet[8:11]), b"\xff\xff\xff")
+        packet = vision.packet(0, True, False, safe, escape, nearest, miss, 41, blocked=self.guard.blocked)
+        self.assertEqual(bytes(packet[8:11]), b"\x00\x00\xff")
+        self.assertEqual(packet[20], 3)
 
     def test_distance_calibration_reports_target_and_interval_without_clamping(self):
         self.assertEqual(self.mirror.distance_at_radius(50), (18, (50, 18, 74, 50)))
@@ -471,7 +474,7 @@ class VisionTests(unittest.TestCase):
             self.assertTrue(guard.near_history)
             pkt = vision.packet(1, True, guard.escape_requested, safe, 0, None,
                                 ((65535, 0, 255), (65535, 0, 255)), 40, blocked=guard.blocked)
-            self.assertEqual(pkt[20], 2)
+            self.assertEqual(pkt[20], 3)
             self.assertTrue(pkt[3] & 16)
         guard.update(self.rays, {}, 1010)
         safe, escape, _ = guard.update(self.rays, {}, 1040)

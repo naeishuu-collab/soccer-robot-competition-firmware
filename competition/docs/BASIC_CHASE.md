@@ -5,7 +5,7 @@
 ## 書き込み前
 
 1. 動力を切り、現行ファームとOpenMVの4ファイル・個体別校正値を保存する。基板のRP2350 A/B、フラッシュ容量、配線を実物で確認する。配布物の `MANIFEST.txt` とSHA-256を照合する。
-2. MAINに `MAIN-BASIC_CHASE.uf2`、IRに `IR.uf2`、MOTORに `MOTOR.uf2` をそれぞれ対象基板を確認して書き込む。OpenMVの `main.py`、`vision.py`、`preview.py`、`camera_calibration.py` はAPI 8の同じ版の組で使用し、既存の実機固有値を上書きしないよう比較する。旧APIのカメラでは危険履歴を区別できず追尾は止まる。従来の保守的な競技判定へ戻すには `MAIN-COMPETITION-CONSERVATIVE.uf2`。診断版は床上で使わない。
+2. MAINに `MAIN-BASIC_CHASE.uf2`、IRに `IR.uf2`、MOTORに `MOTOR.uf2` をそれぞれ対象基板を確認して書き込む。OpenMVの `main.py`、`vision.py`、`preview.py`、`camera_calibration.py` はAPI 9の同じ版の組で使用し、既存の実機固有値を上書きしないよう比較する。旧API 8のMAINは新しい通信版3を受理しない。従来の保守的な競技判定へ戻すには `MAIN-COMPETITION.uf2`。診断版は床上で使わない。
 3. 車輪を浮かせて固定し、USB 115200の `i` で `MODE=BASIC_CHASE`、IR・カメラの正常状態と `SAFE_MASK` を確認する。車輪の向き、手動停止、USB切断、カメラ・IR断、MOTOR側の100ms停止と200ms反転待ちを、別途動力遮断できる状態で確認する。機体の誤動作時は直ちに動力を遮断する。
 
 ## 動かすとき
@@ -20,6 +20,8 @@ python competition/scripts/basic_deadman.py COM5 1
 
 USB上の手動操作では、停止 `s` → ステージ `1`/`2`/`3` → 停止解除 `g` → 200ms未満の間隔で大文字 `R` を送り続ける。手動停止 `s`、USB切断、200ms更新なし、最大2秒、カメラまたはIRの異常で再起動許可が解除される。再開には `s`・ステージ選択・`g` と新しい `R` が必要。ボール消失ではSTOP、近接白線では既存の前後退避候補を優先し、危険解除後に許可期間内であれば追尾に復帰する。
 
-追尾時は全16セクターの観測を要求しない。カメラAPI 8の危険フラグには現在の白線と死角に残る危険履歴を含み、フラグがある間は追尾を止める。退避要求があれば観測済み候補への退避を優先する。`CAMERA_PROTOCOL=2`、`LINE_HAZARD`、`SAFE_MASK`、`PWM_CALCULATED`、`PWM_AFTER_SAFETY`、`PWM_TRANSMITTED`、`STOP_REASON` とMOTORの `PWM_APPLIED`・`REVERSE_WAIT` を確認する。未知方向を走れることは安全の証明ではない。
+追尾時は全16セクターの観測を要求しない。カメラAPI 9の危険フラグには現在の白線と死角に残る危険履歴を含み、フラグがある間は追尾を止める。退避要求があれば観測済み候補への退避を優先する。`CAMERA_PROTOCOL=3`、`LINE_HAZARD`、`SAFE_MASK`、`PWM_CALCULATED`、`PWM_AFTER_SAFETY`、`PWM_TRANSMITTED`、`STOP_REASON` とMOTORの `PWM_APPLIED`・`REVERSE_WAIT` を確認する。未知方向を走れることは安全の証明ではない。
 
-`MAIN-COMPETITION-MANAGED.uf2` は通常モードの管理区域向け暫定版で、Arduino IDEの通常ビルドもこの設定。起動時は手動停止、USB `g` で解除、`s` で停止する。BASIC_CHASEの200msデッドマンと2秒上限は適用されないため、外部遮断担当者が必須。未校正の旋回を競技で安全と判定するものではない。`MAIN-COMPETITION-CONSERVATIVE.uf2` は `RCJ_MANAGED_COMPETITION=0` でビルドした従来のCompetitionSweep判定を維持する。カメラ距離・車輪方向・ボール追尾・白線退避・復帰、USB操作はいずれも実機未確認。
+`MAIN-COMPETITION-MANAGED.uf2` は管理区域向け暫定版で、Arduino IDEの通常ビルドもこの設定。**電源投入後3秒が経過し通信・センサー条件がそろうと、USB接続や`g`なしで走り出す。** `s` は手動停止を保持し、`g` で解除する。BASIC_CHASEの200msデッドマンと2秒上限は適用されないため、外部遮断担当者が必須。未校正の旋回を競技で安全と判定するものではない。`MAIN-COMPETITION.uf2` は `RCJ_MANAGED_COMPETITION=0` でビルドした従来のCompetitionSweep判定を維持し、同じ3秒待機後に自動開始する。カメラ距離・車輪方向・ボール追尾・白線退避・復帰、USB操作はいずれも実機未確認。
+
+`NO_SAFE_ESCAPE` と `SAFE_MASK=0000` では退避先を推測せず停止する。OpenMV USBの `i` で `OBSERVED_MASK`、`UNKNOWN_MASK`、`CONFIRMED_BLOCK`、`SUSPECTED_BLOCK`、`HELD_BLOCK`、`ESC_UNKNOWN`、`ESC_LINE`、`HELD_AGE_MS_AND_CLEAR_FRAMES`、`RAYS` を保存し、実際の画像と照合する。白線が死角に残る場合は、再観測して2フレーム以上かつ100ms以上の解除条件を満たすまで履歴が残る。時間だけで消さない。方向が見えて距離だけ不明な候補は版3で方位を送るが、距離を捏造しない。

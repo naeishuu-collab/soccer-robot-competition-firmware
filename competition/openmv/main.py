@@ -14,8 +14,8 @@ try:
 except ImportError:
     disable_preview = None
 
-PRODUCTION_API = 8
-BUILD = "rcj-openmv-competition-8"
+PRODUCTION_API = 9
+BUILD = "rcj-openmv-competition-9"
 CAPTURE_ERRORS = (AttributeError, TypeError, ValueError, MemoryError, OSError, RuntimeError)
 BASELINE = ((30, 100, -30, 30, 30, 127), (10, 80, -30, 50, -128, -20))
 
@@ -334,8 +334,8 @@ def main():
                            overlay.errors, overlay.last_error)
             radius = "-" if guard.line_xy is None else "%.1f" % mirror.pixel_radius(*guard.line_xy)
             output = ["LINE_ANGLE=%s LINE_DISTANCE=%s LINE_PIXEL_RADIUS=%s DISTANCE_VALID=%d DISTANCE_SOURCE=%s" %
-                      (guard.line_angle, guard.line_distance, radius, nearest is not None,
-                       "TABLE_ESTIMATE" if nearest is not None else "UNKNOWN")]
+                      (guard.line_angle, guard.line_distance, radius, guard.line_distance is not None,
+                       "TABLE_ESTIMATE" if guard.line_distance is not None else "UNKNOWN")]
             output.append("LINE_CLASS=%s CLASS_CONFIDENCE=UNASSESSED CLASS_REASON=NO_VERIFIED_FIELD_LOCALIZATION" %
                           ("UNKNOWN_LINE" if lines else "NO_CURRENT_LINE"))
             dark, clipped, self_mask = vision.observation_reasons(scanner.reasons if ready else {})
@@ -353,6 +353,9 @@ def main():
             if command == b"i" or probing:
                 output.append("GEOMETRY_READY=%d CENSORED=%s HELD=%s" %
                               (ready, sorted(scanner.censored) if ready else [], sorted(guard.near_history)))
+                output.append("HELD_AGE_MS_AND_CLEAR_FRAMES=%s RELEASE_AFTER_MS=100 CLEAR_FRAMES=2" %
+                              [(b, time.ticks_diff(now, last), count)
+                               for b, (last, count) in sorted(guard.near_history.items())])
                 rays = "".join("W" if b in guard.confirmed else "w" if b in lines else "O" if b in visible else "?"
                                for b in range(0, 360, 15))
                 output.append("RAYS=%s WHITE_CM=%s REJECTED_SELF_RAYS=%s ROI=%s GOALS=%s COUNTS(raw,small,clip,ring,shape,turf,accepted)=%s" %

@@ -5,7 +5,7 @@
 enum class State { Stop, Chase, Escape };
 enum class StopReason {
   None, Manual, CameraTimeout, CameraNotReady, CameraSlow, IrTimeout, IrInvalid,
-  BallLost, NoEscape, PathBlocked, IrNoReply, DiagnosticIdle, Count
+  BallLost, NoEscape, PathBlocked, IrNoReply, DiagnosticIdle, Startup, Count
 };
 enum class PathMode { Stop, Original, Sweep, ReducedTurn, Straight, Escape, Diagnostic };
 enum class Fallback { None, Mask, Unmeasured, Range, Ambiguous, Unsupported };
@@ -162,7 +162,7 @@ inline Decision basicDecision(bool armed, int cap, bool manual, bool cameraFresh
   if (out.state != State::Escape) {
     if (!tracking) return out;
     // V1 cannot distinguish unknown sectors from retained white-line hazards.
-    if (cam.version != 2 || (cam.flags & robot::LineHazard) ||
+    if (cam.version < 2 || (cam.flags & robot::LineHazard) ||
         (cam.line != robot::Unknown && (cam.lineCm == 255 || cam.lineCm <= 35))) {
       out.reason = StopReason::PathBlocked;
       return out;
