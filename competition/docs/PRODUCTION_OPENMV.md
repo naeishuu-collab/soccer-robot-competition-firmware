@@ -1,5 +1,7 @@
 # 本番 OpenMV の修復と実機比較
 
+新しい白線アルゴリズム、表示、診断と導入は [白線・観測範囲と動的テスト](WHITE_LINE.md) を参照。以下は前回の描画修復の記録。
+
 ## 調査結果
 
 作業前のDraft PR #7、作業ツリー、ローカルHEADは f8908c500d2b671d34dcca5a18daa449f5b114c2。OPENMV (E:) から4ファイルを読み戻した。vision.py と preview.py は当時のコミットとハッシュ一致。main.py はインデント・コメント等の差があり、構文木で処理が一致した。camera_calibration.py の差は VISUALIZATION_MODE が実機では FULL だったこと。現物の4ファイルはPCへ退避した。

@@ -60,7 +60,7 @@ void diagnose(uint32_t now, bool cameraFresh, bool irFresh) {
         "YELLOW_GOAL=%d BLUE_GOAL=%d TARGET_GOAL=%s OPPONENT_ANGLE=%d OWN_ANGLE=%d GOAL_QUALITY=%u,%u\n"
         "PD_ERROR=%d PD_P=%.2f PD_D=%.2f PD_TURN=%d\n"
         "PWM_CALCULATED=%d,%d,%d,%d PWM_AFTER_SAFETY=%d,%d,%d,%d PWM_TRANSMITTED=%d,%d,%d,%d\n"
-        "MOTOR_TX_COUNT=%lu PWM_ALT_TRANSMITTED=%u EVENT_DROPPED=%lu\nSTOP_COUNT=%lu STOP_DURATION_MS=%lu\n",
+        "MOTOR_TX_COUNT=%lu PWM_ALT_TRANSMITTED=%u EVENT_DROPPED=%lu\nESCAPE_RX_TO_TX_US=%lu ESCAPE_RX_TO_TX_MAX_US=%lu\nSTOP_COUNT=%lu STOP_DURATION_MS=%lu\n",
         states[int(decision.state)], reasons[reason],
         decision.reason == StopReason::BallLost && irAngle == Unknown && irStrength
             ? "ir_vector_cancelled" : details[reason],
@@ -81,6 +81,7 @@ void diagnose(uint32_t now, bool cameraFresh, bool irFresh) {
         decision.pwm[0], decision.pwm[1], decision.pwm[2], decision.pwm[3],
         transmitted[0], transmitted[1], transmitted[2], transmitted[3],
         (unsigned long)motorTxCount, unsigned(alternateSent), (unsigned long)eventDropped,
+        (unsigned long)escapeRxToTxUs, (unsigned long)escapeRxToTxMaxUs,
         (unsigned long)totalCount, (unsigned long)totalMs));
     for (int i = 1; i < int(StopReason::Count) && report.length < sizeof(report.data) - 1; ++i) {
       if (!stopCount[i]) continue;

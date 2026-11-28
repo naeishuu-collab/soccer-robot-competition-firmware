@@ -81,7 +81,21 @@ int main() {
   assert(decide(false, true, cam, true, false, false, true, curve, 20).state == State::Stop);
   cam.flags = robot::Ready | robot::Escape;
   cam.escape = robot::Rear;
-  assert(decide(false, true, cam, false, false, true, false, curve, 20, model, true).path == PathMode::Escape);
+  assert(decide(false, true, cam, false, false, true, false, curve, 20, model, true).reason == StopReason::IrTimeout);
+  assert(decide(false, true, cam, true, false, false, false, curve, 20, model, true).path == PathMode::Escape);
+  const robot::Pwm logged{140,140,210,210};
+  cam.line = 165;
+  cam.lineCm = 18;
+  cam.safe = cam.escape = 0;
+  const auto oldLog = decide(false, true, cam, true, false, false, true, logged, -5);
+  assert(oldLog.reason == StopReason::NoEscape && oldLog.required == 0x0101 && oldLog.blocked == 0x0101);
+  cam.safe = cam.escape = robot::Front;  // Clear forward observation with the rear line.
+  const auto restored = decide(false, true, cam, true, false, false, true, logged, -5);
+  assert(restored.path == PathMode::Escape && restored.pwm[0] == 175 && restored.pwm[3] == 175);
+  cam.flags = robot::Ready;
+  cam.safe = 0xffff;
+  assert(decide(false, true, cam, true, false, false, true, logged, -5).path == PathMode::Original);
+  std::cout << "Recorded stop reproduced; observed corridor chooses forward escape\n";
   std::cout << "Integrated default, eligible forward cases: unnecessary stops 2 -> 0\n";
   assert(!candidateRequired(cases[0].pwm, {8, 9, 14, 28, 1, 20}).withinRange);
   assert(!candidateRequired(cases[0].pwm, {}).withinRange);

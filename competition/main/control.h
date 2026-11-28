@@ -27,6 +27,9 @@ inline Decision decide(bool manual, bool cameraFresh, const robot::Camera& cam,
   else if (!cameraFresh) out.reason = StopReason::CameraTimeout;
   else if (cam.flags & robot::Slow) out.reason = StopReason::CameraSlow;
   else if (!(cam.flags & robot::Ready)) out.reason = StopReason::CameraNotReady;
+  else if (!irFresh && (!irInvalid || missedIr)) out.reason = StopReason::IrTimeout;
+  else if (irInvalid) out.reason = StopReason::IrInvalid;
+  else if (missedIr) out.reason = StopReason::IrNoReply;
   else if (cam.flags & robot::Escape) {
     out.required = robot::Front | robot::Rear;
     out.blocked = out.required & ~cam.escape;
@@ -40,10 +43,7 @@ inline Decision decide(bool manual, bool cameraFresh, const robot::Camera& cam,
       out.required = duty < 0 ? robot::Rear : robot::Front;
       out.blocked = 0;
     } else out.reason = StopReason::NoEscape;
-  } else if (!irFresh && (!irInvalid || missedIr)) out.reason = StopReason::IrTimeout;
-  else if (irInvalid) out.reason = StopReason::IrInvalid;
-  else if (missedIr) out.reason = StopReason::IrNoReply;
-  else if (!tracking) out.reason = StopReason::BallLost;
+  } else if (!tracking) out.reason = StopReason::BallLost;
   else {
     out.required = legacyRequired(pwm);
     out.blocked = out.required & ~cam.safe;

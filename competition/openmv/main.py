@@ -14,7 +14,7 @@ try:
 except ImportError:
     disable_preview = None
 
-BUILD = "rcj-openmv-production-2"
+BUILD = "rcj-openmv-white-line-3"
 CAPTURE_ERRORS = (AttributeError, TypeError, ValueError, MemoryError, OSError, RuntimeError)
 BASELINE = ((30, 100, -30, 30, 30, 127), (10, 80, -30, 50, -128, -20))
 
@@ -24,7 +24,15 @@ def initialize_camera():
         pyb.LED(led).off()
     sensor.reset()
     sensor.set_pixformat(sensor.RGB565)
-    sensor.set_framesize(getattr(sensor, cfg.FRAME_SIZE))
+    if cfg.BENCH_FRAME_SIZE not in (None, "QQVGA") or (cfg.BENCH_FRAME_SIZE and cfg.BENCH_WINDOW):
+        raise ValueError("Use either the QVGA crop or the QQVGA comparison")
+    sensor.set_framesize(getattr(sensor, cfg.BENCH_FRAME_SIZE or cfg.FRAME_SIZE))
+    set_buffers = getattr(sensor, "set_framebuffers", None)
+    if set_buffers and not cfg.BENCH_BASELINE:
+        try:
+            set_buffers(3)
+        except CAPTURE_ERRORS as exc:
+            print("FRAME_BUFFERS=driver_default %s" % type(exc).__name__)
     window = None
     if cfg.BENCH_WINDOW is not None:
         sensor.set_windowing(cfg.BENCH_WINDOW)
@@ -90,16 +98,30 @@ def report_to_console(usb, ide, lines):
         print(line)
 
 
+def white_comparison(frame, roi, backend):
+    if backend == "BLOBS":
+        return len(frame.find_blobs([cfg.WHITE_CANDIDATE if cfg.BENCH_WHITE_CANDIDATE else cfg.WHITE],
+                                    roi=roi, pixels_threshold=2, area_threshold=2))
+    sample = frame.copy(roi=roi)
+    edges = sample.to_grayscale()
+    edges.find_edges(image.EDGE_CANNY)
+    return None
+
+
 def main():
-    if getattr(vision, "PRODUCTION_API", 0) != 2 or getattr(preview, "PRODUCTION_API", 0) != 2:
+    if getattr(vision, "PRODUCTION_API", 0) != 3 or getattr(preview, "PRODUCTION_API", 0) != 3:
         raise RuntimeError("Update vision.py and preview.py alongside main.py")
     window, exposure, actual_exposure = initialize_camera()
     uart = pyb.UART(3, 115200, timeout=10, timeout_char=2)
     usb = pyb.USB_VCP()
     ide_connected = getattr(usb, "debug_mode_enabled", None)
     frame = sensor.snapshot()
-    mirror = vision.Mirror(frame.width(), frame.height(), window)
-    scanner = vision.Scanner(mirror, frame.width(), image.rgb_to_lab)
+    scale = 0.5 if cfg.BENCH_FRAME_SIZE == "QQVGA" else 1
+    mirror = vision.Mirror(frame.width(), frame.height(), window, scale)
+    clearance, block = vision.safety_distances(cfg.MEASURED_MOTION)
+    scanner = vision.Scanner(mirror, frame.width(), image.rgb_to_lab, block, cfg.BENCH_WHITE_CANDIDATE)
+    if cfg.BENCH_WHITE_BACKEND not in (None, "BLOBS", "EDGES"):
+        raise ValueError("Invalid white backend comparison")
     if mirror.rays and not cfg.BENCH_BASELINE:
         try:
             scanner.prepare(frame)
@@ -110,7 +132,8 @@ def main():
             scanner.table = None
         gc.collect()
 
-    guard = vision.LineGuard(time.ticks_diff)
+    body_cm = 0 if cfg.MEASURED_MOTION is None else cfg.MEASURED_MOTION[0]
+    guard = vision.LineGuard(time.ticks_diff, clearance, block, body_cm)
     overlay = preview.Overlay(mirror)
     timings = preview.Timings()
     tiles = goal_tiles(mirror.roi) if mirror.roi else ()
@@ -124,7 +147,11 @@ def main():
         mode = "LIGHT"
     if disable_preview:
         disable_preview(mode == "OFF")
-    bench = cfg.BENCH_BASELINE or cfg.BENCH_EXPOSURE_US is not None or cfg.BENCH_GAIN_DB is not None or window is not None
+    bench = (cfg.BENCH_BASELINE or cfg.BENCH_EXPOSURE_US is not None or cfg.BENCH_GAIN_DB is not None
+             or window is not None or cfg.BENCH_FRAME_SIZE is not None or cfg.BENCH_WHITE_CANDIDATE
+             or cfg.BENCH_WHITE_BACKEND is not None)
+    comparison = None
+    empty_visible, empty_lines = set(), {}
     sequence = sent = partial = late = frames = interval_late = goal_skips = goal_passes = 0
     goal_errors = 0
     goal_error = "none"
@@ -146,10 +173,11 @@ def main():
         frame = sensor.snapshot()
         captured = time.ticks_us()
         now = time.ticks_ms()
-        ready = bool(not cfg.BENCH_BASELINE and mirror.rays and (frame.width(), frame.height()) == mirror.size)
-        visible, lines = scanner.scan(frame) if ready else (set(), {})
+        ready = bool(not cfg.BENCH_BASELINE and mirror.rays and block <= mirror.horizon
+                     and (frame.width(), frame.height()) == mirror.size)
+        visible, lines = scanner.scan(frame) if ready else (empty_visible, empty_lines)
         scanned = time.ticks_us()
-        mask, escape, nearest = guard.update(visible, lines, now)
+        mask, escape, nearest = guard.update(visible, lines, now, scanner.runs if ready else None, mirror.rays)
         guarded = time.ticks_us()
         frame_ms = (time.ticks_diff(guarded, start) + 999) // 1000
         slow = frame_ms > vision.MAX_FRAME_MS
@@ -174,6 +202,15 @@ def main():
         else:
             partial += 1
         sequence = (sequence + 1) & 255
+        timings.add(12, time.ticks_diff(uart_end, scanned))
+
+        if ready and cfg.BENCH_WHITE_BACKEND:
+            started = time.ticks_us()
+            try:
+                comparison = white_comparison(frame, mirror.roi, cfg.BENCH_WHITE_BACKEND)
+            except CAPTURE_ERRORS as exc:
+                comparison = "%s:%s" % (type(exc).__name__, str(exc)[:80])
+            timings.add(13, time.ticks_diff(time.ticks_us(), started))
 
         current[0] = current[1] = None
         skip = frame_ms >= 75 or gap >= 85000
@@ -232,14 +269,13 @@ def main():
                         goal_seen_us[color] = done
         elif ready and goal_mode != b"l" and due:
             goal_skips += 1
-        scanner.frame_buffer = None
-
         before_draw = time.ticks_us()
         if mode != "OFF":
             try:
                 overlay.draw(frame, mode, now, time.ticks_diff, fps, frame_ms, guard, lines,
                              mask if ready and not slow else 0, escape if ready and not slow else 0,
-                             nearest, current, fields, visible)
+                             nearest, current, fields, visible,
+                             time.ticks_diff(scanned, captured), gap)
             except CAPTURE_ERRORS as exc:
                 overlay.errors += 1
                 overlay.last_error = "Overlay.draw/%s:%s" % (type(exc).__name__, str(exc)[:80])
@@ -267,17 +303,19 @@ def main():
             fps = frames * 1000 / max(1, elapsed)
             ide = ide_connected() if ide_connected else None
             summary = ("BUILD=%s FPS=%.1f MODE=%s IDE=%s EXPOSURE_US=%d ACTUAL_EXPOSURE_US=%d BENCH=%d "
-                       "FRAME_MS=%d READY=%d FAST=%d SAFE_MASK=%04x FLOOR_MASK=%04x LINE_MASK=%04x UNKNOWN_MASK=%04x "
-                       "NEAR_AMBIG_MASK=%04x ESCAPE_AWAY_MASK=%04x ESCAPE_MASK=%04x LINE=%s UART_TX=%d UART_PARTIAL=%d "
+                       "FRAME_MS=%d READY=%d FAST=%d SAFE_MASK=%04x FLOOR=ASSUMED OBSERVED_MASK=%04x LINE_MASK=%04x UNKNOWN_MASK=%04x "
+                       "NEAR_BLOCK_MASK=%04x ESCAPE_AWAY_MASK=%04x ESCAPE_MASK=%04x LINE=%s UART_TX=%d UART_PARTIAL=%d "
+                       "WHITE_RAYS=%d STRICT_RAYS=%d CLOSING_CM_S=%s TTC_MS=%s RANGE_CM=%s WHITE_BENCH=%s "
                        "FRAME_LATE=%d INTERVAL_LATE=%d GOAL_SKIP=%d GOAL_ERROR=%d/%s DRAW_ERROR=%d/%s") % (
                            BUILD, fps, mode, ide, exposure, actual_exposure, bench, frame_ms, ready and not bench,
                            scanner.fast, mask if ready and not slow and not bench else 0, guard.coverage,
                            guard.blocked, guard.unknown, guard.near_blocked, guard.escape_away, escape if ready and not slow and not bench else 0,
-                           nearest, sent, partial, late, interval_late, goal_skips, goal_errors, goal_error,
+                           nearest, sent, partial, len(lines), scanner.strict_hits, guard.closing_cm_s, guard.ttc_ms,
+                           (clearance, block), comparison, late, interval_late, goal_skips, goal_errors, goal_error,
                            overlay.errors, overlay.last_error)
             output = [timings.report()]
             if command == b"i" or probing:
-                rays = "".join("W" if b in guard.confirmed else "w" if b in lines else "G" if b in visible else "?"
+                rays = "".join("W" if b in guard.confirmed else "w" if b in lines else "O" if b in visible else "?"
                                for b in range(0, 360, 15))
                 output.append("RAYS=%s WHITE_CM=%s ROI=%s GOALS=%s COUNTS(raw,small,clip,ring,shape,turf,accepted)=%s" %
                               (rays, lines, last_roi, fields, (reports[0][:7], reports[1][:7])))

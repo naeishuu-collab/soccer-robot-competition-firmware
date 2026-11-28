@@ -15,8 +15,9 @@ UsbReport<1536> report;
 Pwm transmitted{};
 uint8_t alternateSent = 0;
 uint32_t pollInterval = 0, pollMax = 0;
-bool sentAheadOfPoll = false;
+bool sentAheadOfPoll = false, lastTxWasEscape = false;
 uint32_t cameraMs = 0, irMs = 0, ballMs = 0, pollMs = 0, pollUs = 0, releaseUs = 0;
+uint32_t cameraUs = 0, escapeRxToTxUs = 0, escapeRxToTxMaxUs = 0;
 uint32_t motorMs = 0, motorTxCount = 0, cameraBad = 0, irBad = 0, reportMs = 0;
 uint16_t irAngle = Unknown, irStrength = 0;
 bool manual = false, haveCamera = false, cameraLive = false, haveIr = false, irInvalid = false, haveBall = false;
@@ -36,6 +37,7 @@ void readSensors() {
     } else if (!haveCamera || sample.sequence != camera.sequence) {
       camera = sample;
       cameraMs = millis();
+      cameraUs = micros();
       haveCamera = cameraLive = true;
     }
   }
@@ -116,13 +118,19 @@ void loop() {
     const bool changed = memcmp(decision.pwm, transmitted, sizeof(transmitted)) ||
                          decision.alternate != alternateSent;
     const bool urgentStop = decision.state == State::Stop && lastCommandMoving;
-    if (!motorTxCount || urgentStop || ((changed || now - motorMs >= MotorRefreshMs) &&
+    const bool urgentEscape = decision.state == State::Escape && changed;
+    if (!motorTxCount || urgentStop || (urgentEscape && !lastTxWasEscape) || ((changed || now - motorMs >= MotorRefreshMs) &&
                                       (!duePoll || !sentAheadOfPoll))) {
       uint8_t packet[MotorSize];
       encodeMotor(decision.pwm, packet, decision.alternate);
       rs485Send(BusEnable, packet, sizeof(packet));
+      if (urgentEscape) {
+        escapeRxToTxUs = micros() - cameraUs;
+        if (escapeRxToTxUs > escapeRxToTxMaxUs) escapeRxToTxMaxUs = escapeRxToTxUs;
+      }
       memcpy(transmitted, decision.pwm, sizeof(transmitted));
       alternateSent = decision.alternate;
+      lastTxWasEscape = decision.state == State::Escape;
       sentAheadOfPoll = duePoll;
       motorMs = millis();
       ++motorTxCount;

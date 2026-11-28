@@ -180,41 +180,45 @@ void mainLoop() {
   at(99); irFrame(361, 250); loop();
   assert(decision.reason == StopReason::IrInvalid);
   at(115); cameraFrame(2, Ready | Escape, Rear, Rear); loop();
-  assert(decision.state == State::Escape);
-  at(116); loop();
-  equal(transmitted, -175, -175, -175, -175);
-  at(123); loop();  // Motor refresh may take the first opportunity.
+  assert(decision.reason == StopReason::IrInvalid);
   at(124); loop();
+  at(125); loop();
+  assert(waiting);
+  at(130); irFrame(0, 0); loop();  // A valid no-ball reply still permits escape.
+  assert(decision.state == State::Escape);
+  at(131); loop();
+  equal(transmitted, -175, -175, -175, -175);
+  assert(escapeRxToTxUs > 0);
+  at(155); loop();
   assert(waiting);
   const uint32_t sentBefore = motorTxCount;
   Serial.rx.push_back('s');
-  at(126); loop();
+  at(156); loop();
   assert(decision.reason == StopReason::Manual && motorTxCount == sentBefore);
-  at(130); irFrame(0, 200); loop();
-  at(131); loop();
+  at(160); irFrame(0, 200); loop();
+  at(161); loop();
   equal(transmitted, 0, 0, 0, 0);
   assert(motorTxCount == sentBefore + 1);
   Serial.rx.push_back('g');
-  at(132); cameraFrame(3, Ready | Escape, 0); loop();
+  at(162); cameraFrame(3, Ready | Escape, 0); loop();
   assert(decision.reason == StopReason::NoEscape);
-  at(140); cameraFrame(4, Ready | Slow, 0); loop();
+  at(170); cameraFrame(4, Ready | Slow, 0); loop();
   assert(decision.reason == StopReason::CameraSlow);
-  at(141); cameraFrame(5, 0, 0); loop();
+  at(171); cameraFrame(5, 0, 0); loop();
   assert(decision.reason == StopReason::CameraNotReady);
-  at(142); cameraFrame(6, Ready, Front); loop();
+  at(172); cameraFrame(6, Ready, Front); loop();
   assert(decision.state == State::Chase);  // No goals and only the intended heading observed.
   at(190); cameraFrame(6, Ready, Front); loop();
-  assert(cameraMs == 142);  // Duplicates don't extend freshness.
-  at(342); loop();
+  assert(cameraMs == 172);  // Duplicates don't extend freshness.
+  at(372); loop();
   assert(decision.reason == StopReason::CameraTimeout);
   Serial.connected = true;
   Serial.room = 0;
   Serial.rx.push_back('i');
-  at(355); loop();
+  at(385); loop();
   assert(Serial.tx.empty());  // Diagnostics cannot wait on a saturated USB.
   Serial.room = 512;
-  at(368);
-  for (unsigned i = 0; i < 80; ++i) loop();
+  for (uint32_t t = 398; t < 520; ++t) { at(t); loop(); }
   const std::string log(Serial.tx.begin(), Serial.tx.end());
   assert(log.find("STOP_REASON=CAMERA_TIMEOUT") != std::string::npos);
   assert(log.find("PWM_TRANSMITTED=0,0,0,0") != std::string::npos);

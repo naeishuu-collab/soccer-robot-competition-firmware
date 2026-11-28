@@ -50,9 +50,11 @@ class VisionTests(unittest.TestCase):
                     raster.pixels[y * 320 + x] = rng.randrange(3)
             self.assertTrue(scanner.verify(raster))
             scanner.fast = False
-            expected = scanner.scan(raster)
+            observed, white = scanner.scan(raster)
+            expected = observed.copy(), white.copy(), scanner.runs.copy()
             scanner.fast = True
-            self.assertEqual(scanner.scan(raster), expected)
+            observed, white = scanner.scan(raster)
+            self.assertEqual((observed, white, scanner.runs), expected)
 
     def test_unknown_never_clears_and_far_line_is_irrelevant(self):
         self.assertEqual(self.guard.update(set(), {}, 0), (0, 0, None))
@@ -154,7 +156,7 @@ class VisionTests(unittest.TestCase):
         self.assertTrue(any("BLUE cached" in args[-1] for name, args, _ in calls if name == "draw_string"))
         calls.clear()
         draw("FULL", 220)
-        self.assertEqual([name for name, _, _ in calls], ["draw_rectangle", "draw_cross", "draw_string"])
+        self.assertEqual([name for name, _, _ in calls], ["draw_rectangle", "draw_cross", "draw_string", "draw_arrow"])
 
     def test_goal_threshold_probe_separates_small_regions(self):
         class Small:
@@ -244,7 +246,7 @@ class VisionTests(unittest.TestCase):
 
         mark(rear, 1)  # An isolated image feature, such as a white wire.
         visible, lines = scanner.scan(raster)
-        mask, escape, nearest = self.guard.update(visible, lines, 0)
+        mask, escape, nearest = self.guard.update(visible, lines, 0, scanner.runs, self.mirror.rays)
         self.assertEqual(set(lines), {180})
         self.assertEqual(escape, 0)
         self.assertFalse(self.guard.near)
@@ -254,7 +256,7 @@ class VisionTests(unittest.TestCase):
 
         mark(neighbor, 1)
         visible, lines = scanner.scan(raster)
-        mask, escape, _ = self.guard.update(visible, lines, 1)
+        mask, escape, _ = self.guard.update(visible, lines, 1, scanner.runs, self.mirror.rays)
         self.assertEqual(escape, 1)
         self.assertTrue(mask & 1)
         self.assertFalse(mask & 256)
@@ -263,10 +265,113 @@ class VisionTests(unittest.TestCase):
             if bearing not in lines:
                 mark(ray, 2)
         visible, lines = scanner.scan(raster)
-        mask, escape, _ = self.guard.update(visible, lines, 2)
+        mask, escape, _ = self.guard.update(visible, lines, 2, scanner.runs, self.mirror.rays)
         self.assertEqual((mask, escape), (0, 0))
         self.assertEqual(self.guard.unknown, 0xffff)
         self.assertEqual(self.guard.escape_away, 1)  # Direction is away, but the floor is unknown.
+
+    def test_assumed_floor_reproduces_and_unblocks_recorded_stop(self):
+        # A valid, non-green field image with the reported 165 degree candidate.
+        neutral, white, dark = (55, 0, 0), (93, -1, 1), (8, 0, 0)
+        raster = Raster([neutral, white, dark])
+        scanner = vision.Scanner(self.mirror, 320, lambda lab: lab)
+        for bearing in (150, 165):
+            ray = self.mirror.rays[bearing // 15][1]
+            for x, y, _ in ray[:2]:
+                raster.pixels[y * 320 + x] = 1
+        visible, lines = scanner.scan(raster)
+        self.assertEqual(lines[165], 18)
+        self.assertFalse(vision.classify(neutral))  # Previously rejected as non-green on all rays.
+        old = vision.LineGuard(lambda a, b: a-b)
+        self.assertEqual(old.update(set(), lines, 0)[:2], (0, 0))
+        mask, escape, _ = self.guard.update(visible, lines, 0, scanner.runs, self.mirror.rays)
+        self.assertEqual(escape, 1)
+        self.assertTrue(mask & 1)
+        self.assertFalse(mask & 256)
+        white_pixels = [p for bearing in (150, 165) for p in self.mirror.rays[bearing // 15][1][:2]]
+        xs, ys = zip(*[(x, y) for x, y, _ in white_pixels])
+        self.assertEqual(self.guard.regions, [((min(xs), min(ys), max(xs)-min(xs)+1, max(ys)-min(ys)+1), True)])
+
+    def test_white_coverage_wrap_multiple_lines_and_glare(self):
+        samples = self.mirror.rays
+        lines = {345: 20, 0: 21, 165: 21, 180: 20}
+        mask, escape, _ = self.guard.update(self.rays, lines, 10, {b:(1,3) for b in lines}, samples)
+        self.assertEqual(escape, 0)
+        self.assertFalse(mask & (1 | 256))
+        self.assertEqual(len(self.guard.regions), 2)
+
+        guard = vision.LineGuard(lambda a,b: a-b)
+        line = {75: 18, 90: 18}
+        mask, escape, _ = guard.update(self.rays, line, 20, {b:(0,10) for b in line}, samples)
+        self.assertEqual(escape, 0)  # A broad reflection is reserved as ambiguous.
+        self.assertFalse(guard.near)
+        self.assertFalse(mask & (1 << 4))
+        self.assertEqual(len(guard.regions), 1)
+        self.assertFalse(guard.regions[0][1])
+
+    def test_dynamic_line_limits_immediately_and_holds_through_blur(self):
+        guard = vision.LineGuard(lambda a,b: a-b)
+        for now, distance in ((0, 38), (32, 33), (64, 28), (96, 23)):
+            mask, escape, _ = guard.update(self.rays, {345:distance+1, 0:distance}, now)
+            if distance <= vision.BLOCK_CM:
+                self.assertFalse(mask & 1)
+        self.assertEqual(escape, 256)
+        self.assertGreater(guard.closing_cm_s, 100)
+        self.assertIsNotNone(guard.ttc_ms)
+        mask, escape, _ = guard.update(self.rays, {}, 112)
+        self.assertFalse(mask & 1)
+        self.assertEqual(escape, 256)  # One missing / blurred frame cannot clear the last line.
+        guard.update(self.rays, {90: 19, 105: 20}, 144)
+        self.assertFalse(guard.coverage & ~guard.blocked & (1 << 4))
+        self.assertIsNone(guard.closing_cm_s)  # A different region cannot supply speed.
+
+    def test_new_line_does_not_clear_another_recent_hazard(self):
+        guard = vision.LineGuard(lambda a,b: a-b)
+        _, escape, _ = guard.update(self.rays, {345:20, 0:20}, 0)
+        self.assertEqual(escape, 256)
+        mask, escape, _ = guard.update(self.rays, {165:21, 180:20}, 30)
+        self.assertFalse(mask & (1 | 256))
+        self.assertEqual(escape, 0)
+        _, escape, _ = guard.update(self.rays, {165:21, 180:20}, 110)
+        self.assertEqual(escape, 1)
+
+    def test_white_candidate_visibility_and_measured_clearance(self):
+        self.assertTrue(vision.line_code((85, -3, 3), True) & 1)
+        self.assertTrue(vision.line_code((80, 0, 0)) & 1)
+        self.assertFalse(vision.line_code((80, 0, 0), True) & 1)
+        self.assertFalse(vision.line_code((100, 30, 0)) & 4)
+        self.assertEqual(vision.safety_distances(None), (25, 35))
+        self.assertEqual(vision.safety_distances((9, 100, 100, 10, 3)), (32,35+2))
+        with self.assertRaises(ValueError):
+            vision.safety_distances((9,100,100,40,3))
+        self.assertEqual(len(vision.Mirror(160, 120, scale=0.5).rays), 24)
+
+    def test_synthetic_motion_permits_observed_routes_only(self):
+        # The old classifier returned no green coverage on these non-green frames.
+        scenes = (
+            ({}, True, 1, 0, True),
+            ({150:18,165:18}, True, 1, 256, True),
+            ({345:20,0:20}, True, 256, 1, True),
+            ({90:45}, True, 1, 0, True),
+            ({165:18}, True, 1, 256, True),
+            ({90:19,105:20}, True, 1, 1 << 4, False),
+            ({0:20,15:21,165:20,180:21}, True, 1, 1 | 256, False),
+            ({}, False, 1, 0xffff, False),
+        )
+        stops = [0, 0]
+        dangerous = [0, 0]
+        for lines, observed, requested, hazard, expected in scenes:
+            for i, visible in enumerate((set(), self.rays if observed else set())):
+                guard = vision.LineGuard(lambda a,b: a-b)
+                safe, escape, _ = guard.update(visible, lines, 0)
+                active = escape if guard.near else safe & requested
+                stops[i] += int(expected and not active)
+                dangerous[i] += int(bool((safe | escape) & hazard))
+                if i == 1:
+                    self.assertEqual(bool(active), expected)
+        self.assertEqual(stops, [5, 0])
+        self.assertEqual(dangerous, [0, 0])
+        print("Synthetic field scenes: unnecessary stops 5/5 -> 0/5; hazardous permissions 0/8 -> 0/8")
 
     def test_packet_crc_and_slow_invalidation(self):
         miss = ((65535, 0, 255),) * 2

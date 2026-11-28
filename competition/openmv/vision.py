@@ -19,11 +19,12 @@ except ImportError:
         return buffer
 
 
-PRODUCTION_API = 2
+PRODUCTION_API = 3
 CLEARANCE_CM = 25
 RELEASE_CM = 30
 ESCAPE_MEMORY_MS = 200
 LINE_NEIGHBOR_CM = 8
+STRIPE_MAX_CM = 8
 BLOCK_CM = 35
 LOOKAHEAD_CM = 50
 MAX_FRAME_MS = 100
@@ -37,20 +38,36 @@ def difference(a, b):
     return abs((a - b + 180) % 360 - 180)
 
 
+def safety_distances(profile):
+    if profile is None:
+        return CLEARANCE_CM, BLOCK_CM
+    body, speed, latency, brake, margin = profile
+    values = (body, speed, latency, brake, margin)
+    if not all(0 < value < 10000 for value in values):
+        raise ValueError("Invalid measured motion profile")
+    clearance = max(CLEARANCE_CM, body + speed * latency / 1000 + brake + margin)
+    block = max(BLOCK_CM, clearance + RELEASE_CM - CLEARANCE_CM)
+    if block > LOOKAHEAD_CM:
+        raise ValueError("Measured stopping envelope exceeds camera horizon")
+    return clearance, block
+
+
 class Mirror:
-    def __init__(self, width, height, window=None):
+    def __init__(self, width, height, window=None, scale=1):
         self.rays = []
         self.roi = None
-        radii = cfg.GROUND_POINTS
+        self.blind_pixels = set()
+        self.horizon = LOOKAHEAD_CM
+        radii = tuple((r * scale, cm) for r, cm in cfg.GROUND_POINTS)
         if not cfg.MIRROR_CENTER or not cfg.MIRROR_RING or not radii or cfg.FRONT_DEG is None:
             return
         if window is None:
             ox = oy = 0
-            expected_w, expected_h = cfg.IMAGE_SIZE
+            expected_w, expected_h = (round(cfg.IMAGE_SIZE[0] * scale), round(cfg.IMAGE_SIZE[1] * scale))
         else:
             ox, oy, expected_w, expected_h = window
-        self.cx, self.cy = cfg.MIRROR_CENTER[0] - ox, cfg.MIRROR_CENTER[1] - oy
-        self.inner, self.outer = cfg.MIRROR_RING
+        self.cx, self.cy = cfg.MIRROR_CENTER[0] * scale - ox, cfg.MIRROR_CENTER[1] * scale - oy
+        self.inner, self.outer = (r * scale for r in cfg.MIRROR_RING)
         pairs = tuple(zip(radii, radii[1:]))
         if (width, height) != (expected_w, expected_h) or not (0 <= self.inner < self.outer <=
                                                     min(self.cx, self.cy, width - 1 - self.cx, height - 1 - self.cy)):
@@ -79,10 +96,15 @@ class Mirror:
                     x, y = round(self.cx + r * dx), round(self.cy + r * dy)
                     if not samples or (x, y) != samples[-1][:2]:
                         samples.append((x, y, cm))
-            if len(samples) < 4 or samples[2][2] > CLEARANCE_CM or samples[-1][2] < 48:
+            if len(samples) < 4 or samples[1][2] > CLEARANCE_CM or samples[-1][2] < 48:
                 self.rays = []
                 return
             self.rays.append((bearing, samples))
+            self.horizon = min(self.horizon, samples[-1][2])
+            for x, y, _ in samples:
+                qx, qy = (x + ox) / scale, (y + oy) / scale
+                if any(bx <= qx < bx + bw and by <= qy < by + bh for bx, by, bw, bh in cfg.LINE_SELF_MASKS):
+                    self.blind_pixels.add(x + y * width)
 
     def bearing(self, x, y):
         raw = math.degrees(math.atan2(x - self.cx, self.cy - y))
@@ -116,46 +138,75 @@ def pixel_code(frame, table, offset: int) -> int:
     return int(ptr8(table)[ptr16(frame)[offset]])
 
 
+def line_code(lab, candidate=False):
+    strict = in_lab(lab, cfg.WHITE_CANDIDATE)
+    white = strict if candidate else in_lab(lab, cfg.WHITE)
+    return int(white) | (int(strict) << 1) | (int(cfg.MIN_VISIBLE_L <= lab[0] <= cfg.MAX_VISIBLE_L) << 2)
+
+
 @micropython.viper
-def scan_kernel(frame, table, points, span: int) -> int:
+def scan_kernel(frame, table, points, spans, results, count: int):
     pixels = ptr16(frame)
     lut = ptr8(table)
     packed = ptr32(points)
-    i = span & 0xffff
-    end = span >> 16
-    index = 0
-    clear = 1
-    white = 0
-    while i < end:
-        point = int(packed[i])
-        color = int(lut[pixels[point >> 1]])
-        if point & 1 and color != 1:
-            clear = 0
-        if color == 2 and white:
-            return (index << 1) | clear
-        white = int(color == 2)
-        i += 1
-        index += 1
-    return clear
+    bounds = ptr32(spans)
+    output = ptr32(results)
+    ray = 0
+    while ray < count:
+        span = int(bounds[ray])
+        i = span & 65535
+        stop = span >> 16
+        start = i
+        first = 0
+        length = 0
+        observed = 1
+        strict = 0
+        active = 0
+        while i < stop:
+            point = int(packed[i])
+            code = 0
+            if not (point & 2):
+                code = int(lut[pixels[point >> 2]])
+            if point & 1 and not (code & 4):
+                observed = 0
+            if code & 2:
+                strict = 1
+            if code & 1:
+                if first == 0:
+                    first = i - start + 1
+                    active = 1
+                if active:
+                    length += 1
+            else:
+                active = 0
+            i += 1
+        output[ray] = observed | first << 1 | length << 9 | strict << 17
+        ray += 1
 
 
 class Scanner:
-    def __init__(self, mirror, width, rgb_to_lab):
+    def __init__(self, mirror, width, rgb_to_lab, block_cm=BLOCK_CM, candidate=False):
         self.rays = mirror.rays
         self.width = width
         self.rgb_to_lab = rgb_to_lab
+        self.block_cm = block_cm
+        self.candidate = candidate
         self.table = None
         self.fast = False
         self.cache = {}
         self.frame_buffer = None
-        self.spans = []
-        points = []
+        points, spans = [], []
         for _, samples in self.rays:
             start = len(points)
             for x, y, cm in samples:
-                points.append((x + y * width) * 2 + int(cm <= BLOCK_CM))
-            self.spans.append(start | (len(points) << 16))
+                offset = x + y * width
+                points.append(offset * 4 | int(cm <= block_cm) | (2 if offset in mirror.blind_pixels else 0))
+            spans.append(start | (len(points) << 16))
         self.packed = array("i", points)
+        self.spans = array("i", spans)
+        self.results = array("i", [0] * len(spans))
+        self.visible, self.lines, self.runs = set(), {}, {}
+        self.strict_hits = 0
 
     def prepare(self, image):
         table = bytearray(65536)
@@ -163,56 +214,73 @@ class Scanner:
         for base in range(0, 65536, 256):
             fill_row(frame, base)
             for x in range(256):
-                table[base + x] = classify(self.rgb_to_lab(image.get_pixel((x % self.width, x // self.width), rgbtuple=True)))
+                lab = self.rgb_to_lab(image.get_pixel((x % self.width, x // self.width), rgbtuple=True))
+                table[base + x] = line_code(lab, self.candidate)
         self.table = table
 
-    def color(self, image, x, y):
-        rgb = image.get_pixel((x, y), rgbtuple=True)
+    def reference_code(self, image, offset):
+        rgb = image.get_pixel((offset % self.width, offset // self.width), rgbtuple=True)
         found = self.cache.get(rgb)
         if found is None:
-            found = classify(self.rgb_to_lab(rgb))
+            found = line_code(self.rgb_to_lab(rgb), self.candidate)
             if len(self.cache) >= 2048:
                 self.cache.clear()
             self.cache[rgb] = found
         return found
 
     def goal_color(self, image, x, y):
-        if self.frame_buffer is not None:
-            return pixel_code(self.frame_buffer, self.table, y * self.width + x)
-        return self.color(image, x, y)
+        # Green remains an optional color cue for goal confidence only.
+        return classify(self.rgb_to_lab(image.get_pixel((x, y), rgbtuple=True)))
 
-    def reference(self, image, samples):
-        clear, white = 1, False
-        for index, (x, y, cm) in enumerate(samples):
-            color = self.color(image, x, y)
-            if cm <= BLOCK_CM and color != 1:
-                clear = 0
-            if color == 2 and white:
-                return index * 2 + clear
-            white = color == 2
-        return clear
+    def reference(self, image, span):
+        start, stop = span & 65535, span >> 16
+        first = length = strict = 0
+        observed, active = 1, False
+        for i in range(start, stop):
+            point = self.packed[i]
+            code = 0 if point & 2 else self.reference_code(image, point >> 2)
+            if point & 1 and not code & 4:
+                observed = 0
+            if code & 2:
+                strict = 1
+            if code & 1:
+                if not first:
+                    first, active = i - start + 1, True
+                if active:
+                    length += 1
+            else:
+                active = False
+        return observed | first << 1 | length << 9 | strict << 17
 
     def verify(self, image):
         frame = image.bytearray()
-        for (_, samples), span in zip(self.rays, self.spans):
-            for x, y, _ in samples:
-                if pixel_code(frame, self.table, y * self.width + x) != self.color(image, x, y):
-                    return False
-            if scan_kernel(frame, self.table, self.packed, span) != self.reference(image, samples):
+        for point in self.packed:
+            if point & 2:
+                continue
+            offset = point >> 2
+            if pixel_code(frame, self.table, offset) != self.reference_code(image, offset):
                 return False
-        return True
+        scan_kernel(frame, self.table, self.packed, self.spans, self.results, len(self.rays))
+        return all(result == self.reference(image, span) for result, span in zip(self.results, self.spans))
 
     def scan(self, image):
-        visible, lines = set(), {}
-        frame = self.frame_buffer = image.bytearray() if self.fast else None
-        for (bearing, samples), span in zip(self.rays, self.spans):
-            result = (scan_kernel(frame, self.table, self.packed, span) if self.fast
-                      else self.reference(image, samples))
+        self.visible.clear()
+        self.lines.clear()
+        self.runs.clear()
+        self.strict_hits = 0
+        if self.fast:
+            scan_kernel(image.bytearray(), self.table, self.packed, self.spans, self.results, len(self.rays))
+        for index, (bearing, samples) in enumerate(self.rays):
+            result = self.results[index] if self.fast else self.reference(image, self.spans[index])
             if result & 1:
-                visible.add(bearing)
-            if result >> 1:
-                lines[bearing] = samples[(result >> 1) - 1][2]
-        return visible, lines
+                self.visible.add(bearing)
+            self.strict_hits += (result >> 17) & 1
+            first = ((result >> 1) & 255) - 1
+            if first >= 0:
+                length = (result >> 9) & 255
+                self.lines[bearing] = samples[first][2]
+                self.runs[bearing] = (first, first + length - 1)
+        return self.visible, self.lines
 
 
 SECTOR_BITS = tuple(sum(1 << (ray // 15) for ray in rays) for rays in SECTOR_WINDOWS)
@@ -222,43 +290,101 @@ CLOSE_BLOCKS = tuple(sum(1 << i for i in range(16) if difference(i * 22.5, ray) 
                      for ray in range(0, 360, 15))
 
 
-class LineGuard:
-    """Require observed turf in the commanded wedge and keep a brief release hysteresis."""
-    def __init__(self, ticks_diff):
-        self.ticks_diff = ticks_diff
-        self.near = ()
-        self.close_ms = 0
-        self.escape_fresh = False
-        self.clear_frames = 0
-        self.confirmed = ()
-        self.coverage = self.blocked = self.unknown = self.near_blocked = self.escape_away = 0
+def connected_rays(lines):
+    remaining = set(lines)
+    groups = []
+    while remaining:
+        seed = min(remaining)
+        remaining.remove(seed)
+        group = [seed]
+        for ray in group:
+            for delta in (-15, 15):
+                neighbor = (ray + delta) % 360
+                if neighbor in remaining and abs(lines[ray] - lines[neighbor]) <= LINE_NEIGHBOR_CM:
+                    remaining.remove(neighbor)
+                    group.append(neighbor)
+        groups.append(group)
+    return groups
 
-    def update(self, visible, lines, now):
-        threshold = RELEASE_CM if self.near else CLEARANCE_CM
-        # Two white pixels are only a ray candidate. A nearby ray must agree
-        # before a new line can trigger an escape; every raw hit still closes approach.
-        self.confirmed = tuple(b for b, cm in lines.items() if any(
-            abs(lines.get((b + step) % 360, 1000) - cm) <= LINE_NEIGHBOR_CM for step in (-15, 15)))
+
+class LineGuard:
+    """Use camera coverage and line geometry; the field surface color is assumed."""
+    def __init__(self, ticks_diff, clearance=CLEARANCE_CM, block=BLOCK_CM, body_cm=0):
+        self.ticks_diff = ticks_diff
+        self.clearance, self.block, self.body_cm = clearance, block, body_cm
+        self.release = clearance + RELEASE_CM - CLEARANCE_CM
+        self.near = ()
+        self.near_history = {}
+        self.confirmed = set()
+        self.coverage = self.blocked = self.unknown = self.near_blocked = self.escape_away = 0
+        self.regions = []
+        self.tracks = []
+        self.closing_cm_s = self.ttc_ms = None
+
+    def update(self, visible, lines, now, runs=None, rays=None):
+        threshold = self.release if self.near else self.clearance
+        self.confirmed.clear()
+        self.regions.clear()
+        tracks = []
+        self.closing_cm_s = self.ttc_ms = None
+        nearest = min(lines.items(), key=lambda item: item[1]) if lines else None
+        for group in connected_rays(lines):
+            if runs is None:
+                plausible = len(group) >= 2
+            else:
+                plausible = False
+                narrow = 0
+                xmin, ymin, xmax, ymax = 100000, 100000, -1, -1
+                for bearing in group:
+                    first, last = runs[bearing]
+                    samples = rays[bearing // 15][1]
+                    width = samples[last][2] - samples[first][2]
+                    if width <= STRIPE_MAX_CM:
+                        narrow += 1
+                        if last > first:
+                            plausible = True
+                    x0, y0, _ = samples[first]
+                    x1, y1, _ = samples[last]
+                    xmin, xmax = min(xmin, x0, x1), max(xmax, x0, x1)
+                    ymin, ymax = min(ymin, y0, y1), max(ymax, y0, y1)
+                plausible = (len(group) >= 2 and plausible) or narrow >= 3
+                self.regions.append(((xmin, ymin, xmax - xmin + 1, ymax - ymin + 1), plausible))
+            if plausible:
+                self.confirmed.update(group)
+                bearing = min(group, key=lambda ray: lines[ray])
+                cm = lines[bearing]
+                tracks.append((bearing, cm, now))
+                if nearest and nearest[0] in group:
+                    # Match only local, unambiguous observations; never mask a new reading.
+                    matches = [(old_cm, dt) for old_bearing, old_cm, then in self.tracks
+                               for dt in (self.ticks_diff(now, then),)
+                               if difference(bearing, old_bearing) <= 22.5 and abs(old_cm - cm) <= 12
+                               and 5 <= dt <= 150]
+                    if len(matches) == 1:
+                        old_cm, dt = matches[0]
+                        self.closing_cm_s = (old_cm - cm) * 1000 / dt
+                        if self.closing_cm_s > 0:
+                            self.ttc_ms = round(max(0, cm - self.body_cm) * 1000 / self.closing_cm_s)
+        self.tracks = tracks
+
         raw_close = tuple(b for b, cm in lines.items() if cm <= threshold)
         close = tuple(b for b in raw_close if b in self.confirmed or b in self.near)
-        if close:
-            # Keep also any earlier rays that are still blind. Freshly visible turf
-            # is allowed to drop an older ray once another close ray is measured.
-            still_hidden = tuple(b for b in self.near if b not in visible and b not in lines)
-            self.near = tuple(set(close + still_hidden))
-            self.close_ms, self.clear_frames = now, 0
-            self.escape_fresh = True
-        elif self.near:
-            # Losing sight of the previous line direction is not evidence that it is clear.
-            if all(b in visible or (b in lines and lines[b] > RELEASE_CM) for b in self.near):
-                self.clear_frames += 1
+        for b in close:
+            self.near_history[b] = (now, 0)
+        for b in self.near:
+            if b in close:
+                continue
+            last_seen, clear_frames = self.near_history[b]
+            clear = (b in visible and b not in lines) or (b in lines and lines[b] > self.release)
+            clear_frames = clear_frames + 1 if clear else 0
+            if clear_frames >= 2 and self.ticks_diff(now, last_seen) >= 100:
+                del self.near_history[b]
             else:
-                self.clear_frames = 0
-            if self.clear_frames >= 2 and self.ticks_diff(now, self.close_ms) >= 100:
-                self.near = ()
+                self.near_history[b] = (last_seen, clear_frames)
+        self.near = tuple(self.near_history)
         blocked = 0
         for bearing, cm in lines.items():
-            if cm <= BLOCK_CM:
+            if cm <= self.block:
                 blocked |= LINE_BLOCKS[bearing // 15]
         observed = sum(1 << (ray // 15) for ray in visible)
         self.coverage = 0
@@ -266,21 +392,21 @@ class LineGuard:
             if observed & window == window:
                 self.coverage |= 1 << i
         self.near_blocked = 0
-        # For an ambiguous close hit only a positively observed, away direction can remain open.
         for b in raw_close:
             if b not in close:
                 self.near_blocked |= CLOSE_BLOCKS[b // 15]
+        for b in self.near:
+            self.near_blocked |= CLOSE_BLOCKS[b // 15]
         self.blocked = blocked | self.near_blocked
         self.unknown = 0xffff & ~self.coverage
         mask = self.coverage & ~self.blocked
         self.escape_away = 0
-        if self.ticks_diff(now, self.close_ms) >= ESCAPE_MEMORY_MS:
-            self.escape_fresh = False
-        if self.near and self.escape_fresh:
+        if self.near and all(self.ticks_diff(now, seen) < ESCAPE_MEMORY_MS
+                             for seen, _ in self.near_history.values()):
             for bit, bearing in ((1, 0), (256, 180)):
                 if all(difference(bearing, b) >= 105 for b in self.near):
                     self.escape_away |= bit
-        return mask, self.escape_away & mask, min(lines.items(), key=lambda pair: pair[1]) if lines else None
+        return mask, self.escape_away & mask, nearest
 
 
 def find_goal(image, mirror, thresholds, minimum, color_at=None, roi=None, stride=1, report=None, probe=False, blobs=None):

@@ -2,15 +2,14 @@
 import math
 from array import array
 import camera_calibration as cfg
-from vision import BLOCK_CM
 
-PRODUCTION_API = 2
+PRODUCTION_API = 3
 WHITE, RED, GREEN = (255, 255, 255), (255, 48, 48), (0, 255, 96)
 GRAY, CYAN = (144, 144, 144), (0, 220, 255)
 NAMES = ("YELLOW", "BLUE")
 COLORS = ((255, 220, 0), (60, 150, 255))
-METRICS = ("CAPTURE", "LINE_FLOOR", "MASK", "TX", "YELLOW", "BLUE", "DRAW",
-           "FRAME", "LINE_INTERVAL", "YELLOW_INTERVAL", "BLUE_INTERVAL", "GOALS_BOTH")
+METRICS = ("CAPTURE", "WHITE_SCAN", "MASK", "TX", "YELLOW", "BLUE", "DRAW",
+           "FRAME", "LINE_INTERVAL", "YELLOW_INTERVAL", "BLUE_INTERVAL", "GOALS_BOTH", "LINE_TO_UART", "WHITE_BENCH")
 
 
 class Timings:
@@ -39,14 +38,17 @@ class Timings:
             count = self.count[i]
             if not count:
                 continue
-            need = (95 * count + 99) // 100
-            for bucket in range(32):
-                need -= self.bins[i * 32 + bucket]
-                if need <= 0:
-                    break
-            p95 = ">124000" if bucket == 31 else str((bucket + 1) * 4000)
-            values.append("%s=%d/%s/%d" % (name, self.total[i] // count, p95, self.maximum[i]))
-        return "AVG/P95_MAX_BIN/MAX_US " + " ".join(values)
+            percentiles = []
+            for pct in (95, 99):
+                need = (pct * count + 99) // 100
+                for bucket in range(32):
+                    need -= self.bins[i * 32 + bucket]
+                    if need <= 0:
+                        break
+                percentiles.append(">124000" if bucket == 31 else str((bucket + 1) * 4000))
+            values.append("%s=%d/%s/%s/%d" % (name, self.total[i] // count, percentiles[0],
+                                               percentiles[1], self.maximum[i]))
+        return "AVG/P95_UPPER/P99_UPPER/MAX_US " + " ".join(values)
 
 
 class Overlay:
@@ -57,8 +59,6 @@ class Overlay:
         self.last_error = "none"
         self.disabled = set()
         self.points = []
-        self.ground_end = [max(i for i, sample in enumerate(ray) if sample[2] <= BLOCK_CM)
-                           for _, ray in mirror.rays]
         if mirror.rays:
             for heading in range(16):
                 angle = math.radians(cfg.FRONT_DEG + heading * 22.5 * (1 if cfg.CLOCKWISE else -1))
@@ -80,7 +80,7 @@ class Overlay:
             self.disabled.add(name)
 
     def draw(self, image, mode, now, ticks_diff, fps, frame_ms, guard, lines, mask, escape,
-             nearest, current, goal_fields, visible=()):
+             nearest, current, goal_fields, visible=(), line_us=None, gap_us=None):
         if mode == "OFF":
             return
         full = mode == "FULL"
@@ -98,35 +98,34 @@ class Overlay:
             elif due and full and goal_fields[color][0] != 65535:
                 draw(image, "draw_string", (2, 22 + color * 10), GRAY,
                      "%s cached %d" % (NAMES[color], goal_fields[color][0]))
+        for rectangle, confirmed in guard.regions:
+            if confirmed or full:
+                draw(image, "draw_rectangle", rectangle, RED if confirmed else CYAN, thickness=2)
+        if escape and self.points:
+            cx, cy = round(self.mirror.cx), round(self.mirror.cy)
+            x, y = self.points[8 if escape & 256 else 0]
+            draw(image, "draw_arrow", (cx, cy, x, y), CYAN, thickness=2)
         if not due:
             return
         self.last_ms = now
         draw(image, "draw_string", (2, 2), WHITE, "FPS %.1f  FRAME %dms" % (fps, frame_ms))
+        if nearest:
+            draw(image, "draw_string", (2, 12), RED, "LINE %ddeg %dcm" % (nearest[0], round(nearest[1])))
+        if full and line_us is not None:
+            draw(image, "draw_string", (2, 54), WHITE, "SCAN %dus / GAP %dus" % (line_us, gap_us or 0))
+            if guard.closing_cm_s is not None:
+                ttc = "-" if guard.ttc_ms is None else "%dms" % guard.ttc_ms
+                draw(image, "draw_string", (2, 65), RED, "CLOSE %dcm/s TTC %s" % (round(guard.closing_cm_s), ttc))
         if not self.points:
             return
         mirror = self.mirror
         cx, cy = round(mirror.cx), round(mirror.cy)
-        if nearest:
-            for bearing, cm in lines.items() if full else (nearest,):
-                samples = mirror.rays[bearing // 15][1]
-                x, y, _ = min(samples, key=lambda sample: abs(sample[2] - cm))
-                color = RED if bearing in guard.confirmed else CYAN
-                draw(image, "draw_cross", (x, y), color, size=6 if (bearing, cm) == nearest else 3)
-            draw(image, "draw_string", (2, 12), RED, "LINE %ddeg %dcm" % (nearest[0], round(nearest[1])))
-        if escape:
-            x, y = self.points[8 if escape & 256 else 0]
-            draw(image, "draw_arrow", (cx, cy, x, y), CYAN, thickness=2)
         if full:
             draw(image, "draw_circle", (cx, cy, round(mirror.inner)), GRAY)
             draw(image, "draw_circle", (cx, cy, round(mirror.outer)), GRAY)
             draw(image, "draw_cross", (cx, cy), WHITE)
             x, y = self.points[0]
             draw(image, "draw_line", (cx, cy, x, y), WHITE)
-            for ray in visible:
-                samples = mirror.rays[ray // 15][1]
-                x0, y0, _ = samples[0]
-                x1, y1, _ = samples[self.ground_end[ray // 15]]
-                draw(image, "draw_line", (x0, y0, x1, y1), GREEN)
             for i, (x, y) in enumerate(self.points):
                 bit = 1 << i
                 color = RED if guard.blocked & bit else GREEN if mask & bit else GRAY

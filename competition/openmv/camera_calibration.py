@@ -52,6 +52,16 @@ GREEN = (12, 75, -65, -10, -15, 55)
 GREEN_LOW_SATURATION = (33, 48, -13, -7, 2, 11)
 
 WHITE = (72, 100, -12, 12, -15, 15)
+WHITE_CANDIDATE = (85, 100, -8, 8, -8, 8)
+BENCH_WHITE_CANDIDATE = False  # Candidate-only comparison always clears UART READY.
+MIN_VISIBLE_L = 12
+MAX_VISIBLE_L = 97
+# Calibrated QVGA rectangles only; an occluded safety sample makes its ray unknown.
+LINE_SELF_MASKS = ()
+# (body radius cm, speed limit cm/s, worst pipeline ms, measured brake cm, margin cm)
+MEASURED_MOTION = None
+BENCH_FRAME_SIZE = None  # "QQVGA" derives a pixel-scaled comparison; UART READY is clear.
+BENCH_WHITE_BACKEND = None  # "BLOBS" or "EDGES"; run after the safety packet for timing only.
 
 BLUE_MIN_PIXELS = 8
 
