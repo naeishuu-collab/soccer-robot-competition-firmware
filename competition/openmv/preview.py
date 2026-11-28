@@ -3,7 +3,7 @@ import math
 from array import array
 import camera_calibration as cfg
 
-PRODUCTION_API = 6
+PRODUCTION_API = 7
 WHITE, RED, GREEN = (255, 255, 255), (255, 48, 48), (0, 255, 96)
 GRAY, CYAN = (144, 144, 144), (0, 220, 255)
 PURPLE = (185, 90, 255)
@@ -125,7 +125,7 @@ class Overlay:
         draw(image, "draw_string", (2, 2), WHITE, "FPS %.1f  FRAME %dms" % (fps, frame_ms))
         if guard.line_angle is not None:
             distance = "?" if nearest is None else "%dcm" % round(nearest[1])
-            draw(image, "draw_string", (2, 12), RED, "LINE %ddeg %s" % (guard.line_angle, distance))
+            draw(image, "draw_string", (2, 12), RED, "UNKNOWN LINE %ddeg %s" % (guard.line_angle, distance))
         if full and line_us is not None:
             draw(image, "draw_string", (2, 54), WHITE, "SCAN %dus / GAP %dus" % (line_us, gap_us or 0))
             if guard.closing_cm_s is not None:

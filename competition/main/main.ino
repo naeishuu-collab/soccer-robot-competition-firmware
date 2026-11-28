@@ -120,7 +120,7 @@ void loop() {
       requestedReport = true;
       break;
     }
-    if (manual && runMode == RunMode::MotorTest && command >= '1' && command <= '4')
+    if (manual && runMode == RunMode::MotorTest && command >= '1' && command <= '6')
       benchWheel = command - '1';
     if (!manual && runMode != RunMode::Competition && command == 'R') {
       benchMs = millis();

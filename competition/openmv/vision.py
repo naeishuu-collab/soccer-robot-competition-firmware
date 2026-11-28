@@ -19,7 +19,7 @@ except ImportError:
         return buffer
 
 
-PRODUCTION_API = 6
+PRODUCTION_API = 7
 CLEARANCE_CM = 25
 RELEASE_CM = 30
 ESCAPE_MEMORY_MS = 200

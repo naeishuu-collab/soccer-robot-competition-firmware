@@ -14,8 +14,8 @@ try:
 except ImportError:
     disable_preview = None
 
-PRODUCTION_API = 6
-BUILD = "rcj-openmv-competition-6"
+PRODUCTION_API = 7
+BUILD = "rcj-openmv-competition-7"
 CAPTURE_ERRORS = (AttributeError, TypeError, ValueError, MemoryError, OSError, RuntimeError)
 BASELINE = ((30, 100, -30, 30, 30, 127), (10, 80, -30, 50, -128, -20))
 
@@ -336,6 +336,8 @@ def main():
             output = ["LINE_ANGLE=%s LINE_DISTANCE=%s LINE_PIXEL_RADIUS=%s DISTANCE_VALID=%d DISTANCE_SOURCE=%s" %
                       (guard.line_angle, guard.line_distance, radius, nearest is not None,
                        "TABLE_ESTIMATE" if nearest is not None else "UNKNOWN")]
+            output.append("LINE_CLASS=%s CLASS_CONFIDENCE=UNASSESSED CLASS_REASON=NO_VERIFIED_FIELD_LOCALIZATION" %
+                          ("UNKNOWN_LINE" if lines else "NO_CURRENT_LINE"))
             dark, clipped, self_mask = vision.observation_reasons(scanner.reasons if ready else {})
             output.append("DARK_MASK=%04x CLIPPED_MASK=%04x SELF_MASK=%04x CONFIRMED_BLOCK=%04x "
                           "SUSPECTED_BLOCK=%04x HELD_BLOCK=%04x ESC_UNKNOWN=%04x ESC_LINE=%04x" %

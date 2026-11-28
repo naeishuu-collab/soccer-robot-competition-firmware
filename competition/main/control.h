@@ -143,7 +143,7 @@ inline Decision benchDecision(RunMode mode, bool armed, int wheel, bool tracking
   link.flags = robot::Ready;
   Decision out = decide(manual, cameraFresh, link, irFresh, irInvalid, missedIr, false, pwm);
   if (out.reason != StopReason::BallLost) return out;
-  if (!armed || (mode == RunMode::MotorTest && (wheel < 0 || wheel >= 4))) {
+  if (!armed || (mode == RunMode::MotorTest && (wheel < 0 || wheel >= 6))) {
     out.reason = StopReason::DiagnosticIdle;
     return out;
   }
@@ -151,7 +151,15 @@ inline Decision benchDecision(RunMode mode, bool armed, int wheel, bool tracking
     if (!tracking) return out;
     for (int i = 0; i < 4; ++i)
       out.pwm[i] = pwm[i] > 160 ? 160 : pwm[i] < -160 ? -160 : pwm[i];
-  } else if (mode == RunMode::MotorTest) out.pwm[wheel] = 160;
+  } else if (mode == RunMode::MotorTest) {
+    if (wheel < 4) out.pwm[wheel] = 160;
+    else {
+      // Diagnostic candidates only; direction and trajectory are not commissioned.
+      const int16_t duty = wheel == 4 ? 160 : -160;
+      out.pwm[0] = out.pwm[2] = -duty;
+      out.pwm[1] = out.pwm[3] = duty;
+    }
+  }
   else return out;
   out.state = State::Chase;
   out.reason = StopReason::None;

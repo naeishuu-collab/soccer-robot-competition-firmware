@@ -153,6 +153,7 @@ class VisionTests(unittest.TestCase):
         self.assertEqual(calls, [])
         draw("LIGHT", 50)
         self.assertEqual(sum(name == "draw_rectangle" for name, _, _ in calls), 1)
+        self.assertTrue(any("UNKNOWN LINE" in args[-1] for name, args, _ in calls if name == "draw_string"))
         self.assertFalse(any(name == "draw_circle" for name, _, _ in calls))
         self.assertTrue(any(name == "draw_arrow" for name, _, _ in calls))
         calls.clear()

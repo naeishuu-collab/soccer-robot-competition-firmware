@@ -114,6 +114,7 @@ class CameraLoopTests(unittest.TestCase):
         self.assertEqual([p[2] for p in packets], list(range(5)))
         self.assertEqual(draws[0], (1, "both"))
         self.assertTrue(any("DARK_MASK=0000" in line and "SELF_MASK=0000" in line for line in logs))
+        self.assertTrue(any("LINE_CLASS=NO_CURRENT_LINE CLASS_CONFIDENCE=UNASSESSED" in line for line in logs))
         self.assertIn("UART_PARTIAL=1", logs[-1])
         self.assertIn("FRAME_LATE=0", logs[-1])
         self.assertIn("GOAL_ERROR=1/find_goals/TypeError", logs[-1])

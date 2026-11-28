@@ -317,6 +317,17 @@ void benchPolicy() {
   equal(decision.pwm, 0, 0, 0, 0);
   decision = benchDecision(RunMode::MotorTest, true, 2, false, pwm, false, true, true, false, false);
   equal(decision.pwm, 0, 0, 160, 0);
+  decision = benchDecision(RunMode::MotorTest, true, 4, false, pwm, false, true, true, false, false);
+  equal(decision.pwm, -160, 160, -160, 160);
+  decision = benchDecision(RunMode::MotorTest, true, 5, false, pwm, false, true, true, false, false);
+  equal(decision.pwm, 160, -160, 160, -160);
+  decision = benchDecision(RunMode::MotorTest, false, 4, false, pwm, false, true, true, false, false);
+  assert(decision.reason == StopReason::DiagnosticIdle);
+  equal(decision.pwm, 0, 0, 0, 0);
+  assert(benchDecision(RunMode::MotorTest, true, 4, false, pwm, true, true, true, false, false).reason == StopReason::Manual);
+  assert(benchDecision(RunMode::MotorTest, true, 4, false, pwm, false, false, true, false, false).reason == StopReason::CameraTimeout);
+  assert(benchDecision(RunMode::MotorTest, true, 5, false, pwm, false, true, false, false, true).reason == StopReason::IrTimeout);
+  assert(benchDecision(RunMode::MotorTest, true, 6, false, pwm, false, true, true, false, false).reason == StopReason::DiagnosticIdle);
   decision = benchDecision(RunMode::IrPdTest, true, -1, true, pwm, false, true, true, false, false);
   equal(decision.pwm, 160, 160, 140, 140);
   assert(benchDecision(RunMode::IrPdTest, true, -1, true, pwm, false, false, true, false, false)
