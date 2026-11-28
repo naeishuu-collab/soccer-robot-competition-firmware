@@ -131,8 +131,16 @@ void loop() {
       requestedReport = true;
     }
     if (!manual && basicCap && command == 'R' && Serial) {
-      if (!basicArmed) { basicStartMs = millis(); basicArmed = true; }
-      basicLeaseMs = millis();
+      const uint32_t commandMs = millis();
+      if (basicArmed && (commandMs - basicLeaseMs >= BasicLeaseMs ||
+                         commandMs - basicStartMs >= BasicMaxRunMs)) {
+        basicArmed = false;
+        basicCap = 0;
+        manual = true;
+      } else {
+        if (!basicArmed) { basicStartMs = commandMs; basicArmed = true; }
+        basicLeaseMs = commandMs;
+      }
     }
 #endif
 #if RCJ_WHEELS_LIFTED_DIAGNOSTICS

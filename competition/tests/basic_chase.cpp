@@ -64,7 +64,7 @@ int main() {
   assert(decoded[0] == 145 && decoded[2] == 205 && alternate == 0);
   inject('g'); loop();
   assert(basicArmed && basicStartMs == 1000);
-  at(1200); cameraMs = irMs = 1200; loop();
+  inject('R'); at(1200); cameraMs = irMs = 1200; loop();
   assert(manual && !basicArmed && decision.state == State::Stop);
   // A new R cannot rearm after expiration without selecting a stage and releasing stop.
   inject('R'); at(1201); loop();
