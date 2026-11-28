@@ -459,6 +459,36 @@ class VisionTests(unittest.TestCase):
         _, escape, _ = guard.update(self.rays, {165:21, 180:20}, 110)
         self.assertEqual(escape, 1)
 
+    def test_blind_hazard_holds_until_sustained_observed_clearance(self):
+        guard = vision.LineGuard(lambda a, b: a-b)
+        front = {345: 20, 0: 20}
+        self.assertEqual(guard.update(self.rays, front, 0)[1], 256)
+        hidden = self.rays - {0, 345}
+        for now in (30, 80, 150, 210, 500, 1000):
+            safe, _, _ = guard.update(hidden, {}, now)
+            self.assertFalse(safe & 1)
+            self.assertTrue(guard.near_history)
+        guard.update(self.rays, {}, 1010)
+        safe, escape, _ = guard.update(self.rays, {}, 1040)
+        self.assertFalse(guard.near_history)
+        self.assertEqual(escape, 0)
+        self.assertTrue(safe & 1)
+
+    def test_reappearing_line_restarts_clearance_delay(self):
+        guard = vision.LineGuard(lambda a, b: a-b)
+        line = {345: 20, 0: 20}
+        guard.update(self.rays, line, 0)
+        guard.update(self.rays, {}, 30)
+        guard.update(self.rays, line, 60)
+        for now in (90, 120, 150):
+            safe, escape, _ = guard.update(self.rays, {}, now)
+            self.assertEqual(escape, 256)
+            self.assertFalse(safe & 1)
+        safe, escape, _ = guard.update(self.rays, {}, 160)
+        self.assertEqual(escape, 0)
+        self.assertFalse(guard.near_history)
+        self.assertTrue(safe & 1)
+
     def test_side_line_requires_observed_direction_away_from_every_ray(self):
         # A 105-degree nearest line does not establish the rest of its extent.
         # Both synthetic scenes have the same nearest ray but different safe exits.

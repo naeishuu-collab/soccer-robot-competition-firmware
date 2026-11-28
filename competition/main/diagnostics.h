@@ -15,7 +15,7 @@ State previousState = State::Stop;
 StopReason previousReason = StopReason::None;
 const char* const paths[] = {"STOP", "ZIP", "SWEEP", "REDUCED_TURN", "STRAIGHT_160", "ESCAPE", "DIAGNOSTIC"};
 const char* const modes[] = {"COMPETITION", "MOTOR_TEST", "IR_PD_TEST"};
-const char* const fallbackNames[] = {"NONE", "MASK", "UNCOMMISSIONED_SWEEP", "RANGE"};
+const char* const fallbackNames[] = {"NONE", "MASK", "UNCOMMISSIONED_SWEEP", "RANGE", "AMBIGUOUS", "UNSUPPORTED_PWM"};
 uint32_t stopCount[int(StopReason::Count)]{}, stopMs[int(StopReason::Count)]{}, reasonSince = 0;
 
 void logEvent(uint32_t now) {
@@ -65,8 +65,14 @@ void diagnose(uint32_t now, bool cameraFresh, bool irFresh) {
         states[int(decision.state)], reasons[reason],
         decision.reason == StopReason::BallLost && irAngle == Unknown && irStrength
             ? "ir_vector_cancelled"
+            : decision.reason == StopReason::NoEscape && decision.fallback == Fallback::Ambiguous
+                ? "escape_both_candidates_bearing_unknown_or_lateral"
             : decision.reason == StopReason::NoEscape && !camera.safe
                 ? "camera_reports_no_safe_sector"
+                : decision.reason == StopReason::PathBlocked && decision.fallback == Fallback::Unsupported
+                    ? "wheel_pattern_not_verified"
+                : decision.reason == StopReason::PathBlocked && decision.blocked
+                    ? "required_corridor_blocked_or_unobserved"
                 : decision.reason == StopReason::PathBlocked && decision.fallback == Fallback::Unmeasured && !decision.required
                     ? "yaw_sweep_uncommissioned" : details[reason],
         modes[int(runMode)],

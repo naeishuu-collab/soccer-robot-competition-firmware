@@ -8,7 +8,7 @@ enum class StopReason {
   BallLost, NoEscape, PathBlocked, IrNoReply, DiagnosticIdle, Count
 };
 enum class PathMode { Stop, Original, Sweep, ReducedTurn, Straight, Escape, Diagnostic };
-enum class Fallback { None, Mask, Unmeasured, Range };
+enum class Fallback { None, Mask, Unmeasured, Range, Ambiguous, Unsupported };
 struct Decision {
   State state = State::Stop;
   StopReason reason = StopReason::CameraTimeout;
@@ -33,9 +33,17 @@ inline Decision decide(bool manual, bool cameraFresh, const robot::Camera& cam,
   else if (cam.flags & robot::Escape) {
     out.required = robot::Front | robot::Rear;
     out.blocked = out.required & ~cam.escape;
-    if (cam.escape) {
+    uint16_t direction = cam.escape & (robot::Front | robot::Rear);
+    if (direction == (robot::Front | robot::Rear)) {
+      // A current bearing cannot prove which way is away when it is unknown or lateral.
+      if (cam.line == robot::Unknown || cam.line == 90 || cam.line == 270) {
+        out.fallback = Fallback::Ambiguous;
+        direction = 0;
+      } else direction = (cam.line < 90 || cam.line > 270) ? robot::Rear : robot::Front;
+    }
+    if (direction) {
       // Forward/reverse are the only escape motions enabled for this build.
-      int16_t duty = cam.escape & robot::Rear ? -175 : 175;
+      int16_t duty = direction == robot::Rear ? -175 : 175;
       for (auto& value : out.pwm) value = duty;
       out.state = State::Escape;
       out.path = PathMode::Escape;
@@ -47,6 +55,7 @@ inline Decision decide(bool manual, bool cameraFresh, const robot::Camera& cam,
   else {
     if (pwm[0] != pwm[1] || pwm[2] != pwm[3]) {
       out.reason = StopReason::PathBlocked;
+      out.fallback = Fallback::Unsupported;
       return out;
     }
     const int left = pwm[0], right = pwm[2];

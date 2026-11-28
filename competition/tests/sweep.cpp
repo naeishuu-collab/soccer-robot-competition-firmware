@@ -84,7 +84,32 @@ int main() {
   cam.escape = robot::Rear;
   assert(decide(false, true, cam, false, false, true, false, curve, 20, model, true).reason == StopReason::IrTimeout);
   assert(decide(false, true, cam, true, false, false, false, curve, 20, model, true).path == PathMode::Escape);
+  // When both forward and rear are reported safe, use the current bearing;
+  // missing or exactly lateral bearings do not establish an away direction.
+  cam.safe = cam.escape = robot::Front | robot::Rear;
+  cam.line = 0;
+  assert(decide(false, true, cam, true, false, false, false, curve).pwm[0] == -175);
+  cam.line = 180;
+  assert(decide(false, true, cam, true, false, false, false, curve).pwm[0] == 175);
+  for (uint16_t angle : {uint16_t(90), uint16_t(270), robot::Unknown}) {
+    cam.line = angle;
+    const auto ambiguous = decide(false, true, cam, true, false, false, false, curve);
+    assert(ambiguous.reason == StopReason::NoEscape && ambiguous.fallback == Fallback::Ambiguous);
+    assert(ambiguous.pwm[0] == 0);
+  }
+  cam.flags = robot::Ready | robot::Escape;
+  cam.safe = cam.escape = robot::Rear;
+  cam.line = 0;
+  assert(decide(false, true, cam, true, false, false, false, curve).state == State::Escape);
+  assert(decide(true, true, cam, true, false, false, false, curve).reason == StopReason::Manual);
+  assert(decide(false, false, cam, true, false, false, false, curve).reason == StopReason::CameraTimeout);
+  cam.flags = robot::Ready;
+  cam.safe = robot::Front;
+  cam.escape = 0;
+  const auto resumed = decide(false, true, cam, true, false, false, true, curve);
+  assert(resumed.state == State::Chase && resumed.pwm[0] == 160);
   const robot::Pwm logged{140,140,210,210};
+  cam.flags = robot::Ready | robot::Escape;
   cam.line = 15;
   cam.lineCm = 18;
   cam.safe = cam.escape = 0;
@@ -112,6 +137,9 @@ int main() {
   assert(decidePrevious(false, true, cam, true, false, false, true, forwardAfterDerivative, 50).state == State::Stop);
   assert(decide(false, true, cam, true, false, false, true, forwardAfterDerivative, 50).path == PathMode::Straight);
   assert(decide(false, true, cam, true, false, false, true, hard, 50).reason == StopReason::PathBlocked);
+  const robot::Pwm unverifiedWheels{-160,160,-160,160};
+  const auto unsupported = decide(false, true, cam, true, false, false, true, unverifiedWheels);
+  assert(unsupported.reason == StopReason::PathBlocked && unsupported.fallback == Fallback::Unsupported);
   std::cout << "Logged 8007: old zip stopped, previous API 5 and current use straight 160; "
                "additional same-sign case at 50 degrees now uses straight 160\n";
   std::cout << "Recorded 15-degree stop reproduced; observed rear corridor chooses reverse escape\n";

@@ -212,13 +212,16 @@ void mainLoop() {
   at(163); cameraFrame(4, Ready | Escape, Front, Front, 180, 19); loop();
   assert(decision.path == PathMode::Escape && decision.required == Front);
   equal(transmitted, 175, 175, 175, 175);
-  at(170); cameraFrame(5, Ready | Slow, 0); loop();
+  at(164); cameraFrame(5, Ready, 0x8007); loop();
+  assert(decision.state == State::Chase && decision.path == PathMode::Straight);
+  equal(decision.pwm, 160, 160, 160, 160);
+  at(170); cameraFrame(6, Ready | Slow, 0); loop();
   assert(decision.reason == StopReason::CameraSlow);
-  at(171); cameraFrame(6, 0, 0); loop();
+  at(171); cameraFrame(7, 0, 0); loop();
   assert(decision.reason == StopReason::CameraNotReady);
   haveBall = false;
   pd.reset();
-  at(172); cameraFrame(7, Ready, 0x8007); loop();
+  at(172); cameraFrame(8, Ready, 0x8007); loop();
   assert(decision.reason == StopReason::BallLost);
   const uint32_t oldPoll = pollMs;
   for (uint32_t t = 173; t <= 194 && pollMs == oldPoll; ++t) { at(t); loop(); }
@@ -233,7 +236,7 @@ void mainLoop() {
   assert(Serial1.tx.size() >= sizeof(transmittedChasePacket));
   memcpy(transmittedChasePacket, Serial1.tx.data() + Serial1.tx.size() - sizeof(transmittedChasePacket),
          sizeof(transmittedChasePacket));
-  at(freshPoll + 7); cameraFrame(7, Ready, 0x8007); loop();
+  at(freshPoll + 7); cameraFrame(8, Ready, 0x8007); loop();
   assert(cameraMs == 172);  // Duplicates don't extend freshness.
   at(372); loop();
   assert(decision.reason == StopReason::CameraTimeout);
