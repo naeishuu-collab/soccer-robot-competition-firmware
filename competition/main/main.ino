@@ -4,7 +4,7 @@
 
 using namespace robot;
 constexpr uint8_t BusEnable = 8;
-constexpr uint32_t BallHoldMs = 45, MotorRefreshMs = 30;
+constexpr uint32_t MotorRefreshMs = 30;
 
 SerialPIO cameraSerial(2, 3, 256);
 Receiver<CameraSize, 0xc6, 0x6c> cameraRx;
@@ -23,7 +23,7 @@ int benchWheel = -1;
 #endif
 uint32_t pollInterval = 0, pollMax = 0;
 bool sentAheadOfPoll = false, lastTxWasEscape = false;
-uint32_t cameraMs = 0, irMs = 0, ballMs = 0, pollMs = 0, pollUs = 0, releaseUs = 0;
+uint32_t cameraMs = 0, irMs = 0, pollMs = 0, pollUs = 0, releaseUs = 0;
 uint32_t cameraUs = 0, escapeRxToTxUs = 0, escapeRxToTxMaxUs = 0;
 uint32_t motorMs = 0, motorTxCount = 0, cameraBad = 0, irBad = 0, reportMs = 0;
 uint16_t irAngle = Unknown, irStrength = 0;
@@ -74,12 +74,10 @@ void readSensors() {
     irStrength = strength;
     if (direction < 360 && strength) {
       pd.update(direction, strength, irMs);
-      ballMs = irMs;
       haveBall = true;
     } else {
-      // Restart D on reacquisition, while keeping the last PWM on a short zero-count miss.
-      pd.initialized = false;
-      if (strength) { haveBall = false; pd.reset(); }  // vector cancellation
+      haveBall = false;
+      pd.reset();
     }
   }
   if (waiting && micros() - pollUs >= IrSlotUs) {
@@ -132,7 +130,7 @@ void loop() {
   const uint32_t now = millis();
   if (now - cameraMs >= CameraTimeoutMs) cameraLive = false;
   const bool irFresh = haveIr && now - irMs < IrTimeoutMs;
-  if (!irFresh || (haveBall && now - ballMs >= BallHoldMs)) {
+  if (!irFresh) {
     haveBall = false;
     pd.reset();
   }

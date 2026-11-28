@@ -171,9 +171,12 @@ void mainLoop() {
   equal(transmitted, 175, 175, 175, 175);
   at(32); loop();  // Next IR poll.
   at(38); irFrame(0, 0); loop();
-  assert(decision.state == State::Chase);
+  assert(decision.reason == StopReason::BallLost);
+  assert(!pd.initialized);
+  at(39); loop();
+  equal(transmitted, 0, 0, 0, 0);
   at(52); loop();
-  assert(decision.state == State::Chase);
+  assert(decision.reason == StopReason::BallLost);
   at(53); loop();
   assert(decision.reason == StopReason::BallLost);
   equal(transmitted, 0, 0, 0, 0);
@@ -398,7 +401,7 @@ void pollFairness() {
   irInvalid = missedIr = manual = sentAheadOfPoll = false;
   camera.flags = Ready;
   camera.safe = 0xffff;
-  cameraMs = ballMs = irMs = 1000;
+  cameraMs = irMs = 1000;
   irStarted = true;
   pollMs = 970;
   Serial1.tx.clear();
