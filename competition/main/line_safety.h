@@ -7,7 +7,7 @@ inline uint16_t legacyRequired(const robot::Pwm& pwm) {
   return pwm[0] > 0 ? robot::Front : pwm[0] < 0 ? robot::Rear : 0;
 }
 
-// Host candidate. Fields describe worst-case travel, including latency and coast,
+// Commissioned sweep. Fields describe worst-case travel, including latency and coast,
 // over the complete stopping interval. Zero commissioning values deny motion.
 struct SweepConfig {
   float halfWidthCm, halfLengthCm, fullTravelCm, fullYawDeg, marginCm, observedCm;
@@ -16,10 +16,17 @@ struct Sweep {
   uint16_t required;
   bool withinRange;
 };
+constexpr SweepConfig CompetitionSweep{};
+constexpr bool EnableReverseBridge = false;
+constexpr uint16_t FrontWedge = 0xc007;
+inline bool permitsSweep(const Sweep& sweep, uint16_t safe) {
+  return sweep.withinRange && !(sweep.required & ~safe);
+}
 inline Sweep candidateRequired(const robot::Pwm& w, const SweepConfig& cfg) {
   if (!(w[0] || w[1] || w[2] || w[3])) return {0, true};
   if (!(cfg.halfWidthCm > 0 && cfg.halfLengthCm > 0 && cfg.fullTravelCm > 0 &&
-        cfg.fullYawDeg > 0 && cfg.marginCm > 0 && cfg.observedCm > 0)) return {0xffff, false};
+        cfg.fullYawDeg > 0 && cfg.marginCm > 0 && cfg.observedCm > 0 && cfg.observedCm <= 35 &&
+        isfinite(cfg.halfWidthCm + cfg.halfLengthCm + cfg.fullTravelCm + cfg.fullYawDeg + cfg.marginCm))) return {0xffff, false};
   constexpr float rad = 0.01745329252f;
   // Channels are left rear, left front, right front reversed, right rear reversed.
   const float x = (-w[0] + w[1] - w[2] + w[3]) / 840.0f;

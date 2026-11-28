@@ -10,3 +10,11 @@
 6. **OpenMVの認識を確認。** OpenMV USBで `i`。 `LINE`、`SAFE_MASK`、`READY`、`SLOW`、`FAST`、`UART_TX`、`UART_PARTIAL`、`FRAME_LATE` を見る。床を見ているのにマスクが閉じる場合はしきい値とミラー方向、USBの計測値が良好なのにMAINで期限切れなら P4→GP3 とGND、版を確認する。両ゴールが -1 でも他の条件がそろえば走行する。
 
 各Arduinoは通常約1秒ごとに診断を出力。MAINの `EVENT_MS` は状態・理由の変化。USBが詰まった場合は測定を止めず、キューのあふれは `EVENT_DROPPED` で分かる。MOTORからMAINへの返信はないため、受信・適用・逆転待機はMOTORのUSBで確認する。
+
+## 最適化版の診断
+
+MAINの PATH_MODE は ZIP、SWEEP、REDUCED_TURN、STRAIGHT_160、ESCAPE、STOP。FALLBACK_REASON は代替または停止の理由。STOP_COUNT／STOP_DURATION_MS は累計で、理由別の COUNT／DURATION_MS も出る。IR_POLL_INTERVAL_MS と IR_POLL_MAX_MS はIR周期。MOTOR の REVERSE_WAIT_COUNT／REVERSE_WAIT_MS は反転回数と累積時間。PWM_ALT_TRANSMITTED が0なら逆転待機中の代替出力は無効。
+
+OpenMV v5.0.1で報告されたタプル展開の構文エラーと blob.rect() の型エラーは修正済み。旧Blobメソッドとv5のBlob属性の両方を扱う。カメラの main.py、vision.py、preview.py、camera_calibration.py は同じ版にそろえる。
+
+GOAL_ERROR と DRAW_ERROR は、任意のゴール処理・描画で発生した最後の例外名と累積数。例外が起きても白線UARTを継続する。描画に失敗した場合はOFFへ切り替わる。

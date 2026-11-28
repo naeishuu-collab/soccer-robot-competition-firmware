@@ -5,10 +5,10 @@ using namespace robot;
 constexpr uint8_t BusEnable = 2;
 // Wire order: physical M3, M2, M1, M4, with the ZIP pin order within each pair.
 constexpr uint8_t In1[] = {6, 12, 11, 9}, In2[] = {7, 13, 10, 8};
-Receiver<MotorSize, 0xd6, 0x69> receiver;
+Receiver<MotorSize, MotorSync, 0x69> receiver;
 MotorOutput output;
 Pwm received{}, written{};
-UsbReport<384> report;
+UsbReport<480> report;
 uint32_t rxCount = 0, invalidCount = 0, crcCount = 0, reportMs = 0;
 bool requestedReport = false;
 enum class Status { Startup, Watchdog, Reverse, Zero, Active };
@@ -54,11 +54,12 @@ void loop() {
   for (int n = 0; n < 64 && Serial1.available(); ++n) {
     if (!receiver.push(uint8_t(Serial1.read()), micros())) continue;
     Pwm pwm;
-    const Decode result = decodeMotor(receiver.bytes, pwm);
+    uint8_t alternate;
+    const Decode result = decodeMotor(receiver.bytes, pwm, alternate);
     if (result == Decode::Ok) {
       ++rxCount;
       memcpy(received, pwm, sizeof(received));
-      output.accept(pwm, millis());
+      output.accept(pwm, millis(), alternate);
       applyOutputs(millis());
     } else {
       ++invalidCount;
@@ -73,13 +74,15 @@ void loop() {
     report.queue(snprintf(report.data, sizeof(report.data),
         "RX_COUNT=%lu INVALID_FRAME_COUNT=%lu CRC_ERROR_COUNT=%lu LAST_COMMAND_AGE_MS=%ld\n"
         "PWM_RECEIVED=%d,%d,%d,%d PWM_TARGET=%d,%d,%d,%d PWM_APPLIED=%d,%d,%d,%d\n"
-        "REVERSE_WAIT=%u REVERSE_MASK=%x WATCHDOG_STOP=%u STOP_REASON=%s EVENT_COUNT=%lu LAST_EVENT_MS=%lu\n",
+        "REVERSE_WAIT=%u REVERSE_MASK=%x REVERSE_WAIT_COUNT=%lu REVERSE_WAIT_MS=%lu REVERSE_BRIDGE=%u REVERSE_BRIDGE_COUNT=%lu WATCHDOG_STOP=%u STOP_REASON=%s EVENT_COUNT=%lu LAST_EVENT_MS=%lu\n",
         (unsigned long)rxCount, (unsigned long)invalidCount, (unsigned long)crcCount,
         output.seen ? long(now - output.lastCommandMs) : -1L,
         received[0], received[1], received[2], received[3],
         output.desired[0], output.desired[1], output.desired[2], output.desired[3],
         written[0], written[1], written[2], written[3], unsigned(output.reverseWait),
-        unsigned(output.reverseMask), unsigned(output.watchdog), names[int(lastStatus)],
+        unsigned(output.reverseMask), (unsigned long)output.waitCount,
+        (unsigned long)(output.waitMs + (output.reverseWait ? now - output.waitStart : 0)),
+        unsigned(output.bridging), (unsigned long)output.bridgeCount, unsigned(output.watchdog), names[int(lastStatus)],
         (unsigned long)eventCount, (unsigned long)eventMs));
     requestedReport = false;
     reportMs = now;

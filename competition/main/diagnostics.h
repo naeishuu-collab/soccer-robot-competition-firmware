@@ -13,9 +13,16 @@ uint8_t eventRead = 0, eventWrite = 0;
 uint32_t eventDropped = 0;
 State previousState = State::Stop;
 StopReason previousReason = StopReason::None;
+const char* const paths[] = {"STOP", "ZIP", "SWEEP", "REDUCED_TURN", "STRAIGHT_160", "ESCAPE"};
+const char* const fallbackNames[] = {"NONE", "MASK", "UNCOMMISSIONED_SWEEP", "RANGE"};
+uint32_t stopCount[int(StopReason::Count)]{}, stopMs[int(StopReason::Count)]{}, reasonSince = 0;
 
 void logEvent(uint32_t now) {
   if (decision.state == previousState && decision.reason == previousReason) return;
+  if (previousState == State::Stop && previousReason != StopReason::None)
+    stopMs[int(previousReason)] += now - reasonSince;
+  reasonSince = now;
+  if (decision.state == State::Stop) ++stopCount[int(decision.reason)];
   events[eventWrite] = {now, decision.state, decision.reason};
   eventWrite = (eventWrite + 1) % 8;
   if (eventWrite == eventRead) {
@@ -40,25 +47,32 @@ void diagnose(uint32_t now, bool cameraFresh, bool irFresh) {
   if (!waiting && !report.busy() && (requestedReport || now - reportMs >= 1000)) {
     const int reason = int(decision.reason);
     const int yellow = visibleGoal(camera.yellow, now), blue = visibleGoal(camera.blue, now);
+    uint32_t totalCount = 0, totalMs = reason ? now - reasonSince : 0;
+    for (int i = 1; i < int(StopReason::Count); ++i) {
+      totalCount += stopCount[i];
+      totalMs += stopMs[i];
+    }
     report.queue(snprintf(report.data, sizeof(report.data),
         "STATE=%s STOP_REASON=%s STOP_DETAIL=%s\n"
-        "IR_LINK=%s IR_ANGLE=%d IR_STRENGTH=%u IR_AGE_MS=%ld IR_INVALID_COUNT=%lu\n"
+        "IR_LINK=%s IR_ANGLE=%d IR_STRENGTH=%u IR_AGE_MS=%ld IR_INVALID_COUNT=%lu IR_POLL_INTERVAL_MS=%lu IR_POLL_MAX_MS=%lu\n"
         "CAMERA_LINK=%s CAMERA_AGE_MS=%ld CAMERA_READY=%u CAMERA_SLOW=%u FRAME_MS=%u CAMERA_BAD=%lu\n"
-        "WHITE_LINE=%u LINE_ANGLE=%d LINE_DISTANCE=%d SAFE_MASK=%04x REQUIRED_MASK=%04x BLOCKED_MASK=%04x\n"
+        "WHITE_LINE=%u LINE_ANGLE=%d LINE_DISTANCE=%d SAFE_MASK=%04x REQUIRED_MASK=%04x BLOCKED_MASK=%04x PATH_MODE=%s FALLBACK_REASON=%s\n"
         "YELLOW_GOAL=%d BLUE_GOAL=%d TARGET_GOAL=%s OPPONENT_ANGLE=%d OWN_ANGLE=%d GOAL_QUALITY=%u,%u\n"
         "PD_ERROR=%d PD_P=%.2f PD_D=%.2f PD_TURN=%d\n"
         "PWM_CALCULATED=%d,%d,%d,%d PWM_AFTER_SAFETY=%d,%d,%d,%d PWM_TRANSMITTED=%d,%d,%d,%d\n"
-        "MOTOR_TX_COUNT=%lu EVENT_DROPPED=%lu\n",
+        "MOTOR_TX_COUNT=%lu PWM_ALT_TRANSMITTED=%u EVENT_DROPPED=%lu\nSTOP_COUNT=%lu STOP_DURATION_MS=%lu\n",
         states[int(decision.state)], reasons[reason],
         decision.reason == StopReason::BallLost && irAngle == Unknown && irStrength
             ? "ir_vector_cancelled" : details[reason],
         irFresh && !irInvalid && !missedIr ? "OK" : "ERROR", irAngle < 360 ? int(irAngle) : -1, unsigned(irStrength),
         haveIr ? long(now - irMs) : -1L, (unsigned long)irBad,
+        (unsigned long)pollInterval, (unsigned long)pollMax,
         cameraFresh ? "OK" : "ERROR", haveCamera ? long(now - cameraMs) : -1L,
         unsigned(bool(camera.flags & Ready)), unsigned(bool(camera.flags & Slow)),
         unsigned(camera.frameMs), (unsigned long)cameraBad, unsigned(camera.line != Unknown),
         camera.line == Unknown ? -1 : int(camera.line), camera.lineCm == 255 ? -1 : int(camera.lineCm),
         unsigned(camera.safe), unsigned(decision.required), unsigned(decision.blocked),
+        paths[int(decision.path)], fallbackNames[int(decision.fallback)],
         yellow, blue, camera.flags & TargetBlue ? "BLUE" : "YELLOW",
         camera.flags & TargetBlue ? blue : yellow, camera.flags & TargetBlue ? yellow : blue,
         yellow < 0 ? 0u : unsigned(camera.yellow.confidence), blue < 0 ? 0u : unsigned(camera.blue.confidence),
@@ -66,7 +80,15 @@ void diagnose(uint32_t now, bool cameraFresh, bool irFresh) {
         pd.pwm[0], pd.pwm[1], pd.pwm[2], pd.pwm[3],
         decision.pwm[0], decision.pwm[1], decision.pwm[2], decision.pwm[3],
         transmitted[0], transmitted[1], transmitted[2], transmitted[3],
-        (unsigned long)motorTxCount, (unsigned long)eventDropped));
+        (unsigned long)motorTxCount, unsigned(alternateSent), (unsigned long)eventDropped,
+        (unsigned long)totalCount, (unsigned long)totalMs));
+    for (int i = 1; i < int(StopReason::Count) && report.length < sizeof(report.data) - 1; ++i) {
+      if (!stopCount[i]) continue;
+      const int used = snprintf(report.data + report.length, sizeof(report.data) - report.length,
+          "%s COUNT=%lu DURATION_MS=%lu\n", reasons[i], (unsigned long)stopCount[i],
+          (unsigned long)(stopMs[i] + (reason == i ? now - reasonSince : 0)));
+      if (used > 0) report.queue(int(report.length) + used);
+    }
     requestedReport = false;
     reportMs = now;
   } else if (!waiting && !report.busy() && eventRead != eventWrite) {

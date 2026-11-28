@@ -1,6 +1,6 @@
 #include <cassert>
 #include <iostream>
-#include "../main/line_safety.h"
+#include "../main/control.h"
 
 #include "old_path.h"
 
@@ -51,6 +51,38 @@ int main() {
               << sweep.required << std::dec << '\n';
   }
   assert(newUnsafe == 0 && newNeedless < oldNeedless);
+  unsigned legacySameSignStops = 0, defaultSameSignStops = 0;
+  for (const auto& row : cases) {
+    if (!row.fresh || !row.physicallyAllowed || row.pwm[0] <= 0 || row.pwm[2] <= 0) continue;
+    if (row.pwm[0] != row.pwm[1] || row.pwm[2] != row.pwm[3]) continue;
+    robot::Camera cam;
+    cam.flags = robot::Ready;
+    cam.safe = row.mask;
+    legacySameSignStops += !zipPathClear(row.mask, row.pwm);
+    const auto decision = decide(false, true, cam, true, false, false, true, row.pwm, 20);
+    defaultSameSignStops += decision.state == State::Stop;
+    assert(decision.alternate == 0 && !decision.blocked);
+  }
+  assert(legacySameSignStops == 2 && defaultSameSignStops == 0);
+  const robot::Pwm curve{175,175,210,210}, hard{-140,-140,210,210};
+  robot::Camera cam;
+  cam.flags = robot::Ready;
+  cam.safe = uint16_t(~back);
+  const auto commissioned = decide(false, true, cam, true, false, false, true, curve, 20, model);
+  assert(commissioned.path == PathMode::Sweep && commissioned.pwm[0] == curve[0]);
+  const auto softened = decide(false, true, cam, true, false, false, true, hard, 20, model);
+  assert(softened.path == PathMode::ReducedTurn && softened.pwm[0] > 0 &&
+         !(softened.required & ~cam.safe));
+  assert(decide(false, true, cam, true, false, false, true, hard, 20).state == State::Stop);
+  assert(decide(false, false, cam, true, false, false, true, curve, 20, model).state == State::Stop);
+  cam.safe = 0xffff;
+  assert(decide(false, true, cam, true, false, false, true, hard, 20, model, true).alternate == 160);
+  cam.safe = uint16_t(~front);
+  assert(decide(false, true, cam, true, false, false, true, curve, 20).state == State::Stop);
+  cam.flags = robot::Ready | robot::Escape;
+  cam.escape = robot::Rear;
+  assert(decide(false, true, cam, false, false, true, false, curve, 20, model, true).path == PathMode::Escape);
+  std::cout << "Integrated default, eligible forward cases: unnecessary stops 2 -> 0\n";
   assert(!candidateRequired(cases[0].pwm, {8, 9, 14, 28, 1, 20}).withinRange);
   assert(!candidateRequired(cases[0].pwm, {}).withinRange);
   std::cout << "Synthetic comparison: total stops " << oldStops << " -> " << newStops

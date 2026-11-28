@@ -11,7 +11,7 @@ constexpr uint8_t Poll[] = {0xa5, 0x5a, 0x01, 0xfe};
 constexpr uint32_t Baud = 115200;
 constexpr uint32_t PollMs = 30, IrTimeoutMs = 100, CameraTimeoutMs = 200, WatchdogMs = 100;
 constexpr uint32_t IrSlotUs = 12000, BusGuardUs = 50;
-constexpr uint8_t MotorSize = 12, CameraSize = 23;
+constexpr uint8_t MotorSize = 13, CameraSize = 23, MotorSync = 0xd7, BridgePwm = 160;
 constexpr uint8_t Ready = 1, Slow = 2, Escape = 4, TargetBlue = 8;
 constexpr uint16_t Front = 1, Rear = 1 << 8;
 
@@ -37,18 +37,23 @@ inline void seal(uint8_t* bytes, size_t size) {
 inline bool validCrc(const uint8_t* bytes, size_t size) {
   return read16(bytes + size - 2) == crc16(bytes, size - 2);
 }
-inline void encodeMotor(const Pwm& pwm, uint8_t (&bytes)[MotorSize]) {
-  bytes[0] = 0xd6;
+inline void encodeMotor(const Pwm& pwm, uint8_t (&bytes)[MotorSize], uint8_t alternate = 0) {
+  bytes[0] = MotorSync;
   bytes[1] = 0x69;
   for (int i = 0; i < 4; ++i) put16(bytes + 2 + 2 * i, uint16_t(pwm[i] + MaxPwm));
+  bytes[10] = alternate;
   seal(bytes, MotorSize);
 }
 enum class Decode { Ok, Crc, Fields };
-inline Decode decodeMotor(const uint8_t* bytes, Pwm& pwm) {
+inline Decode decodeMotor(const uint8_t* bytes, Pwm& pwm, uint8_t& alternate) {
   if (!validCrc(bytes, MotorSize)) return Decode::Crc;
+  if (bytes[0] != MotorSync || bytes[1] != 0x69 || (bytes[10] && bytes[10] != BridgePwm)) return Decode::Fields;
   for (int i = 0; i < 4; ++i)
     if (read16(bytes + 2 + 2 * i) > 2 * MaxPwm) return Decode::Fields;
   for (int i = 0; i < 4; ++i) pwm[i] = int16_t(int(read16(bytes + 2 + 2 * i)) - MaxPwm);
+  alternate = bytes[10];
+  if (alternate && (pwm[0] != pwm[1] || pwm[2] != pwm[3] || pwm[0] * pwm[2] >= 0))
+    return Decode::Fields;
   return Decode::Ok;
 }
 

@@ -10,3 +10,7 @@ git worktree add --detach ../soccer-rollback-diagnostics 968bc520a1894ae3f871e5d
 旧mainとDraft PR #6はGitHubからも取得可。各版のREADMEから書き込み対象と設定を確認する。電源を切ってからMAIN、MOTOR、IRの対応する旧版をセットで復元し、OpenMVは作業前に保存したスクリプトと現物用の校正を復元する。最後に車輪を浮かせて通信・出力・停止を確認する。
 
 ZIP原本の比較テストには元のアーカイブを使う。元ファイルのハッシュは [構成・通信・監査](ARCHITECTURE.md) に記載。
+
+## 最適化直前への復元
+
+最適化直前は 4065bfc9a1f3b88ee96e629d8e89b508f16d5814。ローカル参照は backup/competition-before-optimization。別worktreeで開き、MAINとMOTORは同じ版を使う。最適化版ではMOTOR指令の同期バイトと長さが異なる。OpenMVの実機固有の校正は保存したバックアップから戻す。

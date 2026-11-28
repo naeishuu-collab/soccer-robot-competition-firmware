@@ -22,6 +22,7 @@ class CameraLoopTests(unittest.TestCase):
         clock = 0
         frames = 0
         packets = []
+        draws = []
         green = (37, -9, 5)
 
         class Frame:
@@ -34,9 +35,18 @@ class CameraLoopTests(unittest.TestCase):
             def get_pixel(self, point, rgbtuple):
                 return green
 
+            def draw_string(self, *args, **kwargs):
+                draws.append((len(packets), entries[-1]))
+
             def find_blobs(self, thresholds, **kwargs):
+                self.assert_pristine()
                 entries.append("yellow" if thresholds == vision.cfg.YELLOW else "blue")
+                if len(packets) == 1 and thresholds == vision.cfg.YELLOW:
+                    raise TypeError("simulated optional goal API error")
                 return []
+
+            def assert_pristine(self):
+                assert not any(n == len(packets) for n, _ in draws)
 
         def snapshot():
             nonlocal frames, clock
@@ -76,5 +86,7 @@ class CameraLoopTests(unittest.TestCase):
         self.assertEqual(entries, ["uart", "yellow", "uart", "yellow", "blue", "uart", "uart", "uart", "yellow"])
         self.assertTrue(all(p[3] == 1 and p[4:6] == b"\xff\xff" for p in packets))
         self.assertEqual([p[2] for p in packets], list(range(5)))
+        self.assertEqual(draws[0], (1, "yellow"))
         self.assertIn("UART_PARTIAL=1", logs[-1])
         self.assertIn("FRAME_LATE=0", logs[-1])
+        self.assertIn("GOAL_ERROR=1/TypeError", logs[-1])

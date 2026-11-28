@@ -34,6 +34,7 @@ def build(compiler, temp, filename):
 def main():
     cli = argparse.ArgumentParser()
     cli.add_argument("--zip", required=True, type=Path)
+    cli.add_argument("--mpy-cross", action="store_true", help="Compile for STM32H743 using the mpy-cross Python package.")
     options = cli.parse_args()
     compiler = next((path for name in ("cl", "g++", "clang++") if (path := shutil.which(name))), None)
     if compiler is None:
@@ -65,6 +66,13 @@ def main():
             build(compiler, temp, ROOT / "tests" / source)
     for source in (ROOT / "openmv").glob("*.py"):
         ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
+    if options.mpy_cross:
+        run(sys.executable, "-m", "mpy_cross", "--version")
+        with tempfile.TemporaryDirectory(prefix="rcj-mpy-") as directory:
+            for source in sorted((ROOT / "openmv").glob("*.py")):
+                run(sys.executable, "-m", "mpy_cross", "-march=armv7emsp", "-o",
+                    str(Path(directory) / (source.stem + ".mpy")), str(source))
+                print("MicroPython ARM compile OK:", source.name, flush=True)
     run(sys.executable, "-B", "-m", "unittest", "discover", "-s", "tests", "-v")
 
 

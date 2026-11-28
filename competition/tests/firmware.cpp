@@ -218,6 +218,9 @@ void mainLoop() {
   const std::string log(Serial.tx.begin(), Serial.tx.end());
   assert(log.find("STOP_REASON=CAMERA_TIMEOUT") != std::string::npos);
   assert(log.find("PWM_TRANSMITTED=0,0,0,0") != std::string::npos);
+  assert(log.find("PATH_MODE=STOP") != std::string::npos);
+  assert(log.find("IR_POLL_INTERVAL_MS=") != std::string::npos);
+  assert(log.find("MANUAL_STOP COUNT=1 DURATION_MS=") != std::string::npos);
   std::cout << "MAIN loop: startup, tracking, packet timing, safety, manual stop, USB OK\n";
 }
 
@@ -269,10 +272,90 @@ void motorLoop() {
   std::cout << "MOTOR loop: CRC, range, truncation, startup, reversal and watchdog OK\n";
 }
 
+void reverseBridge() {
+  const Pwm forward{175,175,175,175}, turn{-140,-140,210,210}, stop{};
+  MotorOutput previous, next;
+  for (auto* output : {&previous, &next}) {
+    output->accept(forward, 0);
+    output->update(0);
+  }
+  previous.accept(turn, 30);
+  next.accept(turn, 30, BridgePwm);
+  previous.update(30);
+  next.update(30);
+  equal(previous.applied, 0,0,0,0);
+  equal(next.applied, 160,160,160,160);
+  assert(next.bridging && next.reverseMask == 3 && next.waitCount == 1);
+
+  previous.accept(forward, 60);
+  previous.update(60);
+  equal(previous.applied, 175,175,175,175);
+  auto transient = next;
+  transient.accept(forward, 60);
+  transient.update(60);
+  equal(transient.applied, 175,175,175,175);
+  assert(!transient.reverseWait && transient.waitMs == 30);
+  auto revoked = next;
+  revoked.accept(stop, 31);
+  revoked.update(31);
+  equal(revoked.applied, 0,0,0,0);
+
+  next.accept(turn, 60, BridgePwm);
+  next.update(64);
+  equal(next.applied, 160,160,160,160);
+  next.update(65);
+  equal(next.applied, 0,0,0,0);
+  for (uint32_t now : {120u, 200u, 264u, 265u}) {
+    next.accept(turn, now, BridgePwm);
+    next.update(now);
+    if (now < 265) equal(next.applied, 0,0,0,0);
+  }
+  equal(next.applied, -140,-140,210,210);
+  assert(next.waitCount == 1 && next.waitMs == 235 && next.bridgeCount == 1);
+
+  uint8_t packet[MotorSize], alternate;
+  Pwm unpacked;
+  encodeMotor(turn, packet, BridgePwm);
+  assert(decodeMotor(packet, unpacked, alternate) == Decode::Ok && alternate == BridgePwm);
+  encodeMotor(forward, packet, BridgePwm);
+  assert(decodeMotor(packet, unpacked, alternate) == Decode::Fields);
+  encodeMotor(turn, packet, 3);
+  assert(decodeMotor(packet, unpacked, alternate) == Decode::Fields);
+  std::cout << "Reverse comparison: 30 ms transient full stop 30 -> 0; persistent reversal waits 200 from zero\n";
+}
+
+void pollFairness() {
+  using namespace main_board;
+  Serial.connected = false;
+  waiting = false;
+  haveCamera = cameraLive = haveIr = haveBall = true;
+  irInvalid = missedIr = manual = sentAheadOfPoll = false;
+  camera.flags = Ready;
+  camera.safe = 0xffff;
+  cameraMs = ballMs = irMs = 1000;
+  irStarted = true;
+  pollMs = 970;
+  Serial1.tx.clear();
+  at(1000);
+  pd.reset();
+  pd.update(0, 200, 1000);
+  loop();
+  assert(Serial1.tx.size() == MotorSize && Serial1.tx[0] == MotorSync);
+  pd.update(15, 200, 1000);  // PWM changes again before the due poll.
+  delayMicroseconds(BusGuardUs + 1);
+  loop();
+  assert(waiting && pollInterval == 30);
+  assert(Serial1.tx.size() == MotorSize + sizeof(Poll));
+  assert(!memcmp(Serial1.tx.data() + MotorSize, Poll, sizeof(Poll)));
+  std::cout << "RS485: a due poll follows at most one pending moving command\n";
+}
+
 int main() {
   comparePd();
   compareIr();
   cameraWire();
   mainLoop();
   motorLoop();
+  reverseBridge();
+  pollFairness();
 }

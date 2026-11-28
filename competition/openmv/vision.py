@@ -36,20 +36,26 @@ def difference(a, b):
 
 
 class Mirror:
-    def __init__(self, width, height):
+    def __init__(self, width, height, window=None):
         self.rays = []
         self.roi = None
         radii = cfg.GROUND_POINTS
         if not cfg.MIRROR_CENTER or not cfg.MIRROR_RING or not radii or cfg.FRONT_DEG is None:
             return
-        self.cx, self.cy = cfg.MIRROR_CENTER
+        if window is None:
+            ox = oy = 0
+            expected_w, expected_h = cfg.IMAGE_SIZE
+        else:
+            ox, oy, expected_w, expected_h = window
+        self.cx, self.cy = cfg.MIRROR_CENTER[0] - ox, cfg.MIRROR_CENTER[1] - oy
         self.inner, self.outer = cfg.MIRROR_RING
         pairs = tuple(zip(radii, radii[1:]))
-        if (width, height) != cfg.IMAGE_SIZE or not (0 <= self.inner < self.outer <=
+        if (width, height) != (expected_w, expected_h) or not (0 <= self.inner < self.outer <=
                                                     min(self.cx, self.cy, width - 1 - self.cx, height - 1 - self.cy)):
             return
         radius = math.ceil(self.outer)
         self.roi = (round(self.cx) - radius, round(self.cy) - radius, radius * 2 + 1, radius * 2 + 1)
+        self.size = (width, height)
         if len(radii) < 2 or not (0 < radii[0][1] <= CLEARANCE_CM and radii[-1][1] >= LOOKAHEAD_CM):
             return
         sign = 1 if radii[-1][0] > radii[0][0] else -1
@@ -139,6 +145,7 @@ class Scanner:
         self.table = None
         self.fast = False
         self.cache = {}
+        self.frame_buffer = None
         self.spans = []
         points = []
         for _, samples in self.rays:
@@ -154,7 +161,7 @@ class Scanner:
         for base in range(0, 65536, 256):
             fill_row(frame, base)
             for x in range(256):
-                table[base + x] = classify(self.rgb_to_lab(image.get_pixel((x, 0), rgbtuple=True)))
+                table[base + x] = classify(self.rgb_to_lab(image.get_pixel((x % self.width, x // self.width), rgbtuple=True)))
         self.table = table
 
     def color(self, image, x, y):
@@ -166,6 +173,11 @@ class Scanner:
                 self.cache.clear()
             self.cache[rgb] = found
         return found
+
+    def goal_color(self, image, x, y):
+        if self.frame_buffer is not None:
+            return pixel_code(self.frame_buffer, self.table, y * self.width + x)
+        return self.color(image, x, y)
 
     def reference(self, image, samples):
         clear, white = 1, False
@@ -190,7 +202,7 @@ class Scanner:
 
     def scan(self, image):
         visible, lines = set(), {}
-        frame = image.bytearray() if self.fast else None
+        frame = self.frame_buffer = image.bytearray() if self.fast else None
         for (bearing, samples), span in zip(self.rays, self.spans):
             result = (scan_kernel(frame, self.table, self.packed, span) if self.fast
                       else self.reference(image, samples))
@@ -199,6 +211,11 @@ class Scanner:
             if result >> 1:
                 lines[bearing] = samples[(result >> 1) - 1][2]
         return visible, lines
+
+
+SECTOR_BITS = tuple(sum(1 << (ray // 15) for ray in rays) for rays in SECTOR_WINDOWS)
+LINE_BLOCKS = tuple(sum(1 << i for i in range(16) if difference(i * 22.5, ray) < 60)
+                    for ray in range(0, 360, 15))
 
 
 class LineGuard:
@@ -228,11 +245,17 @@ class LineGuard:
                 self.clear_frames = 0
             if self.clear_frames >= 2 and self.ticks_diff(now, self.close_ms) >= 100:
                 self.near = ()
-        blocked = tuple(bearing for bearing, cm in lines.items() if cm <= BLOCK_CM)
-        mask = 0
-        for i, window in enumerate(SECTOR_WINDOWS):
-            if all(ray in visible for ray in window) and all(difference(i * 22.5, b) >= 60 for b in blocked):
-                mask |= 1 << i
+        blocked = 0
+        for bearing, cm in lines.items():
+            if cm <= BLOCK_CM:
+                blocked |= LINE_BLOCKS[bearing // 15]
+        observed = sum(1 << (ray // 15) for ray in visible)
+        self.coverage = 0
+        for i, window in enumerate(SECTOR_BITS):
+            if observed & window == window:
+                self.coverage |= 1 << i
+        self.blocked = blocked
+        mask = self.coverage & ~blocked
         escape = 0
         if self.ticks_diff(now, self.close_ms) >= ESCAPE_MEMORY_MS:
             self.escape_fresh = False
@@ -243,17 +266,38 @@ class LineGuard:
         return mask, escape, min(lines.items(), key=lambda pair: pair[1]) if lines else None
 
 
-def find_goal(image, mirror, thresholds, minimum, color_at=None):
+def find_goal(image, mirror, thresholds, minimum, color_at=None, roi=None, stride=1, report=None, probe=False):
     if mirror.roi is None:
         return None
     best = None
-    for blob in image.find_blobs(thresholds, roi=mirror.roi, pixels_threshold=minimum,
-                                 area_threshold=minimum, x_stride=1, y_stride=1, merge=True, margin=2):
-        x, y, w, h = blob.rect()
-        cx, cy, pixels = blob.cx(), blob.cy(), blob.pixels()
+    roi = roi or mirror.roi
+    rx, ry, rw, rh = roi
+    fx, fy, fw, fh = mirror.roi
+    seen = small = clipped = ring = shape = turf = accepted = 0
+    winning_box = winning_center = None
+    native_min = 1 if probe else minimum
+    for blob in image.find_blobs(thresholds, roi=roi, pixels_threshold=native_min,
+                                 area_threshold=native_min, x_stride=stride, y_stride=1, merge=True, margin=2):
+        seen += 1
+        rect = blob.rect
+        legacy = callable(rect)
+        x, y, w, h = rect() if legacy else rect
+        if ((rx > fx and x <= rx) or (ry > fy and y <= ry) or
+                (rx + rw < fx + fw and x + w >= rx + rw) or
+                (ry + rh < fy + fh and y + h >= ry + rh)):
+            clipped += 1
+            continue
+        if legacy:
+            cx, cy, pixels = blob.cx(), blob.cy(), blob.pixels()
+        else:
+            cx, cy, pixels = blob.cx, blob.cy, blob.pixels
+        if pixels < minimum or w * h < minimum:
+            small += 1
+            continue
         dx, dy = cx - mirror.cx, cy - mirror.cy
         radius = math.sqrt(dx * dx + dy * dy)
         if not mirror.inner <= radius <= mirror.outer or not radius or not w or not h:
+            ring += 1
             continue
         bearing = mirror.bearing(cx, cy)
         corners = ((x, y), (x + w, y), (x, y + h), (x + w, y + h))
@@ -263,6 +307,7 @@ def find_goal(image, mirror, thresholds, minimum, color_at=None):
         density = pixels / (w * h)
         if (not cfg.GOAL_MIN_WIDTH_DEG <= width <= cfg.GOAL_MAX_WIDTH_DEG or
                 math.radians(width) * radius / height < cfg.GOAL_MIN_ASPECT or density < cfg.GOAL_MIN_DENSITY):
+            shape += 1
             continue
         if color_at is not None:
             beyond = radius + height / 2 + 3
@@ -271,11 +316,16 @@ def find_goal(image, mirror, thresholds, minimum, color_at=None):
                 angles = (theta - 0.07, theta, theta + 0.07)
                 if sum(color_at(image, round(mirror.cx + beyond * math.cos(a)),
                                 round(mirror.cy + beyond * math.sin(a))) == 1 for a in angles) >= 2:
+                    turf += 1
                     continue
+        accepted += 1
         quality = min(1, pixels / (4 * minimum)) * min(1, 0.5 + density)
         candidate = (round(bearing) % 360, max(1, round(100 * quality)))
         if best is None or candidate[1] > best[1]:
             best = candidate
+            winning_box, winning_center = (x, y, w, h), (cx, cy)
+    if report is not None:
+        report[:] = [seen, small, clipped, ring, shape, turf, accepted, winning_box, winning_center]
     return best
 
 
@@ -287,26 +337,37 @@ def goal_fields(observation, now, ticks_diff):
     return (bearing, quality, (age + 9) // 10) if 0 <= age < GOAL_TTL_MS else (65535, 0, 255)
 
 
-def crc16(data):
+def crc_entry(value):
+    for _ in range(8):
+        value = ((value << 1) ^ (0x1021 if value & 0x8000 else 0)) & 65535
+    return value
+
+
+CRC_TABLE = array("H", (crc_entry(i << 8) for i in range(256)))
+
+
+def crc16(data, length=None):
     crc = 65535
-    for byte in data:
-        crc ^= byte << 8
-        for _ in range(8):
-            crc = ((crc << 1) ^ (0x1021 if crc & 0x8000 else 0)) & 65535
+    for i in range(len(data) if length is None else length):
+        crc = ((crc << 8) & 65535) ^ CRC_TABLE[(crc >> 8) ^ data[i]]
     return crc
 
 
-def packet(sequence, ready, escaping, mask, escape, nearest, goals, frame_ms):
+def packet(sequence, ready, escaping, mask, escape, nearest, goals, frame_ms, data=None):
     slow = frame_ms > MAX_FRAME_MS
     if slow or not ready:
         mask = escape = 0
     flags = int(ready) | (int(slow) << 1) | (int(escaping) << 2) | (int(cfg.TARGET_GOAL == "BLUE") << 3)
     angle, cm = (65535, 255) if nearest is None else (round(nearest[0]) % 360, round(nearest[1]))
-    data = bytearray((0xc6, 0x6c, sequence, flags, mask >> 8, mask & 255, escape >> 8, escape & 255,
-                      angle >> 8, angle & 255, cm, min(frame_ms, 255)))
-    for bearing, quality, age in goals:
-        data.extend((bearing >> 8, bearing & 255, quality, age))
-    data.append(1)
-    check = crc16(data)
-    data.extend((check >> 8, check & 255))
+    if data is None:
+        data = bytearray(23)
+    data[0], data[1], data[2], data[3] = 0xc6, 0x6c, sequence, flags
+    data[4], data[5], data[6], data[7] = mask >> 8, mask & 255, escape >> 8, escape & 255
+    data[8], data[9], data[10], data[11] = angle >> 8, angle & 255, cm, min(frame_ms, 255)
+    for index, (bearing, quality, age) in enumerate(goals):
+        pos = 12 + index * 4
+        data[pos], data[pos + 1], data[pos + 2], data[pos + 3] = bearing >> 8, bearing & 255, quality, age
+    data[20] = 1
+    check = crc16(data, 21)
+    data[21], data[22] = check >> 8, check & 255
     return data

@@ -11,8 +11,11 @@ Receiver<CameraSize, 0xc6, 0x6c> cameraRx;
 Camera camera;
 ChasePD pd;
 Decision decision;
-UsbReport<1024> report;
+UsbReport<1536> report;
 Pwm transmitted{};
+uint8_t alternateSent = 0;
+uint32_t pollInterval = 0, pollMax = 0;
+bool sentAheadOfPoll = false;
 uint32_t cameraMs = 0, irMs = 0, ballMs = 0, pollMs = 0, pollUs = 0, releaseUs = 0;
 uint32_t motorMs = 0, motorTxCount = 0, cameraBad = 0, irBad = 0, reportMs = 0;
 uint16_t irAngle = Unknown, irStrength = 0;
@@ -106,22 +109,34 @@ void loop() {
     haveBall = false;
     pd.reset();
   }
-  decision = decide(manual, cameraLive, camera, irFresh, irInvalid, missedIr, haveBall, pd.pwm);
+  decision = decide(manual, cameraLive, camera, irFresh, irInvalid, missedIr, haveBall, pd.pwm, pd.error);
 
   if (!waiting && micros() - releaseUs >= BusGuardUs) {
-    if (!motorTxCount || memcmp(decision.pwm, transmitted, sizeof(transmitted)) ||
-        now - motorMs >= MotorRefreshMs) {
+    const bool duePoll = !irStarted || now - pollMs >= PollMs;
+    const bool changed = memcmp(decision.pwm, transmitted, sizeof(transmitted)) ||
+                         decision.alternate != alternateSent;
+    const bool urgentStop = decision.state == State::Stop && lastCommandMoving;
+    if (!motorTxCount || urgentStop || ((changed || now - motorMs >= MotorRefreshMs) &&
+                                      (!duePoll || !sentAheadOfPoll))) {
       uint8_t packet[MotorSize];
-      encodeMotor(decision.pwm, packet);
+      encodeMotor(decision.pwm, packet, decision.alternate);
       rs485Send(BusEnable, packet, sizeof(packet));
       memcpy(transmitted, decision.pwm, sizeof(transmitted));
+      alternateSent = decision.alternate;
+      sentAheadOfPoll = duePoll;
       motorMs = millis();
       ++motorTxCount;
       releaseUs = micros();
-    } else if (!irStarted || now - pollMs >= PollMs) {
+    } else if (duePoll) {
       rs485Send(BusEnable, Poll, sizeof(Poll));
       pollUs = micros();
-      pollMs = millis();
+      const uint32_t sentMs = millis();
+      if (irStarted) {
+        pollInterval = sentMs - pollMs;
+        if (pollInterval > pollMax) pollMax = pollInterval;
+      }
+      pollMs = sentMs;
+      sentAheadOfPoll = false;
       waiting = irStarted = true;
       irLength = 0;
       slotMalformed = false;

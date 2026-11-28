@@ -25,6 +25,14 @@ GOAL_MIN_ASPECT = 0.8
 GOAL_MIN_DENSITY = 0.2
 
 EXPOSURE_US = 45000
+# Bench presets reuse the base thresholds only for comparison. Recalibrate before field use.
+EXPOSURE_PRESETS_US = (45000, 30000, 20000, 15000, 10000, 5000)
+BENCH_EXPOSURE_US = None
+# Optional QVGA crop preserving pixel scale, mirror ring and the floor rays.
+BENCH_WINDOW = None  # Try (80, 48, 176, 168).
+BENCH_GAIN_DB = None
+GOAL_X_STRIDE = 1  # Try 2 on the bench, especially with small distant goals.
+VISUALIZATION_MODE = "LIGHT"
 
 GAIN_DB = 6.0
 
