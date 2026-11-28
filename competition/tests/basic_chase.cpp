@@ -15,6 +15,14 @@ int main() {
   cam.safe = 0xffff;
   cam.line = Unknown;
   cam.lineCm = 255;
+  cam.version = 2;
+  cam.safe = 1;
+  for (uint16_t angle : {uint16_t(0), uint16_t(90), uint16_t(180), uint16_t(270)}) {
+    ChasePD reference;
+    reference.update(angle, 100, 100);
+    Decision candidate = basicDecision(true, 210, false, true, cam, true, false, false, true, reference.pwm);
+    assert(candidate.state == State::Chase && !memcmp(candidate.pwm, reference.pwm, sizeof(candidate.pwm)));
+  }
   auto decideBasic = [&](bool armed, int cap, bool tracking = true) {
     return basicDecision(armed, cap, false, true, cam, true, false, false, tracking, curve);
   };
@@ -28,7 +36,14 @@ int main() {
   assert(d.pwm[0] == 140 && d.pwm[2] == 140);
   assert(decideBasic(true, 210, false).reason == StopReason::BallLost);
   cam.safe &= ~Rear;
+  assert(decideBasic(true, 210).state == State::Chase);
+  cam.safe = 0;
+  assert(decideBasic(true, 210).state == State::Chase);
+  cam.flags |= LineHazard;
   assert(decideBasic(true, 210).reason == StopReason::PathBlocked);
+  cam.flags = Ready; cam.version = 1;
+  assert(decideBasic(true, 210).reason == StopReason::PathBlocked);
+  cam.version = 2;
   cam.safe = 0xffff;
   cam.line = 90; cam.lineCm = 30;
   assert(decideBasic(true, 210).reason == StopReason::PathBlocked);

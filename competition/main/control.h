@@ -133,10 +133,16 @@ inline Decision decide(bool manual, bool cameraFresh, const robot::Camera& cam,
 #ifndef RCJ_WHEELS_LIFTED_DIAGNOSTICS
 #define RCJ_WHEELS_LIFTED_DIAGNOSTICS 0
 #endif
-enum class RunMode { Competition, MotorTest, IrPdTest, BasicChase };
+enum class RunMode { Competition, MotorTest, IrPdTest, BasicChase, ManagedCompetition };
 
 #ifndef RCJ_BASIC_CHASE
 #define RCJ_BASIC_CHASE 0
+#endif
+#ifndef RCJ_MANAGED_COMPETITION
+#define RCJ_MANAGED_COMPETITION (!RCJ_BASIC_CHASE && !RCJ_WHEELS_LIFTED_DIAGNOSTICS)
+#endif
+#if RCJ_MANAGED_COMPETITION && (RCJ_BASIC_CHASE || RCJ_WHEELS_LIFTED_DIAGNOSTICS)
+#error Managed competition requires a separate build
 #endif
 #if RCJ_BASIC_CHASE && RCJ_WHEELS_LIFTED_DIAGNOSTICS
 #error BASIC_CHASE and lifted-wheel diagnostics require separate builds
@@ -155,9 +161,9 @@ inline Decision basicDecision(bool armed, int cap, bool manual, bool cameraFresh
   }
   if (out.state != State::Escape) {
     if (!tracking) return out;
-    out.required = 0xffff;
-    out.blocked = out.required & ~cam.safe;
-    if (out.blocked || (cam.line != robot::Unknown && (cam.lineCm == 255 || cam.lineCm <= 35))) {
+    // V1 cannot distinguish unknown sectors from retained white-line hazards.
+    if (cam.version != 2 || (cam.flags & robot::LineHazard) ||
+        (cam.line != robot::Unknown && (cam.lineCm == 255 || cam.lineCm <= 35))) {
       out.reason = StopReason::PathBlocked;
       return out;
     }

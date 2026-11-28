@@ -14,7 +14,8 @@ Decision decision;
 UsbReport<1536> report;
 Pwm transmitted{};
 uint8_t alternateSent = 0;
-RunMode runMode = RCJ_BASIC_CHASE ? RunMode::BasicChase : RunMode::Competition;
+RunMode runMode = RCJ_BASIC_CHASE ? RunMode::BasicChase :
+                  RCJ_MANAGED_COMPETITION ? RunMode::ManagedCompetition : RunMode::Competition;
 #if RCJ_BASIC_CHASE
 constexpr uint32_t BasicLeaseMs = 200, BasicMaxRunMs = 2000;
 uint32_t basicLeaseMs = 0, basicStartMs = 0;
@@ -33,7 +34,7 @@ uint32_t cameraMs = 0, irMs = 0, pollMs = 0, pollUs = 0, releaseUs = 0;
 uint32_t cameraUs = 0, escapeRxToTxUs = 0, escapeRxToTxMaxUs = 0;
 uint32_t motorMs = 0, motorTxCount = 0, cameraBad = 0, irBad = 0, reportMs = 0;
 uint16_t irAngle = Unknown, irStrength = 0;
-bool manual = RCJ_WHEELS_LIFTED_DIAGNOSTICS || RCJ_BASIC_CHASE;
+bool manual = RCJ_WHEELS_LIFTED_DIAGNOSTICS || RCJ_BASIC_CHASE || RCJ_MANAGED_COMPETITION;
 bool haveCamera = false, cameraLive = false, haveIr = false, irInvalid = false, haveBall = false;
 bool missedIr = false, slotMalformed = false;
 bool waiting = false, irStarted = false, requestedReport = false;
@@ -167,6 +168,11 @@ void loop() {
     pd.reset();
   }
   decision = decide(manual, cameraLive, camera, irFresh, irInvalid, missedIr, haveBall, pd.pwm, pd.error);
+
+#if RCJ_MANAGED_COMPETITION
+  decision = basicDecision(true, 210, manual, cameraLive, camera,
+                           irFresh, irInvalid, missedIr, haveBall, pd.pwm);
+#endif
 
 #if RCJ_BASIC_CHASE
   if (basicArmed && (!Serial || now - basicLeaseMs >= BasicLeaseMs ||

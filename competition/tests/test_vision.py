@@ -469,9 +469,14 @@ class VisionTests(unittest.TestCase):
             safe, _, _ = guard.update(hidden, {}, now)
             self.assertFalse(safe & 1)
             self.assertTrue(guard.near_history)
+            pkt = vision.packet(1, True, guard.escape_requested, safe, 0, None,
+                                ((65535, 0, 255), (65535, 0, 255)), 40, blocked=guard.blocked)
+            self.assertEqual(pkt[20], 2)
+            self.assertTrue(pkt[3] & 16)
         guard.update(self.rays, {}, 1010)
         safe, escape, _ = guard.update(self.rays, {}, 1040)
         self.assertFalse(guard.near_history)
+        self.assertEqual(guard.blocked, 0)
         self.assertEqual(escape, 0)
         self.assertTrue(safe & 1)
 

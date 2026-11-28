@@ -14,8 +14,8 @@ try:
 except ImportError:
     disable_preview = None
 
-PRODUCTION_API = 7
-BUILD = "rcj-openmv-competition-7"
+PRODUCTION_API = 8
+BUILD = "rcj-openmv-competition-8"
 CAPTURE_ERRORS = (AttributeError, TypeError, ValueError, MemoryError, OSError, RuntimeError)
 BASELINE = ((30, 100, -30, 30, 30, 127), (10, 80, -30, 50, -128, -20))
 
@@ -193,7 +193,7 @@ def main():
         fields = (vision.goal_fields(goals[0], now, time.ticks_diff),
                   vision.goal_fields(goals[1], now, time.ticks_diff))
         data = vision.packet(sequence, ready and not bench, guard.escape_requested, mask, escape, nearest,
-                             fields, frame_ms, packet_data)
+                             fields, frame_ms, packet_data, guard.blocked)
         uart_start = time.ticks_us()
         try:
             written = uart.write(data)

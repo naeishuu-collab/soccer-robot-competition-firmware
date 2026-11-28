@@ -66,9 +66,15 @@ def main():
              "print(','.join(map(str, packet(19, True, True, 256, 256, (359, 24), "
              "((75, 65, 8), (65535, 0, 255)), 66))))"], cwd=ROOT / "openmv"
         ).decode("ascii").strip()
+        golden_v2 = subprocess.check_output(
+            [sys.executable, "-B", "-c", "from vision import packet; "
+             "print(','.join(map(str, packet(20, True, False, 0, 0, None, "
+             "((65535, 0, 255), (65535, 0, 255)), 40, blocked=1))))"], cwd=ROOT / "openmv"
+        ).decode("ascii").strip()
         (temp / "camera_golden.h").write_text(
-            "const uint8_t cameraGolden[] = {" + golden + "};\n", encoding="utf-8")
-        for source in ("firmware.cpp", "sweep.cpp", "basic_chase.cpp"):
+            "const uint8_t cameraGolden[] = {" + golden + "};\n"
+            "const uint8_t cameraGoldenV2[] = {" + golden_v2 + "};\n", encoding="utf-8")
+        for source in ("firmware.cpp", "sweep.cpp", "basic_chase.cpp", "managed_competition.cpp"):
             build(compiler, temp, ROOT / "tests" / source)
     for source in (ROOT / "openmv").glob("*.py"):
         ast.parse(source.read_text(encoding="utf-8"), filename=str(source))

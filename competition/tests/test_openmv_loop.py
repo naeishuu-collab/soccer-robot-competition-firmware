@@ -111,6 +111,7 @@ class CameraLoopTests(unittest.TestCase):
             return
         self.assertEqual(entries, ["uart", "both", "uart", "yellow", "blue", "uart", "uart", "uart", "both"])
         self.assertTrue(all(p[3] == 1 and p[4:6] == b"\xff\xff" for p in packets))
+        self.assertTrue(all(p[20] == 2 for p in packets))
         self.assertEqual([p[2] for p in packets], list(range(5)))
         self.assertEqual(draws[0], (1, "both"))
         self.assertTrue(any("DARK_MASK=0000" in line and "SELF_MASK=0000" in line for line in logs))

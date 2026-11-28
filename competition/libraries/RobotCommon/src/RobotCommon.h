@@ -13,6 +13,7 @@ constexpr uint32_t PollMs = 30, IrTimeoutMs = 100, CameraTimeoutMs = 200, Watchd
 constexpr uint32_t IrSlotUs = 12000, BusGuardUs = 50;
 constexpr uint8_t MotorSize = 13, CameraSize = 23, MotorSync = 0xd7, BridgePwm = 160;
 constexpr uint8_t Ready = 1, Slow = 2, Escape = 4, TargetBlue = 8;
+constexpr uint8_t LineHazard = 16;
 constexpr uint16_t Front = 1, Rear = 1 << 8;
 
 inline uint16_t read16(const uint8_t* bytes) {
@@ -62,6 +63,7 @@ struct Camera {
   uint8_t sequence = 0, flags = 0, lineCm = 255, frameMs = 0;
   uint16_t safe = 0, escape = 0, line = Unknown;
   Goal yellow{Unknown, 0, 255}, blue{Unknown, 0, 255};
+  uint8_t version = 1;
 };
 inline bool bearing(uint16_t value) { return value < 360 || value == Unknown; }
 inline Decode decodeCamera(const uint8_t* bytes, Camera& camera) {
@@ -69,16 +71,17 @@ inline Decode decodeCamera(const uint8_t* bytes, Camera& camera) {
   const uint8_t flags = bytes[3];
   const uint16_t safe = read16(bytes + 4), escape = read16(bytes + 6);
   const uint16_t line = read16(bytes + 8), yellow = read16(bytes + 12), blue = read16(bytes + 16);
-  if (flags & 0xf0 || !bearing(line) || !bearing(yellow) || !bearing(blue) ||
+  const uint8_t version = bytes[20];
+  if ((version != 1 && version != 2) || (flags & (version == 1 ? 0xf0 : 0xe0)) || !bearing(line) || !bearing(yellow) || !bearing(blue) ||
       (line == Unknown) != (bytes[10] == 255) ||
       bool(flags & Slow) != (bytes[11] > 100) || bytes[14] > 100 || bytes[18] > 100 ||
       (yellow == Unknown ? bytes[14] != 0 || bytes[15] != 255 : bytes[15] > 30) ||
       (blue == Unknown ? bytes[18] != 0 || bytes[19] != 255 : bytes[19] > 30) ||
-      bytes[20] != 1 || (escape & ~(Front | Rear)) || (escape & ~safe) ||
+      (escape & ~(Front | Rear)) || (escape & ~safe) ||
       (!(flags & Escape) && escape) || ((!(flags & Ready) || (flags & Slow)) && (safe || escape)))
     return Decode::Fields;
   camera = {bytes[2], flags, bytes[10], bytes[11], safe, escape, line,
-            {yellow, bytes[14], bytes[15]}, {blue, bytes[18], bytes[19]}};
+            {yellow, bytes[14], bytes[15]}, {blue, bytes[18], bytes[19]}, version};
   return Decode::Ok;
 }
 

@@ -19,7 +19,7 @@ except ImportError:
         return buffer
 
 
-PRODUCTION_API = 7
+PRODUCTION_API = 8
 CLEARANCE_CM = 25
 RELEASE_CM = 30
 ESCAPE_MEMORY_MS = 200
@@ -657,11 +657,13 @@ def crc16(data, length=None):
     return crc
 
 
-def packet(sequence, ready, escaping, mask, escape, nearest, goals, frame_ms, data=None):
+def packet(sequence, ready, escaping, mask, escape, nearest, goals, frame_ms, data=None, blocked=None):
     slow = frame_ms > MAX_FRAME_MS
     if slow or not ready:
         mask = escape = 0
     flags = int(ready) | (int(slow) << 1) | (int(escaping) << 2) | (int(cfg.TARGET_GOAL == "BLUE") << 3)
+    if blocked is not None and blocked:
+        flags |= 16
     angle, cm = (65535, 255) if nearest is None else (round(nearest[0]) % 360, round(nearest[1]))
     if data is None:
         data = bytearray(23)
@@ -671,7 +673,7 @@ def packet(sequence, ready, escaping, mask, escape, nearest, goals, frame_ms, da
     for index, (bearing, quality, age) in enumerate(goals):
         pos = 12 + index * 4
         data[pos], data[pos + 1], data[pos + 2], data[pos + 3] = bearing >> 8, bearing & 255, quality, age
-    data[20] = 1
+    data[20] = 1 if blocked is None else 2
     check = crc16(data, 21)
     data[21], data[22] = check >> 8, check & 255
     return data

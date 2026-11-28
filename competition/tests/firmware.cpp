@@ -1,3 +1,4 @@
+#define RCJ_MANAGED_COMPETITION 0
 #include <cassert>
 #include <cmath>
 #include <iostream>
@@ -113,6 +114,16 @@ void cameraWire() {
          camera.line == 359 && camera.lineCm == 24 && camera.frameMs == 66);
   assert(camera.yellow.angle == 75 && camera.yellow.confidence == 65 && camera.yellow.age == 8);
   assert(camera.blue.angle == Unknown && camera.blue.age == 255);
+  assert(decodeCamera(cameraGoldenV2, camera) == Decode::Ok && camera.version == 2 &&
+         (camera.flags & LineHazard) && camera.safe == 0 && camera.line == Unknown);
+  uint8_t version2[CameraSize];
+  memcpy(version2, cameraGolden, sizeof(version2));
+  version2[20] = 2;
+  version2[3] |= LineHazard;
+  seal(version2, sizeof(version2));
+  assert(decodeCamera(version2, camera) == Decode::Ok && camera.version == 2 && (camera.flags & LineHazard));
+  version2[20] = 1; seal(version2, sizeof(version2));
+  assert(decodeCamera(version2, camera) == Decode::Fields);
   uint8_t damaged[CameraSize];
   memcpy(damaged, cameraGolden, sizeof(damaged));
   damaged[4] ^= 1;

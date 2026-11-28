@@ -14,7 +14,7 @@ uint32_t eventDropped = 0;
 State previousState = State::Stop;
 StopReason previousReason = StopReason::None;
 const char* const paths[] = {"STOP", "ZIP", "SWEEP", "REDUCED_TURN", "STRAIGHT_160", "ESCAPE", "DIAGNOSTIC"};
-const char* const modes[] = {"COMPETITION", "MOTOR_TEST", "IR_PD_TEST", "BASIC_CHASE"};
+const char* const modes[] = {"COMPETITION", "MOTOR_TEST", "IR_PD_TEST", "BASIC_CHASE", "MANAGED_COMPETITION_TRIAL"};
 const char* const fallbackNames[] = {"NONE", "MASK", "UNCOMMISSIONED_SWEEP", "RANGE", "AMBIGUOUS", "UNSUPPORTED_PWM"};
 uint32_t stopCount[int(StopReason::Count)]{}, stopMs[int(StopReason::Count)]{}, reasonSince = 0;
 
@@ -56,7 +56,7 @@ void diagnose(uint32_t now, bool cameraFresh, bool irFresh) {
     report.queue(snprintf(report.data, sizeof(report.data),
         "STATE=%s STOP_REASON=%s STOP_DETAIL=%s MODE=%s\n"
         "IR_LINK=%s IR_ANGLE=%d IR_STRENGTH=%u IR_AGE_MS=%ld IR_INVALID_COUNT=%lu IR_POLL_INTERVAL_MS=%lu IR_POLL_MAX_MS=%lu\n"
-        "CAMERA_LINK=%s CAMERA_AGE_MS=%ld CAMERA_READY=%u CAMERA_SLOW=%u FRAME_MS=%u CAMERA_BAD=%lu\n"
+        "CAMERA_LINK=%s CAMERA_AGE_MS=%ld CAMERA_READY=%u CAMERA_SLOW=%u FRAME_MS=%u CAMERA_BAD=%lu CAMERA_PROTOCOL=%u LINE_HAZARD=%u\n"
         "WHITE_LINE=%u LINE_ANGLE=%d LINE_DISTANCE=%d SAFE_MASK=%04x ESCAPE_MASK=%04x REQUIRED_MASK=%04x BLOCKED_MASK=%04x PATH_MODE=%s FALLBACK_REASON=%s\n"
         "YELLOW_GOAL=%d BLUE_GOAL=%d TARGET_GOAL=%s OPPONENT_ANGLE=%d OWN_ANGLE=%d GOAL_QUALITY=%u,%u\n"
         "PD_ERROR=%d PD_P=%.2f PD_D=%.2f PD_TURN=%d\n"
@@ -81,7 +81,8 @@ void diagnose(uint32_t now, bool cameraFresh, bool irFresh) {
         (unsigned long)pollInterval, (unsigned long)pollMax,
         cameraFresh ? "OK" : "ERROR", haveCamera ? long(now - cameraMs) : -1L,
         unsigned(bool(camera.flags & Ready)), unsigned(bool(camera.flags & Slow)),
-        unsigned(camera.frameMs), (unsigned long)cameraBad, unsigned(camera.line != Unknown || (camera.flags & Escape)),
+        unsigned(camera.frameMs), (unsigned long)cameraBad, unsigned(camera.version), unsigned(bool(camera.flags & LineHazard)),
+        unsigned(camera.line != Unknown || (camera.flags & Escape)),
         camera.line == Unknown ? -1 : int(camera.line), camera.lineCm == 255 ? -1 : int(camera.lineCm),
         unsigned(camera.safe), unsigned(camera.escape), unsigned(decision.required), unsigned(decision.blocked),
         paths[int(decision.path)], fallbackNames[int(decision.fallback)],
