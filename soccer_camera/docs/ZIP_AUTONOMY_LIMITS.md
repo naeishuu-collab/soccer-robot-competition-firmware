@@ -1,9 +1,0 @@
-# ZIP autonomous control: partial fix and unresolved safety limitation
-
-Baseline: c2be6fff1fda21310875551c3b55ba47766ee603. The default is ROBOT_ZIP_COMPAT=1 and executes zipLoop(), not upgradeLoop(). The ZIP mode now retains a valid IR reply for at most 100 ms across a missed poll, stopping immediately for a valid zero count. It emits bounded, low-rate diagnostic lines when USB has capacity.
-
-Do not enable directional mask routing in this mode: the actual chase (4).zip MOTOR trackBall() converts the received IR angle into differential left/right PD duty, not an omni translation angle. An open camera sector does not imply the resulting curved trajectory is safe. Consequently the conservative all-directions-clear requirement remains and the reported stop problem is not fully solved. The original ZIP MOTOR cannot accept a heading correction or an explicit safe translation command. A compatible motor-side control design and physical trajectory/braking validation are required.
-
-The repository soccer_camera/ir and motor sketches use different protocols from ZIP mode: do not flash those binaries with ZIP MAIN as a set. Camera safety expires after 200 ms; a slow frame means the pipeline exceeded its safety age, not simply low FPS. FORCE_FLOOR_OK does not open unsafe sectors. The real frame timing, camera mounting orientation, board chip variants, bus timing, and behavior on hardware remain unverified. ZIP source comments call the boards RP2354B while project board documentation assumes RP2354A; inspect markings before choosing binaries.
-
-BNO is disabled in this mode; goals do not control the ZIP chase. Partial mask, camera loss, and IR expiry still stop the robot. The reported hardware stop may be due to the mask rule, but only a diagnostic capture can establish the actual stop reason.
