@@ -58,7 +58,7 @@ GREEN = (12, 75, -65, -10, -15, 55)
 GREEN_LOW_SATURATION = (33, 48, -13, -7, 2, 11)
 
 WHITE = (72, 100, -12, 12, -15, 15)
-WHITE_CANDIDATE = (85, 100, -8, 8, -8, 8)
+WHITE_CANDIDATE = (85, 100, -8, 3, 0, 12)
 BENCH_WHITE_CANDIDATE = False  # Candidate-only comparison always clears UART READY.
 MIN_VISIBLE_L = 12
 MAX_VISIBLE_L = 97

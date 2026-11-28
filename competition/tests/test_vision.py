@@ -459,10 +459,31 @@ class VisionTests(unittest.TestCase):
         _, escape, _ = guard.update(self.rays, {165:21, 180:20}, 110)
         self.assertEqual(escape, 1)
 
+    def test_side_line_requires_observed_direction_away_from_every_ray(self):
+        # A 105-degree nearest line does not establish the rest of its extent.
+        # Both synthetic scenes have the same nearest ray but different safe exits.
+        forward = vision.LineGuard(lambda a, b: a-b)
+        safe, escape, nearest = forward.update(self.rays, {105: 20, 120: 21}, 0)
+        self.assertEqual(nearest, (105, 20))
+        self.assertEqual(escape, 1)
+        self.assertTrue(safe & 1)
+        blocked = vision.LineGuard(lambda a, b: a-b)
+        safe, escape, nearest = blocked.update(self.rays, {90: 21, 105: 20}, 0)
+        self.assertEqual(nearest, (105, 20))
+        self.assertEqual(escape, 0)
+        self.assertFalse(safe & (1 | 256))
+        unobserved = vision.LineGuard(lambda a, b: a-b)
+        safe, escape, _ = unobserved.update(self.rays - {0}, {105: 20, 120: 21}, 0)
+        self.assertFalse(safe & 1)
+        self.assertEqual(escape, 0)
+
     def test_white_candidate_visibility_and_measured_clearance(self):
         self.assertTrue(vision.line_code((85, -3, 3), True) & 1)
         self.assertTrue(vision.line_code((80, 0, 0)) & 1)
         self.assertFalse(vision.line_code((80, 0, 0), True) & 1)
+        for lab in ((99, -3, 7), (100, -2, 8), (89, -5, 5), (98, 0, 4), (97, 0, 9)):
+            self.assertTrue(vision.line_code(lab) & 1)
+            self.assertTrue(vision.line_code(lab, True) & 1)
         self.assertFalse(vision.line_code((100, 30, 0)) & 4)
         self.assertEqual(vision.safety_distances(None), (25, 35))
         self.assertEqual(vision.safety_distances((9, 100, 100, 10, 3)), (32,35+2))
