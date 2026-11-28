@@ -69,6 +69,12 @@ void diagnose(uint32_t now, bool cameraFresh, bool irFresh) {
                 ? "escape_both_candidates_bearing_unknown_or_lateral"
             : decision.reason == StopReason::NoEscape && !camera.safe
                 ? "camera_reports_no_safe_sector"
+                : decision.reason == StopReason::PathBlocked &&
+                    (runMode == RunMode::BasicChase || runMode == RunMode::ManagedCompetition) && camera.version != 2
+                    ? "camera_protocol_v2_required"
+                : decision.reason == StopReason::PathBlocked &&
+                    (runMode == RunMode::BasicChase || runMode == RunMode::ManagedCompetition) && (camera.flags & LineHazard)
+                    ? "current_or_held_white_line_hazard"
                 : decision.reason == StopReason::PathBlocked && decision.fallback == Fallback::Unsupported
                     ? "wheel_pattern_not_verified"
                 : decision.reason == StopReason::PathBlocked && decision.blocked
