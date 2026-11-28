@@ -57,7 +57,7 @@ void diagnose(uint32_t now, bool cameraFresh, bool irFresh) {
         "STATE=%s STOP_REASON=%s STOP_DETAIL=%s MODE=%s\n"
         "IR_LINK=%s IR_ANGLE=%d IR_STRENGTH=%u IR_AGE_MS=%ld IR_INVALID_COUNT=%lu IR_POLL_INTERVAL_MS=%lu IR_POLL_MAX_MS=%lu\n"
         "CAMERA_LINK=%s CAMERA_AGE_MS=%ld CAMERA_READY=%u CAMERA_SLOW=%u FRAME_MS=%u CAMERA_BAD=%lu\n"
-        "WHITE_LINE=%u LINE_ANGLE=%d LINE_DISTANCE=%d SAFE_MASK=%04x REQUIRED_MASK=%04x BLOCKED_MASK=%04x PATH_MODE=%s FALLBACK_REASON=%s\n"
+        "WHITE_LINE=%u LINE_ANGLE=%d LINE_DISTANCE=%d SAFE_MASK=%04x ESCAPE_MASK=%04x REQUIRED_MASK=%04x BLOCKED_MASK=%04x PATH_MODE=%s FALLBACK_REASON=%s\n"
         "YELLOW_GOAL=%d BLUE_GOAL=%d TARGET_GOAL=%s OPPONENT_ANGLE=%d OWN_ANGLE=%d GOAL_QUALITY=%u,%u\n"
         "PD_ERROR=%d PD_P=%.2f PD_D=%.2f PD_TURN=%d\n"
         "PWM_CALCULATED=%d,%d,%d,%d PWM_AFTER_SAFETY=%d,%d,%d,%d PWM_TRANSMITTED=%d,%d,%d,%d\n"
@@ -67,7 +67,7 @@ void diagnose(uint32_t now, bool cameraFresh, bool irFresh) {
             ? "ir_vector_cancelled"
             : decision.reason == StopReason::NoEscape && !camera.safe
                 ? "camera_reports_no_safe_sector"
-                : decision.reason == StopReason::PathBlocked && !decision.blocked
+                : decision.reason == StopReason::PathBlocked && decision.fallback == Fallback::Unmeasured && !decision.required
                     ? "yaw_sweep_uncommissioned" : details[reason],
         modes[int(runMode)],
         irFresh && !irInvalid && !missedIr ? "OK" : "ERROR", irAngle < 360 ? int(irAngle) : -1, unsigned(irStrength),
@@ -77,7 +77,7 @@ void diagnose(uint32_t now, bool cameraFresh, bool irFresh) {
         unsigned(bool(camera.flags & Ready)), unsigned(bool(camera.flags & Slow)),
         unsigned(camera.frameMs), (unsigned long)cameraBad, unsigned(camera.line != Unknown || (camera.flags & Escape)),
         camera.line == Unknown ? -1 : int(camera.line), camera.lineCm == 255 ? -1 : int(camera.lineCm),
-        unsigned(camera.safe), unsigned(decision.required), unsigned(decision.blocked),
+        unsigned(camera.safe), unsigned(camera.escape), unsigned(decision.required), unsigned(decision.blocked),
         paths[int(decision.path)], fallbackNames[int(decision.fallback)],
         yellow, blue, camera.flags & TargetBlue ? "BLUE" : "YELLOW",
         camera.flags & TargetBlue ? blue : yellow, camera.flags & TargetBlue ? yellow : blue,

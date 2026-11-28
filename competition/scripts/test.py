@@ -55,6 +55,12 @@ def main():
         (temp / "old_path.h").write_text(
             "namespace brain { inline bool sectorOpen(uint16_t mask, int i) { return mask & (1u << i); } }\n"
             + extracted[0] + "\n", encoding="utf-8")
+        prior = subprocess.check_output(
+            ["git", "show", "3636020:competition/main/control.h"], cwd=ROOT).decode("utf-8")
+        start = prior.index("inline Decision decide(")
+        stop = prior.index("// Disabled in field builds", start)
+        (temp / "previous_competition.h").write_text(
+            prior[start:stop].replace("inline Decision decide(", "inline Decision decidePrevious(", 1), encoding="utf-8")
         golden = subprocess.check_output(
             [sys.executable, "-B", "-c", "from vision import packet; "
              "print(','.join(map(str, packet(19, True, True, 256, 256, (359, 24), "

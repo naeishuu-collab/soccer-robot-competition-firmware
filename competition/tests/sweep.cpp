@@ -3,6 +3,7 @@
 #include "../main/control.h"
 
 #include "old_path.h"
+#include "previous_competition.h"
 
 struct Case {
   const char* name;
@@ -94,7 +95,25 @@ int main() {
   assert(restored.path == PathMode::Escape && restored.pwm[0] == -175 && restored.pwm[3] == -175);
   cam.flags = robot::Ready;
   cam.safe = 0xffff;
-  assert(decide(false, true, cam, true, false, false, true, logged, -5).path == PathMode::Original);
+  assert(decide(false, true, cam, true, false, false, true, logged, -5).path == PathMode::Straight);
+  const robot::Pwm zeroTurn{175,175,175,175}, incident{171,171,179,179};
+  cam.safe = 0x8007;
+  assert(!zipPathClear(cam.safe, incident));
+  const auto previous = decidePrevious(false, true, cam, true, false, false, true, incident, 2);
+  assert(previous.path == PathMode::Straight && previous.pwm[0] == 160);
+  const auto local = decide(false, true, cam, true, false, false, true, incident, 2);
+  assert(local.path == PathMode::Straight && local.required == robot::Front && local.pwm[0] == 160);
+  const auto original = decide(false, true, cam, true, false, false, true, zeroTurn, 0);
+  assert(original.path == PathMode::Original && original.pwm[0] == 175);
+  cam.safe &= ~robot::Front;
+  assert(decide(false, true, cam, true, false, false, true, incident, 2).state == State::Stop);
+  cam.safe = 0x8007;
+  const robot::Pwm forwardAfterDerivative{205,205,145,145};
+  assert(decidePrevious(false, true, cam, true, false, false, true, forwardAfterDerivative, 50).state == State::Stop);
+  assert(decide(false, true, cam, true, false, false, true, forwardAfterDerivative, 50).path == PathMode::Straight);
+  assert(decide(false, true, cam, true, false, false, true, hard, 50).reason == StopReason::PathBlocked);
+  std::cout << "Logged 8007: old zip stopped, previous API 5 and current use straight 160; "
+               "additional same-sign case at 50 degrees now uses straight 160\n";
   std::cout << "Recorded 15-degree stop reproduced; observed rear corridor chooses reverse escape\n";
   std::cout << "Integrated default, eligible forward cases: unnecessary stops 2 -> 0\n";
   assert(!candidateRequired(cases[0].pwm, {8, 9, 14, 28, 1, 20}).withinRange);

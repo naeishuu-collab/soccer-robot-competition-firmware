@@ -1,5 +1,7 @@
 from pathlib import Path
 import random
+import subprocess
+import time
 import sys
 import unittest
 from unittest.mock import patch
@@ -113,9 +115,12 @@ class VisionTests(unittest.TestCase):
         for sample in range(500):
             visible = {bearing for bearing in self.rays if rng.randrange(4)}
             lines = {bearing: rng.randrange(31, 51) for bearing in self.rays if rng.randrange(8) == 0}
+            confirmed = {b for b, cm in lines.items() if any(
+                abs(lines.get((b + shift) % 360, -100) - cm) <= 8 for shift in (-15, 15))}
             expected = sum(1 << i for i, rays in enumerate(vision.SECTOR_WINDOWS)
                            if all(ray in visible for ray in rays) and all(
-                               vision.difference(i * 22.5, b) >= 60 for b, cm in lines.items() if cm <= 35))
+                               vision.difference(i * 22.5, b) >= (60 if b in confirmed else 45)
+                               for b, cm in lines.items() if cm <= 35))
             self.assertEqual(self.guard.update(visible, lines, sample)[0], expected)
 
     def test_crop_keeps_calibrated_ray_coordinates(self):
@@ -324,6 +329,80 @@ class VisionTests(unittest.TestCase):
         safe, escape, _ = self.guard.update(self.rays - {180}, lines, 1, wide, self.mirror.rays)
         self.assertFalse(safe & 256)
         self.assertEqual(escape, 0)
+
+    def test_logged_rear_line_with_two_offset_suspects(self):
+        # Production's previous 60-degree rule closed front for either off-lane candidate.
+        lines = {180: 19, 195: 20, 45: 18, 315: 18}
+        runs = {180: (1, 3), 195: (1, 3), 45: (0, 0), 315: (0, 0)}
+        visible = {330, 345, 0, 15, 30}
+        safe, escape, _ = self.guard.update(visible, lines, 0, runs, self.mirror.rays)
+        self.assertEqual((safe, escape), (1, 1))
+        self.assertEqual(self.guard.confirmed, {180, 195})
+        self.assertTrue(vision.LINE_BLOCKS[45 // 15] & 1)
+        self.assertFalse(self.guard.ambiguous_blocked & 1)
+        self.assertTrue(self.guard.unknown & 256)
+        self.assertEqual(self.guard.update(visible - {0}, lines, 30, runs, self.mirror.rays)[:2], (0, 0))
+        self.assertEqual(self.guard.update(visible, {}, 70)[:2], (1, 1))
+        # Two clear observations at the hazards allow chase again.
+        self.guard.update(self.rays, {}, 130)
+        self.guard.update(self.rays, {}, 165)
+        self.assertFalse(self.guard.escape_requested)
+        self.assertFalse(self.guard.held_blocked)
+
+    def test_direction_policy_comparison(self):
+        previous = subprocess.check_output(
+            ["git", "show", "3636020:competition/openmv/vision.py"],
+            cwd=Path(__file__).resolve().parents[2])
+        prior = {}
+        exec(compile(previous, "previous-vision.py", "exec"), prior)
+        front = {330, 345, 0, 15, 30}
+        rear = {150, 165, 180, 195, 210}
+        rear_line = {180: 19, 195: 20}
+        front_line = {0: 19, 15: 20}
+        # Scenes describe available rays, confirmed geometry, and isolated suspect pixels.
+        scenes = (
+            (self.rays, {}, {}, 1, 1),
+            (front, {}, {45: 19}, 1, 1),
+            (front, rear_line, {45: 18, 315: 18}, 1, 1),
+            (rear, front_line, {135: 18, 225: 18}, 256, 256),
+            (front - {0}, rear_line, {}, 1, 0),
+            (self.rays, front_line | rear_line, {}, 1, 0),
+            (front, front_line, {}, 1, 0),
+            (front, {}, {0: 18}, 1, 0),
+        )
+        rows = [(visible, known | suspect, {b: (1, 3) for b in known} | {b: (0, 0) for b in suspect},
+                 request, allowed, bool(known))
+                for visible, known, suspect, request, allowed in scenes]
+        results = []
+        for constructor in (prior["LineGuard"], vision.LineGuard):
+            stops = moves = hazardous = escapes = resumes = 0
+            elapsed = 0
+            for iteration in range(200):
+                for visible, lines, runs, request, allowed, near in rows:
+                    guard = constructor(lambda a, b: a-b)
+                    started = time.perf_counter_ns()
+                    safe, retreat, _ = guard.update(visible, lines, 0, runs, self.mirror.rays)
+                    elapsed += time.perf_counter_ns() - started
+                    if iteration == 0:
+                        moved = retreat if guard.escape_requested else safe & request
+                        stops += bool(allowed and not moved)
+                        moves += bool(moved)
+                        hazardous += bool(moved & ~allowed)
+                        escapes += bool(near and allowed and retreat == allowed)
+                        if near and allowed:
+                            guard.update(self.rays, {}, 60)
+                            safe, _, _nearest = guard.update(self.rays, {}, 110)
+                            resumes += bool(safe & request and not guard.escape_requested)
+            results.append((stops, moves, hazardous, escapes, resumes, round(elapsed / (200 * len(rows)) / 1000, 1)))
+        self.assertEqual([row[:5] for row in results], [(3, 1, 0, 0, 2), (0, 4, 0, 2, 2)])
+        print("Camera policy before/after (needless stops, moves, unsafe, escapes, resumes, host us):", results)
+
+    def test_old_side_hold_does_not_close_tangent_straight_lane(self):
+        self.guard.update(self.rays, {90: 19, 105: 20}, 0)
+        safe, _, _ = self.guard.update(self.rays - {90, 105}, {}, 201)
+        self.assertFalse(self.guard.escape_requested)
+        self.assertTrue(safe & 1)  # Neutral to old 90, moving away from old 105.
+        self.assertFalse(safe & 256)  # Forward projection onto old 105 bearing.
 
     def test_censored_distance_uses_wire_unknown_without_clearing_heading(self):
         lines = {0: 18}

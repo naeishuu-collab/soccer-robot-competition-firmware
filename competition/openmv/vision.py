@@ -19,7 +19,7 @@ except ImportError:
         return buffer
 
 
-PRODUCTION_API = 5
+PRODUCTION_API = 6
 CLEARANCE_CM = 25
 RELEASE_CM = 30
 ESCAPE_MEMORY_MS = 200
@@ -252,7 +252,7 @@ def scan_kernel(frame, table, points, spans, results, count: int):
         censored = 0
         if first == 1:
             context = int(packed[start - 1])
-            if context & 2 or (int(lut[pixels[context >> 2]]) & 1):
+            if context & 2 or (int(lut[pixels[context >> 2]]) & 13):
                 censored = 1
         if first and first + length - 1 == stop - start:
             censored = 1
@@ -331,7 +331,7 @@ class Scanner:
         censored = False
         if first == 1:
             context = self.packed[start - 1]
-            censored = bool(context & 2 or self.reference_code(image, context >> 2) & 1)
+            censored = bool(context & 2 or self.reference_code(image, context >> 2) & 13)
         if first and first + length - 1 == stop - start:
             censored = True
         return int(not reasons) | first << 1 | length << 9 | strict << 17 | reasons << 18 | int(censored) << 21
@@ -373,8 +373,12 @@ class Scanner:
 
 
 SECTOR_BITS = tuple(sum(1 << (ray // 15) for ray in rays) for rays in SECTOR_WINDOWS)
+SUSPECT_BLOCKS = tuple(sum(1 << i for i in range(16) if difference(i * 22.5, ray) < 45)
+                       for ray in range(0, 360, 15))
 LINE_BLOCKS = tuple(sum(1 << i for i in range(16) if difference(i * 22.5, ray) < 60)
                     for ray in range(0, 360, 15))
+HELD_APPROACH = tuple(sum(1 << i for i in range(16) if difference(i * 22.5, ray) < 90)
+                      for ray in range(0, 360, 15))
 CLOSE_BLOCKS = tuple(sum(1 << i for i in range(16) if difference(i * 22.5, ray) < 105)
                      for ray in range(0, 360, 15))
 
@@ -417,8 +421,8 @@ class LineGuard:
         self.near = ()
         self.near_history = {}
         self.confirmed = set()
-        self.coverage = self.blocked = self.unknown = self.near_blocked = self.escape_away = 0
-        self.present_blocked = self.ambiguous_blocked = self.held_blocked = 0
+        self.coverage = self.blocked = self.unknown = self.escape_away = 0
+        self.present_blocked = self.confirmed_blocked = self.ambiguous_blocked = self.held_blocked = 0
         self.escape_requested = False
         self.regions = []
         self.tracks = []
@@ -426,7 +430,6 @@ class LineGuard:
         self.closing_cm_s = self.ttc_ms = None
 
     def update(self, visible, lines, now, runs=None, rays=None, censored=()):
-        threshold = self.release if self.near else self.clearance
         self.confirmed.clear()
         self.regions.clear()
         tracks = []
@@ -484,49 +487,44 @@ class LineGuard:
                         ymin, ymax = min(ymin, y0, y1), max(ymax, y0, y1)
                     self.regions.append(((xmin, ymin, xmax - xmin + 1, ymax - ymin + 1), confirmed))
 
-        raw_close = tuple(b for b, cm in lines.items() if cm <= threshold)
-        close = tuple(b for b in raw_close if b in self.confirmed or (b in self.near and b in eligible))
-        for b in close:
-            self.near_history[b] = (now, 0)
-        for b in self.near:
-            if b in close:
-                continue
-            last_seen, clear_frames = self.near_history[b]
-            clear = (b in visible and b not in lines) or (b in lines and lines[b] > self.release)
+        for b in self.confirmed:
+            threshold = self.release if b in self.near_history else self.clearance
+            if lines[b] <= threshold:
+                self.near_history[b] = (now, 0)
+        self.held_blocked = 0
+        self.escape_requested = False
+        for b, (last_seen, clear_frames) in tuple(self.near_history.items()):
+            age = self.ticks_diff(now, last_seen)
+            clear = b in visible and (b not in lines or (b in eligible and lines[b] > self.release))
             clear_frames = clear_frames + 1 if clear else 0
             if clear_frames >= 2 and self.ticks_diff(now, last_seen) >= 100:
                 del self.near_history[b]
             else:
                 self.near_history[b] = (last_seen, clear_frames)
+                if age < ESCAPE_MEMORY_MS:
+                    self.escape_requested = True
+                    self.held_blocked |= CLOSE_BLOCKS[b // 15]
+                else:
+                    self.held_blocked |= HELD_APPROACH[b // 15]
         self.near = tuple(self.near_history)
-        blocked = 0
+        self.confirmed_blocked = self.ambiguous_blocked = 0
         for bearing, cm in lines.items():
             if cm <= self.block:
-                blocked |= LINE_BLOCKS[bearing // 15]
+                index = bearing // 15
+                if bearing in self.confirmed:
+                    self.confirmed_blocked |= LINE_BLOCKS[index]
+                else:
+                    self.ambiguous_blocked |= SUSPECT_BLOCKS[index]
         observed = sum(1 << (ray // 15) for ray in visible)
         self.coverage = 0
         for i, window in enumerate(SECTOR_BITS):
             if observed & window == window:
                 self.coverage |= 1 << i
-        self.present_blocked = blocked
-        self.ambiguous_blocked = self.held_blocked = 0
-        for b in raw_close:
-            if b not in close:
-                self.ambiguous_blocked |= LINE_BLOCKS[b // 15]
-        for b in self.near:
-            self.held_blocked |= CLOSE_BLOCKS[b // 15]
-        self.near_blocked = self.ambiguous_blocked | self.held_blocked
-        # The ambiguous approach cone is already included in present_blocked.
+        self.present_blocked = self.confirmed_blocked | self.ambiguous_blocked
         self.blocked = self.present_blocked | self.held_blocked
         self.unknown = 0xffff & ~self.coverage
         mask = self.coverage & ~self.blocked
-        self.escape_away = 0
-        self.escape_requested = any(self.ticks_diff(now, seen) < ESCAPE_MEMORY_MS
-                                    for seen, _ in self.near_history.values())
-        if self.escape_requested:
-            for bit, bearing in ((1, 0), (256, 180)):
-                if all(difference(bearing, b) >= 105 for b in self.near):
-                    self.escape_away |= bit
+        self.escape_away = ((1 | 256) & ~self.held_blocked) if self.escape_requested else 0
         # A clipped run still blocks its approach cone, but its distance is not known.
         wire_nearest = None if self.line_distance is None else (self.line_angle, self.line_distance)
         return mask, self.escape_away & mask, wire_nearest

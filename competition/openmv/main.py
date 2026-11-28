@@ -14,8 +14,8 @@ try:
 except ImportError:
     disable_preview = None
 
-PRODUCTION_API = 5
-BUILD = "rcj-openmv-competition-5"
+PRODUCTION_API = 6
+BUILD = "rcj-openmv-competition-6"
 CAPTURE_ERRORS = (AttributeError, TypeError, ValueError, MemoryError, OSError, RuntimeError)
 BASELINE = ((30, 100, -30, 30, 30, 127), (10, 80, -30, 50, -128, -20))
 
@@ -323,22 +323,23 @@ def main():
             ide = ide_connected() if ide_connected else None
             summary = ("BUILD=%s FPS=%.1f MODE=%s IDE=%s EXPOSURE_US=%d ACTUAL_EXPOSURE_US=%d BENCH=%d "
                        "FRAME_MS=%d READY=%d FAST=%d SAFE_MASK=%04x FLOOR=ASSUMED OBSERVED_MASK=%04x LINE_MASK=%04x UNKNOWN_MASK=%04x "
-                       "NEAR_BLOCK_MASK=%04x ESCAPE_REQUEST=%d ESCAPE_AWAY_MASK=%04x ESCAPE_MASK=%04x LINE=%s UART_TX=%d UART_PARTIAL=%d "
+                       "ESCAPE_REQUEST=%d ESCAPE_AWAY_MASK=%04x ESCAPE_MASK=%04x LINE=%s UART_TX=%d UART_PARTIAL=%d "
                        "WHITE_RAYS=%d STRICT_RAYS=%d CLOSING_CM_S=%s TTC_MS=%s RANGE_CM=%s WHITE_BENCH=%s "
                        "FRAME_LATE=%d INTERVAL_LATE=%d GOAL_SKIP=%d GOAL_ERROR=%d/%s DRAW_ERROR=%d/%s") % (
                            BUILD, fps, mode, ide, exposure, actual_exposure, bench, frame_ms, ready and not bench,
                            scanner.fast, mask if ready and not slow and not bench else 0, guard.coverage,
-                           guard.blocked, guard.unknown, guard.near_blocked, guard.escape_requested, guard.escape_away, escape if ready and not slow and not bench else 0,
+                           guard.blocked, guard.unknown, guard.escape_requested, guard.escape_away, escape if ready and not slow and not bench else 0,
                            nearest, sent, partial, len(lines), scanner.strict_hits, guard.closing_cm_s, guard.ttc_ms,
                            (clearance, block), comparison, late, interval_late, goal_skips, goal_errors, goal_error,
                            overlay.errors, overlay.last_error)
             radius = "-" if guard.line_xy is None else "%.1f" % mirror.pixel_radius(*guard.line_xy)
-            output = ["LINE_ANGLE=%s LINE_DISTANCE=%s LINE_PIXEL_RADIUS=%s DISTANCE_VALID=%d" %
-                      (guard.line_angle, guard.line_distance, radius, nearest is not None)]
+            output = ["LINE_ANGLE=%s LINE_DISTANCE=%s LINE_PIXEL_RADIUS=%s DISTANCE_VALID=%d DISTANCE_SOURCE=%s" %
+                      (guard.line_angle, guard.line_distance, radius, nearest is not None,
+                       "TABLE_ESTIMATE" if nearest is not None else "UNKNOWN")]
             dark, clipped, self_mask = vision.observation_reasons(scanner.reasons if ready else {})
-            output.append("DARK_MASK=%04x CLIPPED_MASK=%04x SELF_MASK=%04x PRESENT_BLOCK=%04x "
-                          "AMBIGUOUS_BLOCK=%04x HELD_BLOCK=%04x ESC_UNKNOWN=%04x ESC_LINE=%04x" %
-                          (dark, clipped, self_mask, guard.present_blocked, guard.ambiguous_blocked,
+            output.append("DARK_MASK=%04x CLIPPED_MASK=%04x SELF_MASK=%04x CONFIRMED_BLOCK=%04x "
+                          "SUSPECTED_BLOCK=%04x HELD_BLOCK=%04x ESC_UNKNOWN=%04x ESC_LINE=%04x" %
+                          (dark, clipped, self_mask, guard.confirmed_blocked, guard.ambiguous_blocked,
                            guard.held_blocked, guard.escape_away & guard.unknown, guard.escape_away & guard.blocked))
             if calibration_cm is not None:
                 center = (mirror.cx, mirror.cy) if mirror.roi else None
@@ -352,8 +353,8 @@ def main():
                               (ready, sorted(scanner.censored) if ready else [], sorted(guard.near_history)))
                 rays = "".join("W" if b in guard.confirmed else "w" if b in lines else "O" if b in visible else "?"
                                for b in range(0, 360, 15))
-                output.append("RAYS=%s WHITE_CM=%s ROI=%s GOALS=%s COUNTS(raw,small,clip,ring,shape,turf,accepted)=%s" %
-                              (rays, lines, last_roi, fields, (reports[0][:7], reports[1][:7])))
+                output.append("RAYS=%s WHITE_CM=%s REJECTED_SELF_RAYS=%s ROI=%s GOALS=%s COUNTS(raw,small,clip,ring,shape,turf,accepted)=%s" %
+                              (rays, lines, [b for b in scanner.reasons if ready and scanner.reasons[b] & 4], last_roi, fields, (reports[0][:7], reports[1][:7])))
             output.append(summary)
             report_to_console(usb, ide, output)
             last_report, frames = now, 0

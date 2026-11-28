@@ -32,6 +32,9 @@ using namespace robot;
 #include "camera_golden.h"
 
 void equal(const Pwm& pwm, int a, int b, int c, int d) {
+  if (pwm[0] != a || pwm[1] != b || pwm[2] != c || pwm[3] != d)
+    std::cerr << "Applied PWM " << pwm[0] << ',' << pwm[1] << ',' << pwm[2] << ',' << pwm[3]
+              << " differs from " << a << ',' << b << ',' << c << ',' << d << " at ms " << millis() << '\n';
   assert(pwm[0] == a && pwm[1] == b && pwm[2] == c && pwm[3] == d);
 }
 
@@ -122,12 +125,12 @@ void cameraWire() {
 
 void at(uint32_t ms) { clockMs = ms; clockUs = ms * 1000; }
 
-void cameraFrame(uint8_t sequence, uint8_t flags, uint16_t mask, uint16_t escape = 0) {
+void cameraFrame(uint8_t sequence, uint8_t flags, uint16_t mask, uint16_t escape = 0, uint16_t line = Unknown, uint8_t cm = 255) {
   uint8_t data[CameraSize] = {0xc6, 0x6c, sequence, flags};
   put16(data + 4, mask);
   put16(data + 6, escape);
-  put16(data + 8, Unknown);
-  data[10] = 255;
+  put16(data + 8, line);
+  data[10] = cm;
   data[11] = flags & Slow ? 101 : 45;
   put16(data + 12, Unknown);
   put16(data + 16, Unknown);
@@ -197,24 +200,32 @@ void mainLoop() {
   Serial.rx.push_back('s');
   at(156); loop();
   assert(decision.reason == StopReason::Manual && motorTxCount == sentBefore);
-  at(160); irFrame(0, 200); loop();
+  at(160); irFrame(340, 4520); loop();
   at(161); loop();
   equal(transmitted, 0, 0, 0, 0);
   assert(motorTxCount == sentBefore + 1);
   Serial.rx.push_back('g');
-  at(162); cameraFrame(3, Ready | Escape, 0); loop();
-  assert(decision.reason == StopReason::NoEscape);
-  at(170); cameraFrame(4, Ready | Slow, 0); loop();
+  at(162); cameraFrame(3, Ready | Escape, 0, 0, 180, 19); loop();
+  assert(decision.reason == StopReason::NoEscape && decision.blocked == 0x0101);
+  equal(pd.pwm, 210, 210, 140, 140);
+  equal(transmitted, 0, 0, 0, 0);
+  at(163); cameraFrame(4, Ready | Escape, Front, Front, 180, 19); loop();
+  assert(decision.path == PathMode::Escape && decision.required == Front);
+  equal(transmitted, 175, 175, 175, 175);
+  at(170); cameraFrame(5, Ready | Slow, 0); loop();
   assert(decision.reason == StopReason::CameraSlow);
-  at(171); cameraFrame(5, 0, 0); loop();
+  at(171); cameraFrame(6, 0, 0); loop();
   assert(decision.reason == StopReason::CameraNotReady);
-  at(172); cameraFrame(6, Ready, Front); loop();
-  assert(decision.state == State::Chase);  // No goals and only the intended heading observed.
+  haveBall = false;
+  pd.reset();
+  at(172); cameraFrame(7, Ready, 0x8007); loop();
+  assert(decision.reason == StopReason::BallLost);
   const uint32_t oldPoll = pollMs;
   for (uint32_t t = 173; t <= 194 && pollMs == oldPoll; ++t) { at(t); loop(); }
   assert(waiting);
   const uint32_t freshPoll = pollMs;
-  at(freshPoll + 5); irFrame(5, 6909); loop();
+  at(freshPoll + 5); irFrame(2, 6909); loop();
+  equal(pd.pwm, 171, 171, 179, 179);
   assert(pd.pwm[0] != pd.pwm[2] && decision.path == PathMode::Straight && decision.required == Front);
   equal(decision.pwm, 160, 160, 160, 160);
   at(freshPoll + 6); loop();
@@ -222,7 +233,7 @@ void mainLoop() {
   assert(Serial1.tx.size() >= sizeof(transmittedChasePacket));
   memcpy(transmittedChasePacket, Serial1.tx.data() + Serial1.tx.size() - sizeof(transmittedChasePacket),
          sizeof(transmittedChasePacket));
-  at(freshPoll + 7); cameraFrame(6, Ready, Front); loop();
+  at(freshPoll + 7); cameraFrame(7, Ready, 0x8007); loop();
   assert(cameraMs == 172);  // Duplicates don't extend freshness.
   at(372); loop();
   assert(decision.reason == StopReason::CameraTimeout);

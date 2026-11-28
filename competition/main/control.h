@@ -49,66 +49,65 @@ inline Decision decide(bool manual, bool cameraFresh, const robot::Camera& cam,
       out.reason = StopReason::PathBlocked;
       return out;
     }
+    const int left = pwm[0], right = pwm[2];
+    const bool straight = left == right;
     const bool commissioned = config.halfWidthCm > 0;
-    const bool frontClear = cam.safe & robot::Front;
-    const bool forwardBall = error >= -45 && error <= 45 && pwm[0] + pwm[2] > 0;
-    const robot::Pwm straight{robot::BridgePwm, robot::BridgePwm, robot::BridgePwm, robot::BridgePwm};
-    if (commissioned) {
+    const bool forward = left > 0 && right > 0;
+    const bool reverse = left < 0 && right < 0;
+    const uint16_t lane = forward ? robot::Front : reverse ? robot::Rear : 0;
+    const int16_t duty = reverse ? -robot::BridgePwm : robot::BridgePwm;
+    const robot::Pwm fallback{duty, duty, duty, duty};
+
+    if (straight && !commissioned) {
+      out.required = lane;
+      if (!(lane & ~cam.safe)) out.path = PathMode::Original;
+    } else if (commissioned) {
       const auto sweep = candidateRequired(pwm, config);
       out.required = sweep.required;
-      out.blocked = out.required & ~cam.safe;
       if (permitsSweep(sweep, cam.safe)) out.path = PathMode::Sweep;
       else {
         out.fallback = sweep.withinRange ? Fallback::Mask : Fallback::Range;
-        const int middle = (pwm[0] + pwm[2]) / 2;
-        int16_t left = ChasePD::limit((middle + pwm[0]) / 2);
-        int16_t right = ChasePD::limit((middle + pwm[2]) / 2);
-        if (middle && pwm[0] * pwm[2] < 0) {
-          // Preserve the direction of the yaw bias with a bounded same-sign vector.
+        const int middle = (left + right) / 2;
+        int16_t reducedLeft = ChasePD::limit((middle + left) / 2);
+        int16_t reducedRight = ChasePD::limit((middle + right) / 2);
+        if (middle && left * right < 0) {
           const int16_t nearer = middle > 0 ? 140 : -140;
           const int16_t farther = middle > 0 ? 175 : -175;
-          left = pwm[0] * middle < 0 ? nearer : farther;
-          right = pwm[2] * middle < 0 ? nearer : farther;
+          reducedLeft = left * middle < 0 ? nearer : farther;
+          reducedRight = right * middle < 0 ? nearer : farther;
         }
-        const robot::Pwm reduced{left, left, right, right};
+        const robot::Pwm reduced{reducedLeft, reducedLeft, reducedRight, reducedRight};
         const auto reducedSweep = candidateRequired(reduced, config);
-        if ((left || right) && permitsSweep(reducedSweep, cam.safe)) {
+        if ((reducedLeft || reducedRight) && permitsSweep(reducedSweep, cam.safe)) {
           out.path = PathMode::ReducedTurn;
           out.required = reducedSweep.required;
           memcpy(out.pwm, reduced, sizeof(out.pwm));
         }
       }
-    } else if (pwm[0] == pwm[2]) {
-      out.required = pwm[0] > 0 ? robot::Front : pwm[0] < 0 ? robot::Rear : 0;
-      if (!(out.required & ~cam.safe)) out.path = PathMode::Original;
-    } else if (cam.safe == 0xffff) {
-      // Allow the original yaw only in fully clear space until its sweep is measured.
-      out.required = cam.safe;
-      out.path = PathMode::Original;
     } else {
-      out.required = robot::Front;
+      out.required = lane;
+      out.fallback = Fallback::Unmeasured;
     }
-    if (out.path == PathMode::Stop) {
-      if (out.fallback == Fallback::None) out.fallback = Fallback::Unmeasured;
-      // The camera front bit already checks the five forward rays.
-      if (frontClear && forwardBall && pwm[0] > 0 && pwm[2] > 0) {
-        const auto sweep = commissioned ? candidateRequired(straight, config) : Sweep{robot::Front, true};
-        if (permitsSweep(sweep, cam.safe)) {
-          out.path = PathMode::Straight;
-          out.required = sweep.required | robot::Front;
-          memcpy(out.pwm, straight, sizeof(out.pwm));
-        }
+
+    if (out.path == PathMode::Stop && !straight && (cam.safe & lane)) {
+      // Only known translation is used without a measured yaw envelope.
+      const auto sweep = commissioned ? candidateRequired(fallback, config) : Sweep{lane, true};
+      if (permitsSweep(sweep, cam.safe)) {
+        out.path = PathMode::Straight;
+        out.required = sweep.required | lane;
+        memcpy(out.pwm, fallback, sizeof(out.pwm));
       }
     }
-    out.blocked = out.required & ~cam.safe;
     if (out.path == PathMode::Stop) {
+      out.blocked = out.required & ~cam.safe;
       out.reason = StopReason::PathBlocked;
       return out;
     }
     if (out.path == PathMode::Original || out.path == PathMode::Sweep)
       memcpy(out.pwm, pwm, sizeof(out.pwm));
-    if (reverseBridge && commissioned && frontClear && forwardBall && out.pwm[0] * out.pwm[2] < 0) {
-      const auto sweep = candidateRequired(straight, config);
+    if (reverseBridge && commissioned && (cam.safe & robot::Front) && error >= -45 && error <= 45 &&
+        left + right > 0 && out.pwm[0] * out.pwm[2] < 0) {
+      const auto sweep = candidateRequired(fallback, config);
       if (permitsSweep(sweep, cam.safe)) {
         out.alternate = robot::BridgePwm;
         out.required |= sweep.required | robot::Front;
