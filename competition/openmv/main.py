@@ -1,4 +1,4 @@
-"""OpenMV H7 Plus. Publish line safety before a bounded goal work unit and the IDE overlay."""
+"""OpenMV H7 Plus production entry. Safety UART always precedes goals and drawing."""
 import gc
 import image
 import pyb
@@ -14,6 +14,10 @@ try:
 except ImportError:
     disable_preview = None
 
+BUILD = "rcj-openmv-production-2"
+CAPTURE_ERRORS = (AttributeError, TypeError, ValueError, MemoryError, OSError, RuntimeError)
+BASELINE = ((30, 100, -30, 30, 30, 127), (10, 80, -30, 50, -128, -20))
+
 
 def initialize_camera():
     for led in (1, 2, 3, 4):
@@ -24,38 +28,71 @@ def initialize_camera():
     window = None
     if cfg.BENCH_WINDOW is not None:
         sensor.set_windowing(cfg.BENCH_WINDOW)
-        window = sensor.get_windowing()  # Use the driver's actual aligned crop.
-    sensor.set_auto_exposure(True)
-    sensor.set_auto_gain(True)
-    sensor.set_auto_whitebal(True)
-    sensor.skip_frames(time=1500)
-    gain = sensor.get_rgb_gain_db() if cfg.RGB_GAIN_DB is None else cfg.RGB_GAIN_DB
-    sensor.set_auto_whitebal(False, rgb_gain_db=gain)
+        window = sensor.get_windowing()
     exposure = cfg.EXPOSURE_US if cfg.BENCH_EXPOSURE_US is None else cfg.BENCH_EXPOSURE_US
-    if cfg.BENCH_EXPOSURE_US is not None and exposure not in cfg.EXPOSURE_PRESETS_US:
-        raise ValueError("unsupported bench exposure")
-    sensor.set_auto_exposure(False, exposure_us=exposure)
-    sensor.set_auto_gain(False, gain_db=cfg.GAIN_DB if cfg.BENCH_GAIN_DB is None else cfg.BENCH_GAIN_DB)
-    sensor.skip_frames(time=300)
+    if cfg.BENCH_BASELINE:
+        sensor.skip_frames(time=2000)
+        sensor.set_auto_gain(False)
+        sensor.set_auto_whitebal(False)
+        exposure = -1  # The reference uses automatic exposure.
+    else:
+        if cfg.BENCH_EXPOSURE_US is not None and exposure not in cfg.EXPOSURE_PRESETS_US:
+            raise ValueError("unsupported bench exposure")
+        sensor.set_auto_exposure(True)
+        sensor.set_auto_gain(True)
+        sensor.set_auto_whitebal(True)
+        sensor.skip_frames(time=1500)
+        gain = sensor.get_rgb_gain_db() if cfg.RGB_GAIN_DB is None else cfg.RGB_GAIN_DB
+        sensor.set_auto_whitebal(False, rgb_gain_db=gain)
+        sensor.set_auto_exposure(False, exposure_us=exposure)
+        sensor.set_auto_gain(False, gain_db=cfg.GAIN_DB if cfg.BENCH_GAIN_DB is None else cfg.BENCH_GAIN_DB)
+        sensor.skip_frames(time=300)
     get_exposure = getattr(sensor, "get_exposure_us", None)
     return window, exposure, get_exposure() if get_exposure else -1
 
 
-def local_roi(full, box, padding):
-    fx, fy, fw, fh = full
-    x, y, w, h = box
-    left, top = max(fx, x - padding), max(fy, y - padding)
-    return left, top, min(fx + fw, x + w + padding) - left, min(fy + fh, y + h + padding) - top
-
-
 def goal_tiles(full):
     x, y, w, h = full
-    # Four overlapping half-ring strips let normal goals cross quadrant boundaries.
     sw, sh = 2 * w // 3, 2 * h // 3
     return (x, y, w, sh), (x + w - sw, y, sw, h), (x, y + h - sh, w, sh), (x, y, sw, h)
 
 
+def paired_roi(full, first, second):
+    fx, fy, fw, fh = full
+    left = max(fx, min(first[0], second[0]) - 16)
+    top = max(fy, min(first[1], second[1]) - 16)
+    right = min(fx + fw, max(first[0] + first[2], second[0] + second[2]) + 16)
+    bottom = min(fy + fh, max(first[1] + first[3], second[1] + second[3]) + 16)
+    return left, top, right - left, bottom - top
+
+
+def reference_goals(frame, overlay):
+    # Bench-only overlay with the operator's successful API and provisional LAB values.
+    found = [frame.find_blobs([threshold], pixels_threshold=30, area_threshold=30, merge=True)
+             for threshold in BASELINE]
+    for color, blobs in enumerate(found):
+        for blob in blobs:
+            rect = blob.rect
+            overlay.primitive(frame, "draw_rectangle", rect() if callable(rect) else rect, preview.COLORS[color])
+
+
+def report_to_console(usb, ide, lines):
+    # IDE consumes Python stdout separately from a raw USB terminal.
+    raw_terminal = ide is False and usb.isconnected()
+    for line in lines:
+        if raw_terminal:
+            try:
+                data = (line + "\n").encode()
+                if usb.send(data, timeout=0) == len(data):
+                    continue
+            except OSError:
+                pass
+        print(line)
+
+
 def main():
+    if getattr(vision, "PRODUCTION_API", 0) != 2 or getattr(preview, "PRODUCTION_API", 0) != 2:
+        raise RuntimeError("Update vision.py and preview.py alongside main.py")
     window, exposure, actual_exposure = initialize_camera()
     uart = pyb.UART(3, 115200, timeout=10, timeout_char=2)
     usb = pyb.USB_VCP()
@@ -63,12 +100,12 @@ def main():
     frame = sensor.snapshot()
     mirror = vision.Mirror(frame.width(), frame.height(), window)
     scanner = vision.Scanner(mirror, frame.width(), image.rgb_to_lab)
-    if mirror.rays:
+    if mirror.rays and not cfg.BENCH_BASELINE:
         try:
             scanner.prepare(frame)
             scanner.fast = all(scanner.verify(sensor.snapshot()) for _ in range(3))
-        except (AttributeError, TypeError, ValueError, MemoryError, RuntimeError):
-            scanner.fast = False
+        except CAPTURE_ERRORS as exc:
+            print("SCAN_BACKEND=reference prepare/verify %s:%s" % (type(exc).__name__, exc))
         if not scanner.fast:
             scanner.table = None
         gc.collect()
@@ -80,8 +117,6 @@ def main():
     goals, current = [None, None], [None, None]
     reports = [[], []]
     boxes = [None, None]
-    attempts, tile_index = [0, 0], [0, 0]
-    last_roi = [None, None]
     goal_seen_us = [None, None]
     colors = ((cfg.YELLOW, cfg.YELLOW_MIN_PIXELS), (cfg.BLUE, cfg.BLUE_MIN_PIXELS))
     mode = cfg.VISUALIZATION_MODE
@@ -89,24 +124,29 @@ def main():
         mode = "LIGHT"
     if disable_preview:
         disable_preview(mode == "OFF")
-    bench = cfg.BENCH_EXPOSURE_US is not None or cfg.BENCH_GAIN_DB is not None or window is not None
-    active_color = sequence = sent = partial = late = frames = interval_late = goal_skips = 0
-    goal_errors = draw_errors = 0
-    goal_error = draw_error = "none"
+    bench = cfg.BENCH_BASELINE or cfg.BENCH_EXPOSURE_US is not None or cfg.BENCH_GAIN_DB is not None or window is not None
+    sequence = sent = partial = late = frames = interval_late = goal_skips = goal_passes = 0
+    goal_errors = 0
+    goal_error = "none"
     last_report = time.ticks_ms()
     last_tx_us = None
     fps = 0.0
     goal_mode = b"g"
     yellow_probe = False
     last_goal_ms = None
-    goal_interval_ms = 60
+    goal_interval_ms = 45
+    last_roi = None
     packet_data = bytearray(23)
+    print("BUILD=%s MODE=%s MAIN=%s VISION=%s PREVIEW=%s CAL=%s" % (
+        BUILD, mode, globals().get("__file__", "<stdin>"), getattr(vision, "__file__", "?"),
+        getattr(preview, "__file__", "?"), getattr(cfg, "__file__", "?")))
+
     while True:
         start = time.ticks_us()
         frame = sensor.snapshot()
         captured = time.ticks_us()
         now = time.ticks_ms()
-        ready = bool(mirror.rays and (frame.width(), frame.height()) == mirror.size)
+        ready = bool(not cfg.BENCH_BASELINE and mirror.rays and (frame.width(), frame.height()) == mirror.size)
         visible, lines = scanner.scan(frame) if ready else (set(), {})
         scanned = time.ticks_us()
         mask, escape, nearest = guard.update(visible, lines, now)
@@ -114,9 +154,10 @@ def main():
         frame_ms = (time.ticks_diff(guarded, start) + 999) // 1000
         slow = frame_ms > vision.MAX_FRAME_MS
         late += int(slow)
-        goal_values = tuple(vision.goal_fields(g, now, time.ticks_diff) for g in goals)
+        fields = (vision.goal_fields(goals[0], now, time.ticks_diff),
+                  vision.goal_fields(goals[1], now, time.ticks_diff))
         data = vision.packet(sequence, ready and not bench, bool(guard.near), mask, escape, nearest,
-                             goal_values, frame_ms, packet_data)
+                             fields, frame_ms, packet_data)
         uart_start = time.ticks_us()
         try:
             written = uart.write(data)
@@ -137,67 +178,71 @@ def main():
         current[0] = current[1] = None
         skip = frame_ms >= 75 or gap >= 85000
         due = last_goal_ms is None or time.ticks_diff(now, last_goal_ms) >= goal_interval_ms
-        probing = ready and not slow and not skip and yellow_probe
-        if ready and not slow and (probing or (goal_mode != b"l" and (goal_mode == b"b" or (due and not skip)))):
-            goal_interval_ms = 60
+        probing = ready and not skip and yellow_probe
+        if cfg.BENCH_BASELINE and mode != "OFF" and goal_mode != b"l":
+            try:
+                reference_goals(frame, overlay)
+            except CAPTURE_ERRORS as exc:
+                goal_errors += 1
+                goal_error = "reference_goals/%s:%s" % (type(exc).__name__, str(exc)[:80])
+        elif ready and not slow and (probing or (goal_mode != b"l" and (goal_mode == b"b" or (due and not skip)))):
+            goal_interval_ms = 45
             last_goal_ms = now
-            for color in ((0,) if probing else (0, 1) if goal_mode == b"b" else (active_color,)):
-                thresholds, minimum = colors[color]
-                step = attempts[color]
-                if probing:
-                    roi = last_roi[0] or tiles[0]
-                elif goal_mode in (b"b", b"h") or step % 8 == 7:
-                    roi = mirror.roi  # Periodically retain the baseline whole-ring search.
-                elif boxes[color] and goal_values[color][0] != 65535 and step % 2:
-                    roi = local_roi(mirror.roi, boxes[color], 16)
+            roi = mirror.roi
+            if goal_mode == b"g" and not probing and goal_passes % 4:
+                if all(boxes[i] is not None and fields[i][0] != 65535 for i in range(2)):
+                    roi = paired_roi(roi, boxes[0], boxes[1])
                 else:
-                    roi = tiles[tile_index[color]]
-                    tile_index[color] = (tile_index[color] + 1) % len(tiles)
-                last_roi[color] = roi
-                if not probing:
-                    attempts[color] += 1
-                begin = time.ticks_us()
-                try:
-                    candidate = vision.find_goal(frame, mirror, thresholds, minimum, scanner.goal_color,
-                                                 roi, 2 if probing else cfg.GOAL_X_STRIDE, reports[color], probing)
-                except (AttributeError, TypeError, ValueError, MemoryError, OSError, RuntimeError) as exc:
-                    goal_errors += 1
-                    goal_error = type(exc).__name__
-                    reports[color].clear()
-                    candidate = None
-                    goal_interval_ms = 160
-                goal_done = time.ticks_us()
-                duration = time.ticks_diff(goal_done, begin)
-                timings.add(4 + color, duration)
-                # Native find_blobs is synchronous. Increase the quiet time after an overrun.
-                if duration > 12000:
-                    goal_interval_ms = 160
-                if candidate is not None and not probing:
-                    box, center = reports[color][-2:]
-                    current[color] = (candidate, box, center)
-                    boxes[color] = box
-                    goals[color] = (candidate, now)
-                    if goal_seen_us[color] is not None:
-                        timings.add(9 + color, time.ticks_diff(goal_done, goal_seen_us[color]))
-                    goal_seen_us[color] = goal_done
+                    roi = tiles[(goal_passes - 1 - goal_passes // 4) % len(tiles)]
+            last_roi = roi
+            begin = time.ticks_us()
+            operation = "find_goals"
+            candidates = [None, None]
+            try:
+                if probing or goal_mode == b"b":
+                    for color in ((0,) if probing else (0, 1)):
+                        thresholds, minimum = colors[color]
+                        operation = "find_goal.YELLOW" if color == 0 else "find_goal.BLUE"
+                        started = time.ticks_us()
+                        candidates[color] = vision.find_goal(frame, mirror, thresholds, minimum, scanner.goal_color,
+                                                             roi, 2 if probing else cfg.GOAL_X_STRIDE, reports[color], probing)
+                        timings.add(4 + color, time.ticks_diff(time.ticks_us(), started))
+                else:
+                    candidates = vision.find_goals(frame, mirror, roi, cfg.GOAL_X_STRIDE, scanner.goal_color, reports)
+                    timings.add(11, time.ticks_diff(time.ticks_us(), begin))
+            except CAPTURE_ERRORS as exc:
+                goal_errors += 1
+                goal_error = "%s/%s:%s" % (operation, type(exc).__name__, str(exc)[:80])
+                goal_interval_ms = 160
+            done = time.ticks_us()
+            if time.ticks_diff(done, begin) > 12000:
+                goal_interval_ms = 160
             if probing:
                 yellow_probe = False
             else:
-                active_color ^= 1
+                goal_passes += 1
+                for color, candidate in enumerate(candidates):
+                    if candidate is not None:
+                        box, center = reports[color][-2:]
+                        current[color] = (candidate, box, center)
+                        boxes[color] = box
+                        goals[color] = (candidate, now)
+                        if goal_seen_us[color] is not None:
+                            timings.add(9 + color, time.ticks_diff(done, goal_seen_us[color]))
+                        goal_seen_us[color] = done
         elif ready and goal_mode != b"l" and due:
             goal_skips += 1
         scanner.frame_buffer = None
 
         before_draw = time.ticks_us()
-        if mode != "OFF" and (ide_connected is None or ide_connected()) and hasattr(frame, "draw_string"):
+        if mode != "OFF":
             try:
                 overlay.draw(frame, mode, now, time.ticks_diff, fps, frame_ms, guard, lines,
                              mask if ready and not slow else 0, escape if ready and not slow else 0,
-                             nearest, current, goal_values)
-            except (AttributeError, TypeError, ValueError, MemoryError, OSError, RuntimeError) as exc:
-                draw_errors += 1
-                draw_error = type(exc).__name__
-                mode = "OFF"
+                             nearest, current, fields, visible)
+            except CAPTURE_ERRORS as exc:
+                overlay.errors += 1
+                overlay.last_error = "Overlay.draw/%s:%s" % (type(exc).__name__, str(exc)[:80])
         end = time.ticks_us()
         for index, us in ((0, time.ticks_diff(captured, start)), (1, time.ticks_diff(scanned, captured)),
                           (2, time.ticks_diff(guarded, scanned)), (3, time.ticks_diff(uart_end, uart_start)),
@@ -208,6 +253,7 @@ def main():
         command = usb.read(1) if usb.any() else None
         if command in (b"0", b"1", b"2"):
             mode = ("OFF", "LIGHT", "FULL")[command[0] - 48]
+            overlay.disabled.clear()
             if disable_preview:
                 disable_preview(mode == "OFF")
         if command == b"d":
@@ -217,28 +263,28 @@ def main():
             if goal_mode == b"l":
                 goals[0] = goals[1] = None
         elapsed = time.ticks_diff(now, last_report)
-        if elapsed >= 2000 or (command == b"i" and usb.isconnected()) or (probing and usb.isconnected()):
+        if elapsed >= 2000 or command == b"i" or probing:
             fps = frames * 1000 / max(1, elapsed)
-            if usb.isconnected():
-                try:
-                    summary = ("FPS=%.1f MODE=%s IDE=%s EXPOSURE_US=%d ACTUAL_EXPOSURE_US=%d SIZE=%s BENCH=%d FRAME_MS=%d "
-                               "LINE=%s SAFE_MASK=%04x READY=%d FAST=%d UART_TX=%d UART_PARTIAL=%d "
-                               "FRAME_LATE=%d INTERVAL_LATE=%d GOAL_SKIP=%d GOAL_ERROR=%d/%s DRAW_ERROR=%d/%s\n") % (
-                                   fps, mode, ide_connected() if ide_connected else "unknown", exposure, actual_exposure,
-                                   (frame.width(), frame.height()), bench, frame_ms, nearest,
-                                   mask if ready and not slow and not bench else 0, ready and not bench, scanner.fast,
-                                   sent, partial, late, interval_late, goal_skips, goal_errors, goal_error, draw_errors, draw_error)
-                    usb.send((timings.report() + "\n").encode(), timeout=0)
-                    if command == b"i" or probing:
-                        usb.send(("GOALS=%s ROI=%s STRIDE=%d MIN_PIXELS=%s "
-                                  "COUNTS(raw,small,clip,ring,shape,turf,accepted)=%s\n" %
-                                  (goal_values, last_roi, cfg.GOAL_X_STRIDE, (cfg.YELLOW_MIN_PIXELS,
-                                   cfg.BLUE_MIN_PIXELS), (reports[0][:7], reports[1][:7]))).encode(), timeout=0)
-                    usb.send(summary.encode(), timeout=0)
-                except OSError:
-                    pass
+            ide = ide_connected() if ide_connected else None
+            summary = ("BUILD=%s FPS=%.1f MODE=%s IDE=%s EXPOSURE_US=%d ACTUAL_EXPOSURE_US=%d BENCH=%d "
+                       "FRAME_MS=%d READY=%d FAST=%d SAFE_MASK=%04x FLOOR_MASK=%04x LINE_MASK=%04x UNKNOWN_MASK=%04x "
+                       "NEAR_AMBIG_MASK=%04x ESCAPE_AWAY_MASK=%04x ESCAPE_MASK=%04x LINE=%s UART_TX=%d UART_PARTIAL=%d "
+                       "FRAME_LATE=%d INTERVAL_LATE=%d GOAL_SKIP=%d GOAL_ERROR=%d/%s DRAW_ERROR=%d/%s") % (
+                           BUILD, fps, mode, ide, exposure, actual_exposure, bench, frame_ms, ready and not bench,
+                           scanner.fast, mask if ready and not slow and not bench else 0, guard.coverage,
+                           guard.blocked, guard.unknown, guard.near_blocked, guard.escape_away, escape if ready and not slow and not bench else 0,
+                           nearest, sent, partial, late, interval_late, goal_skips, goal_errors, goal_error,
+                           overlay.errors, overlay.last_error)
+            output = [timings.report()]
+            if command == b"i" or probing:
+                rays = "".join("W" if b in guard.confirmed else "w" if b in lines else "G" if b in visible else "?"
+                               for b in range(0, 360, 15))
+                output.append("RAYS=%s WHITE_CM=%s ROI=%s GOALS=%s COUNTS(raw,small,clip,ring,shape,turf,accepted)=%s" %
+                              (rays, lines, last_roi, fields, (reports[0][:7], reports[1][:7])))
+            output.append(summary)
+            report_to_console(usb, ide, output)
             last_report, frames = now, 0
-            timings = preview.Timings()
+            timings.reset()
 
 
 main()

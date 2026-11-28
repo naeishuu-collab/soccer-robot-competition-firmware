@@ -40,8 +40,8 @@ class CameraLoopTests(unittest.TestCase):
 
             def find_blobs(self, thresholds, **kwargs):
                 self.assert_pristine()
-                entries.append("yellow" if thresholds == vision.cfg.YELLOW else "blue")
-                if len(packets) == 1 and thresholds == vision.cfg.YELLOW:
+                entries.append("yellow" if thresholds == vision.cfg.YELLOW else "both" if thresholds == vision.GOAL_THRESHOLDS else "blue")
+                if len(packets) == 1 and thresholds == vision.GOAL_THRESHOLDS:
                     raise TypeError("simulated optional goal API error")
                 return []
 
@@ -68,7 +68,8 @@ class CameraLoopTests(unittest.TestCase):
 
         usb = SimpleNamespace(any=lambda: True, isconnected=lambda: True,
                               read=lambda _size: next(commands, None),
-                              send=lambda data, timeout: logs.append(data.decode()))
+                              debug_mode_enabled=lambda: False,
+                              send=lambda data, timeout: logs.append(data.decode()) or len(data))
         sensor = SimpleNamespace(snapshot=snapshot, reset=noop, RGB565=1, QVGA=2, set_pixformat=noop,
                                  set_framesize=noop, set_auto_exposure=noop, set_auto_gain=noop,
                                  set_auto_whitebal=noop, skip_frames=noop, get_rgb_gain_db=lambda: 0)
@@ -83,10 +84,10 @@ class CameraLoopTests(unittest.TestCase):
         with patch.dict(sys.modules, modules):
             with self.assertRaises(EndFrames):
                 runpy.run_path(str(Path(vision.__file__).with_name("main.py")))
-        self.assertEqual(entries, ["uart", "yellow", "uart", "yellow", "blue", "uart", "uart", "uart", "yellow"])
+        self.assertEqual(entries, ["uart", "both", "uart", "yellow", "blue", "uart", "uart", "uart", "both"])
         self.assertTrue(all(p[3] == 1 and p[4:6] == b"\xff\xff" for p in packets))
         self.assertEqual([p[2] for p in packets], list(range(5)))
-        self.assertEqual(draws[0], (1, "yellow"))
+        self.assertEqual(draws[0], (1, "both"))
         self.assertIn("UART_PARTIAL=1", logs[-1])
         self.assertIn("FRAME_LATE=0", logs[-1])
-        self.assertIn("GOAL_ERROR=1/TypeError", logs[-1])
+        self.assertIn("GOAL_ERROR=1/find_goals/TypeError", logs[-1])

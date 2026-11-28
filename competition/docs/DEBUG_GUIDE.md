@@ -17,4 +17,4 @@ MAINの PATH_MODE は ZIP、SWEEP、REDUCED_TURN、STRAIGHT_160、ESCAPE、STOP�
 
 OpenMV v5.0.1で報告されたタプル展開の構文エラーと blob.rect() の型エラーは修正済み。旧Blobメソッドとv5のBlob属性の両方を扱う。カメラの main.py、vision.py、preview.py、camera_calibration.py は同じ版にそろえる。
 
-GOAL_ERROR と DRAW_ERROR は、任意のゴール処理・描画で発生した最後の例外名と累積数。例外が起きても白線UARTを継続する。描画に失敗した場合はOFFへ切り替わる。
+GOAL_ERROR と DRAW_ERROR は、任意のゴール処理・描画で発生した最後の例外名と累積数。例外が起きても白線UARTを継続する。描画に失敗した関数のみ一時停止し、USB 0/1/2で再試行する。診断には関数名、例外型、メッセージが出る。 [本番OpenMVの切り分け](PRODUCTION_OPENMV.md)

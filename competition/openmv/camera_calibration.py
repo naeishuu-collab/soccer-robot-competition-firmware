@@ -33,6 +33,8 @@ BENCH_WINDOW = None  # Try (80, 48, 176, 168).
 BENCH_GAIN_DB = None
 GOAL_X_STRIDE = 1  # Try 2 on the bench, especially with small distant goals.
 VISUALIZATION_MODE = "LIGHT"
+# Full-frame reference reported by the operator. UART READY stays clear.
+BENCH_BASELINE = False
 
 GAIN_DB = 6.0
 

@@ -63,15 +63,15 @@ class VisionTests(unittest.TestCase):
         self.assertFalse(mask & 256)
 
     def test_escape_and_hysteresis(self):
-        _, escape, _ = self.guard.update(self.rays - {0}, {0: 20}, 1)
+        _, escape, _ = self.guard.update(self.rays - {0, 15}, {0: 20, 15: 21}, 1)
         self.assertEqual(escape, 256)
-        self.assertEqual(self.guard.update(self.rays - {0}, {}, 200)[1], 256)
+        self.assertEqual(self.guard.update(self.rays - {0, 15}, {}, 200)[1], 256)
         self.assertTrue(self.guard.near)
-        self.assertEqual(self.guard.update(self.rays - {0}, {}, 201)[1], 0)
+        self.assertEqual(self.guard.update(self.rays - {0, 15}, {}, 201)[1], 0)
         self.guard.update(self.rays, {}, 220)
         self.guard.update(self.rays, {}, 260)
         self.assertFalse(self.guard.near)
-        _, escape, _ = self.guard.update(self.rays - {0, 180}, {0: 20, 180: 21}, 300)
+        _, escape, _ = self.guard.update(self.rays - {0, 15, 180, 195}, {0: 20, 15: 21, 180: 21, 195: 22}, 300)
         self.assertEqual(escape, 0)
         self.assertTrue(self.guard.near)
 
@@ -100,8 +100,8 @@ class VisionTests(unittest.TestCase):
                 return [BlobV5()]
 
         self.assertEqual(vision.find_goal(FrameV5(), self.mirror, vision.cfg.BLUE, 8), goal)
-        self.assertIsNone(vision.find_goal(Frame(), self.mirror, vision.cfg.BLUE, 8,
-                                          lambda _img, _x, _y: 1))
+        self.assertEqual(vision.find_goal(Frame(), self.mirror, vision.cfg.BLUE, 8,
+                                          lambda _img, _x, _y: 1), (86, 50))
         self.assertEqual(vision.goal_fields((goal, 500), 799, lambda a, b: a-b), (86, 100, 30))
         self.assertEqual(vision.goal_fields((goal, 500), 800, lambda a, b: a-b), (65535, 0, 255))
 
@@ -133,13 +133,13 @@ class VisionTests(unittest.TestCase):
 
         overlay = preview.Overlay(self.mirror)
         field = Surface()
-        mask, escape, nearest = self.guard.update(self.rays - {0}, {0: 20}, 1)
+        mask, escape, nearest = self.guard.update(self.rays - {0, 15}, {0: 20, 15: 21}, 1)
         goals = ((55, 80, 0), (122, 60, 5))
         current = (((55, 80), (10, 25, 20, 10), (20, 30)), None)
 
         def draw(mode, now):
             overlay.draw(field, mode, now, lambda a,b: a-b, 25, 40, self.guard,
-                         {0: 20}, mask, escape, nearest, current, goals)
+                         {0: 20, 15: 21}, mask, escape, nearest, current, goals)
 
         draw("OFF", 0)
         self.assertEqual(calls, [])
@@ -154,7 +154,7 @@ class VisionTests(unittest.TestCase):
         self.assertTrue(any("BLUE cached" in args[-1] for name, args, _ in calls if name == "draw_string"))
         calls.clear()
         draw("FULL", 220)
-        self.assertEqual(calls, [])
+        self.assertEqual([name for name, _, _ in calls], ["draw_rectangle", "draw_cross", "draw_string"])
 
     def test_goal_threshold_probe_separates_small_regions(self):
         class Small:
@@ -171,6 +171,102 @@ class VisionTests(unittest.TestCase):
         counts = []
         self.assertIsNone(vision.find_goal(Frame(), self.mirror, vision.cfg.YELLOW, 12, report=counts, probe=True))
         self.assertEqual(counts[:2], [1, 1])
+
+    def test_v5_coordinates_and_failed_primitive_isolation(self):
+        calls = []
+
+        class StrictV5:
+            sizes = {"draw_string": 2, "draw_cross": 2, "draw_circle": 3,
+                     "draw_rectangle": 4, "draw_line": 4, "draw_arrow": 4}
+
+            def __getattr__(self, name):
+                def draw(coords, *text, **style):
+                    if not isinstance(coords, tuple):
+                        raise TypeError("object isn't a tuple or list")
+                    assert len(coords) == self.sizes[name] and len(style["color"]) == 3
+                    assert len(text) == (1 if name == "draw_string" else 0)
+                    calls.append(name)
+                    if name == "draw_string":
+                        raise TypeError("simulated text formatter failure")
+                return draw
+
+        overlay = preview.Overlay(self.mirror)
+        lines = {180: 20, 195: 22}
+        visible = self.rays - set(lines)
+        mask, escape, nearest = self.guard.update(visible, lines, 0)
+        current = (((0, 80), (10, 30, 20, 10), (20, 35)), ((90, 70), (60, 40, 20, 10), (70, 45)))
+        overlay.draw(StrictV5(), "FULL", 0, lambda a,b: a-b, 25, 40, self.guard, lines, mask, escape,
+                     nearest, current, ((0,80,0),(90,70,0)), visible)
+        self.assertEqual(overlay.errors, 1)
+        self.assertIn("draw_string/TypeError", overlay.last_error)
+        self.assertEqual(calls.count("draw_rectangle"), 2)
+        self.assertIn("draw_arrow", calls)
+        self.assertIn("draw_line", calls)
+        self.assertIn("draw_circle", calls)
+
+    def test_paired_native_blobs_keep_colors_separate(self):
+        class Blob:
+            rect, cx, cy, pixels = (148, 68, 46, 8), 171, 72, 300
+
+            def __init__(self, code):
+                self.code = code
+
+        yellow = Blob(2)
+        blue = Blob(1 << len(vision.cfg.YELLOW))
+        mixed = Blob(yellow.code | blue.code)
+
+        class Frame:
+            calls = 0
+
+            def find_blobs(self, thresholds, **kwargs):
+                self.calls += 1
+                assert thresholds == vision.cfg.YELLOW + vision.cfg.BLUE
+                assert kwargs["merge_cb"](yellow, Blob(4))
+                assert not kwargs["merge_cb"](yellow, blue)
+                return [yellow, blue, mixed]
+
+        frame = Frame()
+        reports = [[], []]
+        self.assertEqual(vision.find_goals(frame, self.mirror, self.mirror.roi, 1, None, reports),
+                         ((86, 100), (86, 100)))
+        self.assertEqual(frame.calls, 1)
+        self.assertEqual([report[0] for report in reports], [1, 1])
+
+    def test_white_fixture_and_unknown_floor_keep_safe_masks_conservative(self):
+        raster = Raster([(37, -9, 5), (80, 0, 0), (10, 0, 0)])
+        scanner = vision.Scanner(self.mirror, 320, lambda color: color)
+        rear = self.mirror.rays[12][1]
+        neighbor = self.mirror.rays[13][1]
+
+        def mark(ray, color):
+            for x, y, _ in ray[:2]:
+                raster.pixels[y * 320 + x] = color
+
+        mark(rear, 1)  # An isolated image feature, such as a white wire.
+        visible, lines = scanner.scan(raster)
+        mask, escape, nearest = self.guard.update(visible, lines, 0)
+        self.assertEqual(set(lines), {180})
+        self.assertEqual(escape, 0)
+        self.assertFalse(self.guard.near)
+        self.assertTrue(mask & 1)
+        self.assertFalse(mask & 256)
+        self.assertEqual(nearest, (180, 18))
+
+        mark(neighbor, 1)
+        visible, lines = scanner.scan(raster)
+        mask, escape, _ = self.guard.update(visible, lines, 1)
+        self.assertEqual(escape, 1)
+        self.assertTrue(mask & 1)
+        self.assertFalse(mask & 256)
+
+        for bearing, ray in self.mirror.rays:
+            if bearing not in lines:
+                mark(ray, 2)
+        visible, lines = scanner.scan(raster)
+        mask, escape, _ = self.guard.update(visible, lines, 2)
+        self.assertEqual((mask, escape), (0, 0))
+        self.assertEqual(self.guard.unknown, 0xffff)
+        self.assertEqual(self.guard.escape_away, 1)  # Direction is away, but the floor is unknown.
 
     def test_packet_crc_and_slow_invalidation(self):
         miss = ((65535, 0, 255),) * 2

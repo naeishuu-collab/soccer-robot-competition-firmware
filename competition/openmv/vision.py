@@ -19,9 +19,11 @@ except ImportError:
         return buffer
 
 
+PRODUCTION_API = 2
 CLEARANCE_CM = 25
 RELEASE_CM = 30
 ESCAPE_MEMORY_MS = 200
+LINE_NEIGHBOR_CM = 8
 BLOCK_CM = 35
 LOOKAHEAD_CM = 50
 MAX_FRAME_MS = 100
@@ -216,6 +218,8 @@ class Scanner:
 SECTOR_BITS = tuple(sum(1 << (ray // 15) for ray in rays) for rays in SECTOR_WINDOWS)
 LINE_BLOCKS = tuple(sum(1 << i for i in range(16) if difference(i * 22.5, ray) < 60)
                     for ray in range(0, 360, 15))
+CLOSE_BLOCKS = tuple(sum(1 << i for i in range(16) if difference(i * 22.5, ray) < 105)
+                     for ray in range(0, 360, 15))
 
 
 class LineGuard:
@@ -226,10 +230,17 @@ class LineGuard:
         self.close_ms = 0
         self.escape_fresh = False
         self.clear_frames = 0
+        self.confirmed = ()
+        self.coverage = self.blocked = self.unknown = self.near_blocked = self.escape_away = 0
 
     def update(self, visible, lines, now):
         threshold = RELEASE_CM if self.near else CLEARANCE_CM
-        close = tuple(bearing for bearing, cm in lines.items() if cm <= threshold)
+        # Two white pixels are only a ray candidate. A nearby ray must agree
+        # before a new line can trigger an escape; every raw hit still closes approach.
+        self.confirmed = tuple(b for b, cm in lines.items() if any(
+            abs(lines.get((b + step) % 360, 1000) - cm) <= LINE_NEIGHBOR_CM for step in (-15, 15)))
+        raw_close = tuple(b for b, cm in lines.items() if cm <= threshold)
+        close = tuple(b for b in raw_close if b in self.confirmed or b in self.near)
         if close:
             # Keep also any earlier rays that are still blind. Freshly visible turf
             # is allowed to drop an older ray once another close ray is measured.
@@ -254,19 +265,25 @@ class LineGuard:
         for i, window in enumerate(SECTOR_BITS):
             if observed & window == window:
                 self.coverage |= 1 << i
-        self.blocked = blocked
-        mask = self.coverage & ~blocked
-        escape = 0
+        self.near_blocked = 0
+        # For an ambiguous close hit only a positively observed, away direction can remain open.
+        for b in raw_close:
+            if b not in close:
+                self.near_blocked |= CLOSE_BLOCKS[b // 15]
+        self.blocked = blocked | self.near_blocked
+        self.unknown = 0xffff & ~self.coverage
+        mask = self.coverage & ~self.blocked
+        self.escape_away = 0
         if self.ticks_diff(now, self.close_ms) >= ESCAPE_MEMORY_MS:
             self.escape_fresh = False
         if self.near and self.escape_fresh:
             for bit, bearing in ((1, 0), (256, 180)):
-                if mask & bit and all(difference(bearing, b) >= 105 for b in self.near):
-                    escape |= bit
-        return mask, escape, min(lines.items(), key=lambda pair: pair[1]) if lines else None
+                if all(difference(bearing, b) >= 105 for b in self.near):
+                    self.escape_away |= bit
+        return mask, self.escape_away & mask, min(lines.items(), key=lambda pair: pair[1]) if lines else None
 
 
-def find_goal(image, mirror, thresholds, minimum, color_at=None, roi=None, stride=1, report=None, probe=False):
+def find_goal(image, mirror, thresholds, minimum, color_at=None, roi=None, stride=1, report=None, probe=False, blobs=None):
     if mirror.roi is None:
         return None
     best = None
@@ -276,8 +293,10 @@ def find_goal(image, mirror, thresholds, minimum, color_at=None, roi=None, strid
     seen = small = clipped = ring = shape = turf = accepted = 0
     winning_box = winning_center = None
     native_min = 1 if probe else minimum
-    for blob in image.find_blobs(thresholds, roi=roi, pixels_threshold=native_min,
-                                 area_threshold=native_min, x_stride=stride, y_stride=1, merge=True, margin=2):
+    if blobs is None:
+        blobs = image.find_blobs(thresholds, roi=roi, pixels_threshold=native_min,
+                                area_threshold=native_min, x_stride=stride, y_stride=1, merge=True, margin=2)
+    for blob in blobs:
         seen += 1
         rect = blob.rect
         legacy = callable(rect)
@@ -299,16 +318,22 @@ def find_goal(image, mirror, thresholds, minimum, color_at=None, roi=None, strid
         if not mirror.inner <= radius <= mirror.outer or not radius or not w or not h:
             ring += 1
             continue
+        density = pixels / (w * h)
+        if density < cfg.GOAL_MIN_DENSITY:
+            shape += 1
+            continue
         bearing = mirror.bearing(cx, cy)
         corners = ((x, y), (x + w, y), (x, y + h), (x + w, y + h))
         offsets = [(mirror.bearing(px, py) - bearing + 180) % 360 - 180 for px, py in corners]
         width = max(offsets) - min(offsets)
         height = max(1, (abs(w * dx) + abs(h * dy)) / radius)
-        density = pixels / (w * h)
-        if (not cfg.GOAL_MIN_WIDTH_DEG <= width <= cfg.GOAL_MAX_WIDTH_DEG or
-                math.radians(width) * radius / height < cfg.GOAL_MIN_ASPECT or density < cfg.GOAL_MIN_DENSITY):
+        if not cfg.GOAL_MIN_WIDTH_DEG <= width <= cfg.GOAL_MAX_WIDTH_DEG:
             shape += 1
             continue
+        quality = min(1, pixels / (4 * minimum)) * min(1, 0.5 + density)
+        if math.radians(width) * radius / height < cfg.GOAL_MIN_ASPECT:
+            shape += 1
+            quality *= 0.55
         if color_at is not None:
             beyond = radius + height / 2 + 3
             if beyond <= mirror.outer:
@@ -317,9 +342,8 @@ def find_goal(image, mirror, thresholds, minimum, color_at=None, roi=None, strid
                 if sum(color_at(image, round(mirror.cx + beyond * math.cos(a)),
                                 round(mirror.cy + beyond * math.sin(a))) == 1 for a in angles) >= 2:
                     turf += 1
-                    continue
+                    quality *= 0.5
         accepted += 1
-        quality = min(1, pixels / (4 * minimum)) * min(1, 0.5 + density)
         candidate = (round(bearing) % 360, max(1, round(100 * quality)))
         if best is None or candidate[1] > best[1]:
             best = candidate
@@ -327,6 +351,39 @@ def find_goal(image, mirror, thresholds, minimum, color_at=None, roi=None, strid
     if report is not None:
         report[:] = [seen, small, clipped, ring, shape, turf, accepted, winning_box, winning_center]
     return best
+
+
+GOAL_THRESHOLDS = cfg.YELLOW + cfg.BLUE
+YELLOW_CODE = (1 << len(cfg.YELLOW)) - 1
+BLUE_CODE = ((1 << len(GOAL_THRESHOLDS)) - 1) ^ YELLOW_CODE
+
+
+def goal_color(blob):
+    code = blob.code
+    code = code() if callable(code) else code
+    yellow = bool(code & YELLOW_CODE)
+    blue = bool(code & BLUE_CODE)
+    return -1 if yellow == blue else (0 if yellow else 1)
+
+
+def same_goal_color(first, second):
+    first_color = goal_color(first)
+    return first_color >= 0 and first_color == goal_color(second)
+
+
+def find_goals(image, mirror, roi, stride, color_at, reports):
+    minima = (cfg.YELLOW_MIN_PIXELS, cfg.BLUE_MIN_PIXELS)
+    minimum = min(minima)
+    grouped = ([], [])
+    if mirror.roi is None:
+        return None, None
+    for blob in image.find_blobs(GOAL_THRESHOLDS, roi=roi, pixels_threshold=minimum, area_threshold=minimum,
+                                 x_stride=stride, y_stride=1, merge=True, margin=2, merge_cb=same_goal_color):
+        color = goal_color(blob)
+        if color >= 0:
+            grouped[color].append(blob)
+    return (find_goal(image, mirror, None, minima[0], color_at, roi, stride, reports[0], blobs=grouped[0]),
+            find_goal(image, mirror, None, minima[1], color_at, roi, stride, reports[1], blobs=grouped[1]))
 
 
 def goal_fields(observation, now, ticks_diff):
