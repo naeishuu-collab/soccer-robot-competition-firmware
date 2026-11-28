@@ -133,7 +133,50 @@ inline Decision decide(bool manual, bool cameraFresh, const robot::Camera& cam,
 #ifndef RCJ_WHEELS_LIFTED_DIAGNOSTICS
 #define RCJ_WHEELS_LIFTED_DIAGNOSTICS 0
 #endif
-enum class RunMode { Competition, MotorTest, IrPdTest };
+enum class RunMode { Competition, MotorTest, IrPdTest, BasicChase };
+
+#ifndef RCJ_BASIC_CHASE
+#define RCJ_BASIC_CHASE 0
+#endif
+#if RCJ_BASIC_CHASE && RCJ_WHEELS_LIFTED_DIAGNOSTICS
+#error BASIC_CHASE and lifted-wheel diagnostics require separate builds
+#endif
+
+inline Decision basicDecision(bool armed, int cap, bool manual, bool cameraFresh,
+                              const robot::Camera& cam, bool irFresh, bool irInvalid,
+                              bool missedIr, bool tracking, const robot::Pwm& pwm) {
+  // Keep the existing link, manual and white-line escape priority.
+  Decision out = decide(manual, cameraFresh, cam, irFresh, irInvalid, missedIr, false, pwm);
+  if (out.reason != StopReason::BallLost && out.state != State::Escape) return out;
+  if (!armed || (cap != 140 && cap != 175 && cap != 210)) {
+    out = Decision{};
+    out.reason = StopReason::DiagnosticIdle;
+    return out;
+  }
+  if (out.state != State::Escape) {
+    if (!tracking) return out;
+    out.required = 0xffff;
+    out.blocked = out.required & ~cam.safe;
+    if (out.blocked || (cam.line != robot::Unknown && (cam.lineCm == 255 || cam.lineCm <= 35))) {
+      out.reason = StopReason::PathBlocked;
+      return out;
+    }
+    if (pwm[0] != pwm[1] || pwm[2] != pwm[3]) {
+      out.reason = StopReason::PathBlocked;
+      out.fallback = Fallback::Unsupported;
+      return out;
+    }
+    memcpy(out.pwm, pwm, sizeof(out.pwm));
+    out.state = State::Chase;
+    out.reason = StopReason::None;
+    out.path = PathMode::Original;
+  }
+  for (auto& value : out.pwm) {
+    if (value > cap) value = cap;
+    if (value < -cap) value = -cap;
+  }
+  return out;
+}
 
 inline Decision benchDecision(RunMode mode, bool armed, int wheel, bool tracking,
                               const robot::Pwm& pwm, bool manual, bool cameraFresh, bool irFresh,

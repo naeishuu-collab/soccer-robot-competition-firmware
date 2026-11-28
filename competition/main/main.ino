@@ -14,7 +14,13 @@ Decision decision;
 UsbReport<1536> report;
 Pwm transmitted{};
 uint8_t alternateSent = 0;
-RunMode runMode = RunMode::Competition;
+RunMode runMode = RCJ_BASIC_CHASE ? RunMode::BasicChase : RunMode::Competition;
+#if RCJ_BASIC_CHASE
+constexpr uint32_t BasicLeaseMs = 200, BasicMaxRunMs = 2000;
+uint32_t basicLeaseMs = 0, basicStartMs = 0;
+int basicCap = 0;
+bool basicArmed = false;
+#endif
 #if RCJ_WHEELS_LIFTED_DIAGNOSTICS
 constexpr uint32_t BenchLeaseMs = 200;
 uint32_t benchMs = 0;
@@ -27,7 +33,7 @@ uint32_t cameraMs = 0, irMs = 0, pollMs = 0, pollUs = 0, releaseUs = 0;
 uint32_t cameraUs = 0, escapeRxToTxUs = 0, escapeRxToTxMaxUs = 0;
 uint32_t motorMs = 0, motorTxCount = 0, cameraBad = 0, irBad = 0, reportMs = 0;
 uint16_t irAngle = Unknown, irStrength = 0;
-bool manual = RCJ_WHEELS_LIFTED_DIAGNOSTICS;
+bool manual = RCJ_WHEELS_LIFTED_DIAGNOSTICS || RCJ_BASIC_CHASE;
 bool haveCamera = false, cameraLive = false, haveIr = false, irInvalid = false, haveBall = false;
 bool missedIr = false, slotMalformed = false;
 bool waiting = false, irStarted = false, requestedReport = false;
@@ -103,14 +109,32 @@ void loop() {
   for (int n = 0; n < 16 && !(manual && lastCommandMoving) && Serial.available(); ++n) {
     const int command = Serial.read();
     if (command == 's' || command == 'g') {
+#if RCJ_BASIC_CHASE
+      if (command == 'g' && !manual) continue;
+#endif
       manual = command == 's';
       if (manual) { pd.reset(); haveBall = false; }
 #if RCJ_WHEELS_LIFTED_DIAGNOSTICS
       benchArmed = false;
 #endif
+#if RCJ_BASIC_CHASE
+      basicArmed = false;
+      if (manual) basicCap = 0;
+#endif
       break;  // Apply a stop before consuming another operator command.
     }
     if (command == 'i') requestedReport = true;
+#if RCJ_BASIC_CHASE
+    if (manual && command >= '1' && command <= '3') {
+      const int caps[] = {140, 175, 210};
+      basicCap = caps[command - '1'];
+      requestedReport = true;
+    }
+    if (!manual && basicCap && command == 'R' && Serial) {
+      if (!basicArmed) { basicStartMs = millis(); basicArmed = true; }
+      basicLeaseMs = millis();
+    }
+#endif
 #if RCJ_WHEELS_LIFTED_DIAGNOSTICS
     if (manual && (command == 'M' || command == 'P' || command == 'C')) {
       runMode = command == 'M' ? RunMode::MotorTest : command == 'P' ? RunMode::IrPdTest : RunMode::Competition;
@@ -135,6 +159,18 @@ void loop() {
     pd.reset();
   }
   decision = decide(manual, cameraLive, camera, irFresh, irInvalid, missedIr, haveBall, pd.pwm, pd.error);
+
+#if RCJ_BASIC_CHASE
+  if (basicArmed && (!Serial || now - basicLeaseMs >= BasicLeaseMs ||
+      now - basicStartMs >= BasicMaxRunMs || !cameraLive || !irFresh || irInvalid || missedIr ||
+      !(camera.flags & Ready) || (camera.flags & Slow))) {
+    basicArmed = false;
+    manual = true;
+    basicCap = 0;
+  }
+  decision = basicDecision(basicArmed, basicCap, manual, cameraLive, camera,
+                           irFresh, irInvalid, missedIr, haveBall, pd.pwm);
+#endif
 
 #if RCJ_WHEELS_LIFTED_DIAGNOSTICS
   if (runMode != RunMode::Competition) {

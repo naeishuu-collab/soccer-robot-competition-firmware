@@ -14,7 +14,7 @@ uint32_t eventDropped = 0;
 State previousState = State::Stop;
 StopReason previousReason = StopReason::None;
 const char* const paths[] = {"STOP", "ZIP", "SWEEP", "REDUCED_TURN", "STRAIGHT_160", "ESCAPE", "DIAGNOSTIC"};
-const char* const modes[] = {"COMPETITION", "MOTOR_TEST", "IR_PD_TEST"};
+const char* const modes[] = {"COMPETITION", "MOTOR_TEST", "IR_PD_TEST", "BASIC_CHASE"};
 const char* const fallbackNames[] = {"NONE", "MASK", "UNCOMMISSIONED_SWEEP", "RANGE", "AMBIGUOUS", "UNSUPPORTED_PWM"};
 uint32_t stopCount[int(StopReason::Count)]{}, stopMs[int(StopReason::Count)]{}, reasonSince = 0;
 

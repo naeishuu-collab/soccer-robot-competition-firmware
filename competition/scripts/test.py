@@ -68,7 +68,7 @@ def main():
         ).decode("ascii").strip()
         (temp / "camera_golden.h").write_text(
             "const uint8_t cameraGolden[] = {" + golden + "};\n", encoding="utf-8")
-        for source in ("firmware.cpp", "sweep.cpp"):
+        for source in ("firmware.cpp", "sweep.cpp", "basic_chase.cpp"):
             build(compiler, temp, ROOT / "tests" / source)
     for source in (ROOT / "openmv").glob("*.py"):
         ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
