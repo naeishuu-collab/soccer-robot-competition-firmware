@@ -2,6 +2,7 @@ from pathlib import Path
 import random
 import sys
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "openmv"))
 import vision
@@ -372,6 +373,66 @@ class VisionTests(unittest.TestCase):
         self.assertEqual(stops, [5, 0])
         self.assertEqual(dangerous, [0, 0])
         print("Synthetic field scenes: unnecessary stops 5/5 -> 0/5; hazardous permissions 0/8 -> 0/8")
+
+    def test_frame_edge_reflection_never_promotes_adjacent_white(self):
+        raster = Raster([(55, 0, 0), (93, -1, 1)])
+        for bearing in (0, 15, 165, 180):
+            for x, y, _ in self.mirror.rays[bearing // 15][1][:2]:
+                raster.pixels[y * 320 + x] = 1
+        for bearing in (165, 180):
+            raster.pixels[self.mirror.inner_context[bearing // 15]] = 1
+
+        scanner = vision.Scanner(self.mirror, 320, lambda sample: sample)
+        visible, lines = scanner.scan(raster)
+        self.assertEqual(scanner.censored, {165, 180})
+        old_mask, old_escape, _ = self.guard.update(visible, lines, 0, scanner.runs, self.mirror.rays)
+        self.assertEqual(self.guard.confirmed, {0, 15, 165, 180})
+        revised = vision.LineGuard(lambda a, b: a-b)
+        mask, escape, _ = revised.update(visible, lines, 0, scanner.runs, self.mirror.rays, scanner.censored)
+        self.assertEqual(revised.confirmed, {0, 15})
+        self.assertEqual([confirmed for _, confirmed in revised.regions], [True, False])
+        self.assertEqual((old_mask, old_escape, mask, escape), (0, 0, 0, 0))
+        self.assertTrue(revised.ambiguous_blocked & 256)
+
+    def test_polygon_mask_and_exposure_reasons(self):
+        x0, y0, _ = self.mirror.rays[0][1][0]
+        polygon = ((x0-1,y0-1), (x0+1,y0-1), (x0+1,y0+1), (x0-1,y0+1))
+        with patch.object(vision.cfg, "LINE_SELF_POLYGONS", (polygon,)):
+            mirror = vision.Mirror(320, 240)
+        self.assertEqual(mirror.self_outlines, [polygon])
+        calls = []
+        class TestSurface:
+            def __getattr__(self, name):
+                return lambda coords, *args, **style: calls.append((name, coords, style["color"]))
+        miss = ((65535, 0, 255), (65535, 0, 255))
+        preview.Overlay(mirror).draw(TestSurface(), "FULL", 0, lambda a,b: a-b, 25, 40, self.guard,
+                                     {}, 0, 0, None, (None, None), miss)
+        self.assertEqual(sum(name == "draw_line" and color == preview.PURPLE for name, _, color in calls), 4)
+        raster = Raster([(55, 0, 0), (6, 0, 0), (100, 0, 0)])
+        for bearing, color in ((0, 2), (90, 1), (180, 2)):
+            x, y, _ = mirror.rays[bearing//15][1][0]
+            raster.pixels[y*320+x] = color
+        scanner = vision.Scanner(mirror, 320, lambda color: color)
+        visible, lines = scanner.scan(raster)
+        self.assertEqual([scanner.reasons[b] for b in (0,90,180)], [4,1,2])
+        self.assertNotIn(0, lines)
+        self.assertNotIn(0, visible)
+        dark, clipped, masked = vision.observation_reasons(scanner.reasons)
+        self.assertTrue(dark & (1 << 4))
+        self.assertTrue(clipped & 256)
+        self.assertTrue(masked & 1)
+        mask, _, _ = self.guard.update(visible, lines, 1, scanner.runs, mirror.rays, scanner.censored)
+        self.assertFalse(mask & (1 | 256))
+
+    def test_stale_escape_request_expires_with_held_sector_still_closed(self):
+        _, escape, _ = self.guard.update(self.rays, {165:18,180:19}, 0)
+        self.assertEqual(escape, 1)
+        held = self.rays - {165,180}
+        safe, escape, _ = self.guard.update(held, {}, 205)
+        self.assertFalse(self.guard.escape_requested)
+        self.assertEqual(escape, 0)
+        self.assertTrue(safe & 1)
+        self.assertFalse(safe & 256)
 
     def test_packet_crc_and_slow_invalidation(self):
         miss = ((65535, 0, 255),) * 2

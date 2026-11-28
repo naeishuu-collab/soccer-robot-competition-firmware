@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "openmv"))
 import vision
+import preview
 
 
 class EndFrames(Exception):
@@ -15,6 +16,14 @@ class EndFrames(Exception):
 
 
 class CameraLoopTests(unittest.TestCase):
+    def test_version_mismatch_names_module_before_uart_start(self):
+        boot = str(Path(vision.__file__).with_name("main.py"))
+        for module in (vision, preview, vision.cfg):
+            with patch.dict(sys.modules, {name: SimpleNamespace() for name in ("image", "pyb", "sensor")}), \
+                    patch.object(module, "PRODUCTION_API", 3):
+                with self.assertRaisesRegex(RuntimeError, module.__name__ + " API mismatch"):
+                    runpy.run_path(boot)
+
     def test_white_line_transmits_before_optional_goal_work(self):
         entries = []
         logs = []
@@ -88,6 +97,7 @@ class CameraLoopTests(unittest.TestCase):
         self.assertTrue(all(p[3] == 1 and p[4:6] == b"\xff\xff" for p in packets))
         self.assertEqual([p[2] for p in packets], list(range(5)))
         self.assertEqual(draws[0], (1, "both"))
+        self.assertTrue(any("DARK_MASK=0000" in line and "SELF_MASK=0000" in line for line in logs))
         self.assertIn("UART_PARTIAL=1", logs[-1])
         self.assertIn("FRAME_LATE=0", logs[-1])
         self.assertIn("GOAL_ERROR=1/find_goals/TypeError", logs[-1])

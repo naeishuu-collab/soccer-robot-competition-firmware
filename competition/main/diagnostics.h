@@ -63,7 +63,9 @@ void diagnose(uint32_t now, bool cameraFresh, bool irFresh) {
         "MOTOR_TX_COUNT=%lu PWM_ALT_TRANSMITTED=%u EVENT_DROPPED=%lu\nESCAPE_RX_TO_TX_US=%lu ESCAPE_RX_TO_TX_MAX_US=%lu\nSTOP_COUNT=%lu STOP_DURATION_MS=%lu\n",
         states[int(decision.state)], reasons[reason],
         decision.reason == StopReason::BallLost && irAngle == Unknown && irStrength
-            ? "ir_vector_cancelled" : details[reason],
+            ? "ir_vector_cancelled"
+            : decision.reason == StopReason::NoEscape && !camera.safe
+                ? "camera_reports_no_safe_sector" : details[reason],
         irFresh && !irInvalid && !missedIr ? "OK" : "ERROR", irAngle < 360 ? int(irAngle) : -1, unsigned(irStrength),
         haveIr ? long(now - irMs) : -1L, (unsigned long)irBad,
         (unsigned long)pollInterval, (unsigned long)pollMax,

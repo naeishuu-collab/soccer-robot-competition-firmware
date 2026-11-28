@@ -14,7 +14,8 @@ try:
 except ImportError:
     disable_preview = None
 
-BUILD = "rcj-openmv-white-line-3"
+PRODUCTION_API = 4
+BUILD = "rcj-openmv-competition-4"
 CAPTURE_ERRORS = (AttributeError, TypeError, ValueError, MemoryError, OSError, RuntimeError)
 BASELINE = ((30, 100, -30, 30, 30, 127), (10, 80, -30, 50, -128, -20))
 
@@ -50,7 +51,7 @@ def initialize_camera():
         sensor.set_auto_gain(True)
         sensor.set_auto_whitebal(True)
         sensor.skip_frames(time=1500)
-        gain = sensor.get_rgb_gain_db() if cfg.RGB_GAIN_DB is None else cfg.RGB_GAIN_DB
+        gain = cfg.BENCH_RGB_GAIN_DB or cfg.RGB_GAIN_DB or sensor.get_rgb_gain_db()
         sensor.set_auto_whitebal(False, rgb_gain_db=gain)
         sensor.set_auto_exposure(False, exposure_us=exposure)
         sensor.set_auto_gain(False, gain_db=cfg.GAIN_DB if cfg.BENCH_GAIN_DB is None else cfg.BENCH_GAIN_DB)
@@ -109,8 +110,10 @@ def white_comparison(frame, roi, backend):
 
 
 def main():
-    if getattr(vision, "PRODUCTION_API", 0) != 3 or getattr(preview, "PRODUCTION_API", 0) != 3:
-        raise RuntimeError("Update vision.py and preview.py alongside main.py")
+    for module in (vision, preview, cfg):
+        if getattr(module, "PRODUCTION_API", 0) != PRODUCTION_API:
+            raise RuntimeError("%s API mismatch; copy all 4 OpenMV files (expected %d, got %s)" %
+                               (module.__name__, PRODUCTION_API, getattr(module, "PRODUCTION_API", None)))
     window, exposure, actual_exposure = initialize_camera()
     uart = pyb.UART(3, 115200, timeout=10, timeout_char=2)
     usb = pyb.USB_VCP()
@@ -148,7 +151,7 @@ def main():
     if disable_preview:
         disable_preview(mode == "OFF")
     bench = (cfg.BENCH_BASELINE or cfg.BENCH_EXPOSURE_US is not None or cfg.BENCH_GAIN_DB is not None
-             or window is not None or cfg.BENCH_FRAME_SIZE is not None or cfg.BENCH_WHITE_CANDIDATE
+             or cfg.BENCH_RGB_GAIN_DB is not None or window is not None or cfg.BENCH_FRAME_SIZE is not None or cfg.BENCH_WHITE_CANDIDATE
              or cfg.BENCH_WHITE_BACKEND is not None)
     comparison = None
     empty_visible, empty_lines = set(), {}
@@ -177,14 +180,15 @@ def main():
                      and (frame.width(), frame.height()) == mirror.size)
         visible, lines = scanner.scan(frame) if ready else (empty_visible, empty_lines)
         scanned = time.ticks_us()
-        mask, escape, nearest = guard.update(visible, lines, now, scanner.runs if ready else None, mirror.rays)
+        mask, escape, nearest = guard.update(visible, lines, now, scanner.runs if ready else None, mirror.rays,
+                                            scanner.censored if ready else ())
         guarded = time.ticks_us()
         frame_ms = (time.ticks_diff(guarded, start) + 999) // 1000
         slow = frame_ms > vision.MAX_FRAME_MS
         late += int(slow)
         fields = (vision.goal_fields(goals[0], now, time.ticks_diff),
                   vision.goal_fields(goals[1], now, time.ticks_diff))
-        data = vision.packet(sequence, ready and not bench, bool(guard.near), mask, escape, nearest,
+        data = vision.packet(sequence, ready and not bench, guard.escape_requested, mask, escape, nearest,
                              fields, frame_ms, packet_data)
         uart_start = time.ticks_us()
         try:
@@ -304,17 +308,26 @@ def main():
             ide = ide_connected() if ide_connected else None
             summary = ("BUILD=%s FPS=%.1f MODE=%s IDE=%s EXPOSURE_US=%d ACTUAL_EXPOSURE_US=%d BENCH=%d "
                        "FRAME_MS=%d READY=%d FAST=%d SAFE_MASK=%04x FLOOR=ASSUMED OBSERVED_MASK=%04x LINE_MASK=%04x UNKNOWN_MASK=%04x "
-                       "NEAR_BLOCK_MASK=%04x ESCAPE_AWAY_MASK=%04x ESCAPE_MASK=%04x LINE=%s UART_TX=%d UART_PARTIAL=%d "
+                       "NEAR_BLOCK_MASK=%04x ESCAPE_REQUEST=%d ESCAPE_AWAY_MASK=%04x ESCAPE_MASK=%04x LINE=%s UART_TX=%d UART_PARTIAL=%d "
                        "WHITE_RAYS=%d STRICT_RAYS=%d CLOSING_CM_S=%s TTC_MS=%s RANGE_CM=%s WHITE_BENCH=%s "
                        "FRAME_LATE=%d INTERVAL_LATE=%d GOAL_SKIP=%d GOAL_ERROR=%d/%s DRAW_ERROR=%d/%s") % (
                            BUILD, fps, mode, ide, exposure, actual_exposure, bench, frame_ms, ready and not bench,
                            scanner.fast, mask if ready and not slow and not bench else 0, guard.coverage,
-                           guard.blocked, guard.unknown, guard.near_blocked, guard.escape_away, escape if ready and not slow and not bench else 0,
+                           guard.blocked, guard.unknown, guard.near_blocked, guard.escape_requested, guard.escape_away, escape if ready and not slow and not bench else 0,
                            nearest, sent, partial, len(lines), scanner.strict_hits, guard.closing_cm_s, guard.ttc_ms,
                            (clearance, block), comparison, late, interval_late, goal_skips, goal_errors, goal_error,
                            overlay.errors, overlay.last_error)
             output = [timings.report()]
             if command == b"i" or probing:
+                dark, clipped, self_mask = vision.observation_reasons(scanner.reasons if ready else {})
+                output.append(
+                    "DARK_MASK=%04x CLIPPED_MASK=%04x SELF_MASK=%04x GEOMETRY_READY=%d "
+                    "PRESENT_BLOCK=%04x AMBIGUOUS_BLOCK=%04x HELD_BLOCK=%04x "
+                    "ESC_UNKNOWN=%04x ESC_LINE=%04x CENSORED=%s HELD=%s" %
+                    (dark, clipped, self_mask, ready, guard.present_blocked, guard.ambiguous_blocked,
+                     guard.held_blocked, guard.escape_away & guard.unknown,
+                     guard.escape_away & guard.blocked, sorted(scanner.censored) if ready else [],
+                     sorted(guard.near_history)))
                 rays = "".join("W" if b in guard.confirmed else "w" if b in lines else "O" if b in visible else "?"
                                for b in range(0, 360, 15))
                 output.append("RAYS=%s WHITE_CM=%s ROI=%s GOALS=%s COUNTS(raw,small,clip,ring,shape,turf,accepted)=%s" %

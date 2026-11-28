@@ -1,5 +1,7 @@
 """Calibration retained from 968bc52. Verify mirror orientation, LAB and ground distances on hardware."""
 
+PRODUCTION_API = 4
+
 FRAME_SIZE = "QVGA"
 
 IMAGE_SIZE = (320, 240)
@@ -31,6 +33,7 @@ BENCH_EXPOSURE_US = None
 # Optional QVGA crop preserving pixel scale, mirror ring and the floor rays.
 BENCH_WINDOW = None  # Try (80, 48, 176, 168).
 BENCH_GAIN_DB = None
+BENCH_RGB_GAIN_DB = None  # Optional (R, G, B) gain comparison.
 GOAL_X_STRIDE = 1  # Try 2 on the bench, especially with small distant goals.
 VISUALIZATION_MODE = "LIGHT"
 # Full-frame reference reported by the operator. UART READY stays clear.
@@ -58,6 +61,8 @@ MIN_VISIBLE_L = 12
 MAX_VISIBLE_L = 97
 # Calibrated QVGA rectangles only; an occluded safety sample makes its ray unknown.
 LINE_SELF_MASKS = ()
+# Polygons in full QVGA coordinates: ((x1,y1),(x2,y2),...). Calibrate on the stationary robot.
+LINE_SELF_POLYGONS = ()
 # (body radius cm, speed limit cm/s, worst pipeline ms, measured brake cm, margin cm)
 MEASURED_MOTION = None
 BENCH_FRAME_SIZE = None  # "QQVGA" derives a pixel-scaled comparison; UART READY is clear.

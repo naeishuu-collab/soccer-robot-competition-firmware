@@ -3,9 +3,10 @@ import math
 from array import array
 import camera_calibration as cfg
 
-PRODUCTION_API = 3
+PRODUCTION_API = 4
 WHITE, RED, GREEN = (255, 255, 255), (255, 48, 48), (0, 255, 96)
 GRAY, CYAN = (144, 144, 144), (0, 220, 255)
+PURPLE = (185, 90, 255)
 NAMES = ("YELLOW", "BLUE")
 COLORS = ((255, 220, 0), (60, 150, 255))
 METRICS = ("CAPTURE", "WHITE_SCAN", "MASK", "TX", "YELLOW", "BLUE", "DRAW",
@@ -121,6 +122,11 @@ class Overlay:
         mirror = self.mirror
         cx, cy = round(mirror.cx), round(mirror.cy)
         if full:
+            for polygon in mirror.self_outlines:
+                x0, y0 = polygon[-1]
+                for x1, y1 in polygon:
+                    draw(image, "draw_line", (x0, y0, x1, y1), PURPLE)
+                    x0, y0 = x1, y1
             draw(image, "draw_circle", (cx, cy, round(mirror.inner)), GRAY)
             draw(image, "draw_circle", (cx, cy, round(mirror.outer)), GRAY)
             draw(image, "draw_cross", (cx, cy), WHITE)

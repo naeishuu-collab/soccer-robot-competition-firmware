@@ -19,7 +19,7 @@ except ImportError:
         return buffer
 
 
-PRODUCTION_API = 3
+PRODUCTION_API = 4
 CLEARANCE_CM = 25
 RELEASE_CM = 30
 ESCAPE_MEMORY_MS = 200
@@ -52,11 +52,26 @@ def safety_distances(profile):
     return clearance, block
 
 
+def contains_point(x, y, polygon):
+    inside = False
+    x0, y0 = polygon[-1]
+    for x1, y1 in polygon:
+        cross = (x - x0) * (y1 - y0) - (y - y0) * (x1 - x0)
+        if cross == 0 and min(x0, x1) <= x <= max(x0, x1) and min(y0, y1) <= y <= max(y0, y1):
+            return True
+        if (y0 > y) != (y1 > y) and x < x0 + (y - y0) * (x1 - x0) / (y1 - y0):
+            inside = not inside
+        x0, y0 = x1, y1
+    return inside
+
+
 class Mirror:
     def __init__(self, width, height, window=None, scale=1):
         self.rays = []
         self.roi = None
         self.blind_pixels = set()
+        self.inner_context = []
+        self.self_outlines = []
         self.horizon = LOOKAHEAD_CM
         radii = tuple((r * scale, cm) for r, cm in cfg.GROUND_POINTS)
         if not cfg.MIRROR_CENTER or not cfg.MIRROR_RING or not radii or cfg.FRONT_DEG is None:
@@ -81,6 +96,21 @@ class Mirror:
         if (not all(self.inner <= r <= self.outer for r, _ in radii) or
                 not all((r1 - r0) * sign > 0 and d1 > d0 for (r0, d0), (r1, d1) in pairs)):
             return
+        rectangles = cfg.LINE_SELF_MASKS
+        polygons = cfg.LINE_SELF_POLYGONS
+        if any(w <= 0 or h <= 0 for _, _, w, h in rectangles) or any(len(p) < 3 for p in polygons):
+            raise ValueError("Invalid self-occlusion calibration")
+        for x, y, w, h in rectangles:
+            polygon = ((x, y), (x+w, y), (x+w, y+h), (x, y+h))
+            self.self_outlines.append(tuple((round(px * scale - ox), round(py * scale - oy)) for px, py in polygon))
+        for polygon in polygons:
+            self.self_outlines.append(tuple((round(px * scale - ox), round(py * scale - oy)) for px, py in polygon))
+
+        def is_blind(x, y):
+            qx, qy = (x + ox) / scale, (y + oy) / scale
+            return (any(bx <= qx < bx + bw and by <= qy < by + bh for bx, by, bw, bh in rectangles)
+                    or any(contains_point(qx, qy, polygon) for polygon in polygons))
+
         for bearing in range(0, 360, 15):
             angle = math.radians(cfg.FRONT_DEG + bearing * (1 if cfg.CLOCKWISE else -1))
             dx, dy = math.sin(angle), -math.cos(angle)
@@ -100,10 +130,14 @@ class Mirror:
                 self.rays = []
                 return
             self.rays.append((bearing, samples))
+            # This is optical context only. It is outside the distance table.
+            r = radii[0][0] - 2 * sign
+            x, y = round(self.cx + r * dx), round(self.cy + r * dy)
+            self.inner_context.append(x + y * width if self.inner <= r <= self.outer
+                                      and not is_blind(x, y) else -1)
             self.horizon = min(self.horizon, samples[-1][2])
             for x, y, _ in samples:
-                qx, qy = (x + ox) / scale, (y + oy) / scale
-                if any(bx <= qx < bx + bw and by <= qy < by + bh for bx, by, bw, bh in cfg.LINE_SELF_MASKS):
+                if is_blind(x, y):
                     self.blind_pixels.add(x + y * width)
 
     def bearing(self, x, y):
@@ -141,7 +175,8 @@ def pixel_code(frame, table, offset: int) -> int:
 def line_code(lab, candidate=False):
     strict = in_lab(lab, cfg.WHITE_CANDIDATE)
     white = strict if candidate else in_lab(lab, cfg.WHITE)
-    return int(white) | (int(strict) << 1) | (int(cfg.MIN_VISIBLE_L <= lab[0] <= cfg.MAX_VISIBLE_L) << 2)
+    exposure = 1 if lab[0] < cfg.MIN_VISIBLE_L else 2 if lab[0] > cfg.MAX_VISIBLE_L else 0
+    return int(white) | (int(strict) << 1) | (exposure << 2)
 
 
 @micropython.viper
@@ -159,7 +194,7 @@ def scan_kernel(frame, table, points, spans, results, count: int):
         start = i
         first = 0
         length = 0
-        observed = 1
+        reasons = 0
         strict = 0
         active = 0
         while i < stop:
@@ -167,8 +202,11 @@ def scan_kernel(frame, table, points, spans, results, count: int):
             code = 0
             if not (point & 2):
                 code = int(lut[pixels[point >> 2]])
-            if point & 1 and not (code & 4):
-                observed = 0
+            if point & 1:
+                if point & 2:
+                    reasons |= 4
+                else:
+                    reasons |= code >> 2
             if code & 2:
                 strict = 1
             if code & 1:
@@ -180,7 +218,14 @@ def scan_kernel(frame, table, points, spans, results, count: int):
             else:
                 active = 0
             i += 1
-        output[ray] = observed | first << 1 | length << 9 | strict << 17
+        censored = 0
+        if first == 1:
+            context = int(packed[start - 1])
+            if context & 2 or (int(lut[pixels[context >> 2]]) & 1):
+                censored = 1
+        if first and first + length - 1 == stop - start:
+            censored = 1
+        output[ray] = int(reasons == 0) | first << 1 | length << 9 | strict << 17 | reasons << 18 | censored << 21
         ray += 1
 
 
@@ -194,9 +239,9 @@ class Scanner:
         self.table = None
         self.fast = False
         self.cache = {}
-        self.frame_buffer = None
         points, spans = [], []
-        for _, samples in self.rays:
+        for (_, samples), context in zip(self.rays, mirror.inner_context):
+            points.append(2 if context < 0 else context * 4)
             start = len(points)
             for x, y, cm in samples:
                 offset = x + y * width
@@ -207,6 +252,8 @@ class Scanner:
         self.results = array("i", [0] * len(spans))
         self.visible, self.lines, self.runs = set(), {}, {}
         self.strict_hits = 0
+        self.reasons = {}
+        self.censored = set()
 
     def prepare(self, image):
         table = bytearray(65536)
@@ -235,12 +282,12 @@ class Scanner:
     def reference(self, image, span):
         start, stop = span & 65535, span >> 16
         first = length = strict = 0
-        observed, active = 1, False
+        reasons, active = 0, False
         for i in range(start, stop):
             point = self.packed[i]
             code = 0 if point & 2 else self.reference_code(image, point >> 2)
-            if point & 1 and not code & 4:
-                observed = 0
+            if point & 1:
+                reasons |= 4 if point & 2 else code >> 2
             if code & 2:
                 strict = 1
             if code & 1:
@@ -250,7 +297,13 @@ class Scanner:
                     length += 1
             else:
                 active = False
-        return observed | first << 1 | length << 9 | strict << 17
+        censored = False
+        if first == 1:
+            context = self.packed[start - 1]
+            censored = bool(context & 2 or self.reference_code(image, context >> 2) & 1)
+        if first and first + length - 1 == stop - start:
+            censored = True
+        return int(not reasons) | first << 1 | length << 9 | strict << 17 | reasons << 18 | int(censored) << 21
 
     def verify(self, image):
         frame = image.bytearray()
@@ -267,6 +320,8 @@ class Scanner:
         self.visible.clear()
         self.lines.clear()
         self.runs.clear()
+        self.reasons.clear()
+        self.censored.clear()
         self.strict_hits = 0
         if self.fast:
             scan_kernel(image.bytearray(), self.table, self.packed, self.spans, self.results, len(self.rays))
@@ -275,6 +330,9 @@ class Scanner:
             if result & 1:
                 self.visible.add(bearing)
             self.strict_hits += (result >> 17) & 1
+            self.reasons[bearing] = (result >> 18) & 7
+            if result & (1 << 21):
+                self.censored.add(bearing)
             first = ((result >> 1) & 255) - 1
             if first >= 0:
                 length = (result >> 9) & 255
@@ -307,6 +365,18 @@ def connected_rays(lines):
     return groups
 
 
+def observation_reasons(ray_reasons):
+    masks = [0, 0, 0]
+    for sector, window in enumerate(SECTOR_WINDOWS):
+        reason = 0
+        for ray in window:
+            reason |= ray_reasons.get(ray, 0)
+        for i in range(3):
+            if reason & (1 << i):
+                masks[i] |= 1 << sector
+    return tuple(masks)
+
+
 class LineGuard:
     """Use camera coverage and line geometry; the field surface color is assumed."""
     def __init__(self, ticks_diff, clearance=CLEARANCE_CM, block=BLOCK_CM, body_cm=0):
@@ -317,39 +387,33 @@ class LineGuard:
         self.near_history = {}
         self.confirmed = set()
         self.coverage = self.blocked = self.unknown = self.near_blocked = self.escape_away = 0
+        self.present_blocked = self.ambiguous_blocked = self.held_blocked = 0
+        self.escape_requested = False
         self.regions = []
         self.tracks = []
         self.closing_cm_s = self.ttc_ms = None
 
-    def update(self, visible, lines, now, runs=None, rays=None):
+    def update(self, visible, lines, now, runs=None, rays=None, censored=()):
         threshold = self.release if self.near else self.clearance
         self.confirmed.clear()
         self.regions.clear()
         tracks = []
         self.closing_cm_s = self.ttc_ms = None
         nearest = min(lines.items(), key=lambda item: item[1]) if lines else None
-        for group in connected_rays(lines):
-            if runs is None:
-                plausible = len(group) >= 2
-            else:
-                plausible = False
-                narrow = 0
-                xmin, ymin, xmax, ymax = 100000, 100000, -1, -1
-                for bearing in group:
-                    first, last = runs[bearing]
-                    samples = rays[bearing // 15][1]
-                    width = samples[last][2] - samples[first][2]
-                    if width <= STRIPE_MAX_CM:
-                        narrow += 1
-                        if last > first:
-                            plausible = True
-                    x0, y0, _ = samples[first]
-                    x1, y1, _ = samples[last]
-                    xmin, xmax = min(xmin, x0, x1), max(xmax, x0, x1)
-                    ymin, ymax = min(ymin, y0, y1), max(ymax, y0, y1)
-                plausible = (len(group) >= 2 and plausible) or narrow >= 3
-                self.regions.append(((xmin, ymin, xmax - xmin + 1, ymax - ymin + 1), plausible))
+        eligible = lines
+        if runs is not None:
+            eligible = {}
+            for bearing, cm in lines.items():
+                first, last = runs[bearing]
+                samples = rays[bearing // 15][1]
+                if bearing not in censored and samples[last][2] - samples[first][2] <= STRIPE_MAX_CM:
+                    eligible[bearing] = cm
+        accepted = []
+        for group in connected_rays(eligible):
+            plausible = len(group) >= 3 or (len(group) == 2 and (
+                runs is None or any(runs[b][1] > runs[b][0] for b in group)))
             if plausible:
+                accepted.append(group)
                 self.confirmed.update(group)
                 bearing = min(group, key=lambda ray: lines[ray])
                 cm = lines[bearing]
@@ -367,8 +431,22 @@ class LineGuard:
                             self.ttc_ms = round(max(0, cm - self.body_cm) * 1000 / self.closing_cm_s)
         self.tracks = tracks
 
+        if runs is not None and lines:
+            uncertain = {b: cm for b, cm in lines.items() if b not in self.confirmed}
+            for groups, confirmed in ((accepted, True), (connected_rays(uncertain), False)):
+                for group in groups:
+                    xmin, ymin, xmax, ymax = 100000, 100000, -1, -1
+                    for bearing in group:
+                        first, last = runs[bearing]
+                        samples = rays[bearing // 15][1]
+                        x0, y0, _ = samples[first]
+                        x1, y1, _ = samples[last]
+                        xmin, xmax = min(xmin, x0, x1), max(xmax, x0, x1)
+                        ymin, ymax = min(ymin, y0, y1), max(ymax, y0, y1)
+                    self.regions.append(((xmin, ymin, xmax - xmin + 1, ymax - ymin + 1), confirmed))
+
         raw_close = tuple(b for b, cm in lines.items() if cm <= threshold)
-        close = tuple(b for b in raw_close if b in self.confirmed or b in self.near)
+        close = tuple(b for b in raw_close if b in self.confirmed or (b in self.near and b in eligible))
         for b in close:
             self.near_history[b] = (now, 0)
         for b in self.near:
@@ -391,18 +469,21 @@ class LineGuard:
         for i, window in enumerate(SECTOR_BITS):
             if observed & window == window:
                 self.coverage |= 1 << i
-        self.near_blocked = 0
+        self.present_blocked = blocked
+        self.ambiguous_blocked = self.held_blocked = 0
         for b in raw_close:
             if b not in close:
-                self.near_blocked |= CLOSE_BLOCKS[b // 15]
+                self.ambiguous_blocked |= CLOSE_BLOCKS[b // 15]
         for b in self.near:
-            self.near_blocked |= CLOSE_BLOCKS[b // 15]
-        self.blocked = blocked | self.near_blocked
+            self.held_blocked |= CLOSE_BLOCKS[b // 15]
+        self.near_blocked = self.ambiguous_blocked | self.held_blocked
+        self.blocked = self.present_blocked | self.near_blocked
         self.unknown = 0xffff & ~self.coverage
         mask = self.coverage & ~self.blocked
         self.escape_away = 0
-        if self.near and all(self.ticks_diff(now, seen) < ESCAPE_MEMORY_MS
-                             for seen, _ in self.near_history.values()):
+        self.escape_requested = any(self.ticks_diff(now, seen) < ESCAPE_MEMORY_MS
+                                    for seen, _ in self.near_history.values())
+        if self.escape_requested:
             for bit, bearing in ((1, 0), (256, 180)):
                 if all(difference(bearing, b) >= 105 for b in self.near):
                     self.escape_away |= bit

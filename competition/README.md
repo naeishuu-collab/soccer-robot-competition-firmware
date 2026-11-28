@@ -22,6 +22,6 @@ python -m pip install mpy-cross==1.28.0.post2
 python competition/scripts/test.py --mpy-cross --zip 'C:/path/to/chase (4).zip'
 ```
 
-[白線・安全方向・動的試験](docs/WHITE_LINE.md) · [OpenMV本番修復・実機比較](docs/PRODUCTION_OPENMV.md) · [構成・通信・監査](docs/ARCHITECTURE.md) · [書き込み](docs/FLASH_GUIDE.md) · [動かないとき](docs/DEBUG_GUIDE.md) · [停止条件](docs/STOP_CONDITIONS.md) · [校正](docs/CALIBRATION_GUIDE.md) · [実機試験](docs/HARDWARE_TEST_GUIDE.md) · [復元](docs/ROLLBACK_GUIDE.md) · [ソフトウェア試験結果](docs/VERIFICATION.md)
+[競技用最終改善と確認手順](docs/FINAL_COMPETITION.md) · [白線・安全方向・動的試験](docs/WHITE_LINE.md) · [OpenMV本番修復・実機比較](docs/PRODUCTION_OPENMV.md) · [構成・通信・監査](docs/ARCHITECTURE.md) · [書き込み](docs/FLASH_GUIDE.md) · [動かないとき](docs/DEBUG_GUIDE.md) · [停止条件](docs/STOP_CONDITIONS.md) · [校正](docs/CALIBRATION_GUIDE.md) · [実機試験](docs/HARDWARE_TEST_GUIDE.md) · [復元](docs/ROLLBACK_GUIDE.md) · [ソフトウェア試験結果](docs/VERIFICATION.md)
 
 **PENDING_HARDWARE**　組み合わせとしての追尾・走行・停止は実機未検証です。会場で走行する前に実機試験ガイドの項目を確認してください。
